@@ -6005,7 +6005,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
             <h3>Employee Wise Summary</h3>
             <span>{filteredAdminEmployeeRows.length} of {adminEmployeeRows.length} employees · {period?.label}</span>
           </div>
-          <div className="mte-summary-table-wrap">
+          <div className="mte-summary-table-wrap is-admin-employee-summary">
             <table className="mte-simple-table">
               <thead>
                 <tr>
@@ -6019,14 +6019,14 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
                   <tr><td colSpan={6}>No employee data found for this period.</td></tr>
                 ) : filteredAdminEmployeeRows.map((row) => (
                   <tr key={`${row.employee}-${row.email}`}>
-                    <td>{row.employee}</td>
-                    <td>{row.email || '-'}</td>
-                    <td>{row.department}</td>
+                    <td title={row.employee}>{row.employee}</td>
+                    <td title={row.email || '-'}>{row.email || '-'}</td>
+                    <td title={row.department}>{row.department}</td>
                     <td>{row.hours.toFixed(2)}</td>
                     <td>{row.expenses.toFixed(2)}</td>
                     <td>
                       {row.documents.length ? row.documents.map((document) => (
-                        <a key={document.url} className="mte-summary-document-link" href={document.url} target="_blank" rel="noreferrer">
+                        <a key={document.url} className="mte-summary-document-link" href={document.url} target="_blank" rel="noreferrer" title={document.name || 'Document'}>
                           {document.name || 'Document'}
                         </a>
                       )) : '-'}
@@ -6043,7 +6043,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
             <h3>Department Wise Summary</h3>
             <span>{adminDepartmentRows.length} department{adminDepartmentRows.length === 1 ? '' : 's'} in view</span>
           </div>
-          <div className="mte-summary-table-wrap">
+          <div className="mte-summary-table-wrap is-admin-department-summary">
             <table className="mte-simple-table">
               <thead>
                 <tr>
@@ -6055,13 +6055,13 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
                   <tr><td colSpan={5}>No department data found for this period.</td></tr>
                 ) : adminDepartmentRows.map((row) => (
                   <tr key={row.department}>
-                    <td>{row.department}</td>
+                    <td title={row.department}>{row.department}</td>
                     <td>{row.employees}</td>
                     <td>{row.hours.toFixed(2)}</td>
                     <td>{row.expenses.toFixed(2)}</td>
                     <td>
                       {row.documents.length ? row.documents.map((document) => (
-                        <a key={document.url} className="mte-summary-document-link" href={document.url} target="_blank" rel="noreferrer">
+                        <a key={document.url} className="mte-summary-document-link" href={document.url} target="_blank" rel="noreferrer" title={document.name || 'Document'}>
                           {document.name || 'Document'}
                         </a>
                       )) : '-'}
@@ -6080,8 +6080,14 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     <div className="mte-summary-shell">
       {summaryFilterCard}
 
-      <div className="mte-summary-table-wrap">
+      <div className="mte-summary-table-wrap is-employee-summary">
         <table className="mte-summary-table">
+          <colgroup>
+            <col className="mte-summary-charge-col" />
+            {Array.from({ length: 10 }).map((_, index) => (
+              <col key={`summary-metric-col-${index}`} className="mte-summary-metric-col" />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th rowSpan={2}>Charge Code</th>
@@ -6109,7 +6115,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
               <tr><td colSpan={11}>No summary rows match the current filters.</td></tr>
             ) : filteredSummaryRows.map((row) => (
               <tr key={row.label} className={row.isTotal || row.isMeta ? 'is-summary-row' : ''}>
-                <td>{row.label}</td>
+                <td title={row.label}>{row.label}</td>
                 <td>{summaryCell(row.hours)}</td>
                 <td>{summaryCell(row.expenses, 2)}</td>
                 <td>{!row.isMeta ? summaryCell(row.hours) : ''}</td>
