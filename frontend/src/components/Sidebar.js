@@ -48,8 +48,6 @@ const Sidebar = ({ section, setSection, role, restricted = [], isOpen, isCollaps
         </div>
       </div>
 
-      <div className="sidebar-section-label">Navigation</div>
-
       <nav className="nav">
         {visibleButtons.map((btn) => {
           const Icon = btn.icon;

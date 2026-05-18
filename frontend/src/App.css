@@ -1728,6 +1728,14 @@ body {
   width: 100%;
 }
 
+button:not(:disabled) {
+  cursor: default !important;
+}
+
+button:hover:not(:disabled) {
+  font-weight: 700;
+}
+
 .fiori-table-shell {
   overflow-x: auto;
   border: 1px solid #edf1f5;
@@ -7667,7 +7675,7 @@ body {
 
 /* Employee Leave Management: compact apply + history workspace */
 .employee-workspace .employee-leave-layout {
-  grid-template-columns: minmax(360px, 0.86fr) minmax(620px, 1.14fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   align-items: stretch;
 }

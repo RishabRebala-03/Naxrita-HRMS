@@ -332,12 +332,16 @@ const EmployeeDashboard = ({ user, setSection }) => {
         value: totalBalance,
         note: `${leaveBalanceCards.length} leave categories tracked`,
         icon: CalendarDays,
+        action: () => openLeaves({ source: "dashboard-overview" }),
+        linkLabel: "Open leave balance",
       },
       {
         label: "Pending review",
         value: stats.pendingLeaves,
         note: stats.pendingLeaves ? "Awaiting approval action" : "No action needed",
         icon: Clock3,
+        action: () => openLeaves({ source: "dashboard-overview", historyFilterStatus: "pending" }),
+        linkLabel: "Open pending leaves",
       },
       {
         label: "Next holiday",
@@ -346,15 +350,25 @@ const EmployeeDashboard = ({ user, setSection }) => {
           : "-",
         note: upcomingHolidays.length ? upcomingHolidays[0].name || "Upcoming holiday" : "No upcoming holidays listed",
         icon: ShieldCheck,
+        action: () =>
+          openSection("calendar", {
+            focusYear: upcomingHolidays.length
+              ? new Date(upcomingHolidays[0].date).getFullYear()
+              : new Date().getFullYear(),
+            focusDate: upcomingHolidays[0]?.date,
+          }),
+        linkLabel: "Open calendar",
       },
       {
         label: "Team view",
         value: stats.totalTeamMembers,
         note: stats.totalTeamMembers ? "Direct reportees visible" : "Individual contributor",
         icon: Users,
+        action: () => setShowHierarchy(true),
+        linkLabel: "Open hierarchy",
       },
     ],
-    [leaveBalanceCards.length, stats, totalBalance, upcomingHolidays]
+    [leaveBalanceCards.length, openLeaves, openSection, stats, totalBalance, upcomingHolidays]
   );
 
   if (loading) {
@@ -439,13 +453,26 @@ const EmployeeDashboard = ({ user, setSection }) => {
           const Icon = card.icon;
 
           return (
-            <article key={card.label} className="fiori-stat-card">
+            <article
+              key={card.label}
+              className="fiori-stat-card is-actionable"
+              onClick={card.action}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  card.action();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <div className="fiori-stat-topline">
                 <span className="fiori-stat-label">{card.label}</span>
                 <Icon size={18} />
               </div>
               <div className="fiori-stat-value">{card.value}</div>
               <div className="fiori-stat-note">{card.note}</div>
+              <div className="fiori-inline-link">{card.linkLabel}</div>
             </article>
           );
         })}

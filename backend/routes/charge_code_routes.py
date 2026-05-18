@@ -71,6 +71,7 @@ def create_charge_code():
         country      = clean_text(data.get("country", data.get("country_region", "")))
         is_active    = bool(data.get("is_active", True))
         created_by   = data.get("created_by")
+        owner_id     = data.get("owner_id")
 
         if not all([code, name, created_by]):
             return jsonify({"error": "code, name, and created_by are required"}), 400
@@ -86,6 +87,16 @@ def create_charge_code():
             return jsonify({"error": "Creator user not found"}), 404
         if str(creator.get("role", "")).lower() != "admin":
             return jsonify({"error": "Only admins can create charge codes"}), 403
+
+        owner = creator
+        if owner_id:
+            try:
+                owner_obj_id = ObjectId(owner_id)
+            except Exception:
+                return jsonify({"error": "Invalid owner_id format"}), 400
+            owner = mongo.db.users.find_one({"_id": owner_obj_id})
+            if not owner:
+                return jsonify({"error": "Charge code owner not found"}), 404
 
         # Duplicate code check
         existing = mongo.db.charge_codes.find_one({"code": code})
@@ -103,6 +114,9 @@ def create_charge_code():
             "country":      country,
             "is_active":    is_active,
             "created_by":   creator_id,
+            "owner_id":     owner["_id"],
+            "owner_name":   owner.get("name", ""),
+            "owner_email":  owner.get("email", ""),
             "created_at":   datetime.utcnow(),
             "updated_at":   datetime.utcnow(),
         }
@@ -133,6 +147,19 @@ def get_all_charge_codes():
         active_only = request.args.get("active_only", "false").lower() == "true"
         query = {"is_active": True} if active_only else {}
         codes = list(mongo.db.charge_codes.find(query).sort("code", 1))
+        for code in codes:
+            owner_id = first_non_empty(code.get("owner_id"), code.get("created_by"))
+            if not owner_id:
+                continue
+            try:
+                owner_obj_id = owner_id if isinstance(owner_id, ObjectId) else ObjectId(owner_id)
+                owner = mongo.db.users.find_one({"_id": owner_obj_id})
+                if owner:
+                    code["owner_id"] = owner_obj_id
+                    code["owner_name"] = code.get("owner_name") or owner.get("name", "")
+                    code["owner_email"] = code.get("owner_email") or owner.get("email", "")
+            except Exception:
+                continue
         return jsonify(serialize_all(codes)), 200
 
     except Exception as e:
@@ -148,7 +175,7 @@ def get_all_charge_codes():
 def update_charge_code(charge_code_id):
     """
     Update a charge code.
-    Body: { name, description, project_name, type, sub_type, client, country, is_active }
+    Body: { name, description, project_name, type, sub_type, client, country, owner_id, is_active }
     """
     try:
         data = request.get_json() or {}
@@ -186,6 +213,23 @@ def update_charge_code(charge_code_id):
             update_data["country"] = clean_text(data["country"])
         if "country_region" in data:
             update_data["country"] = clean_text(data["country_region"])
+        if "owner_id" in data:
+            owner_value = data.get("owner_id")
+            if owner_value:
+                try:
+                    owner_obj_id = ObjectId(owner_value)
+                except Exception:
+                    return jsonify({"error": "Invalid owner_id format"}), 400
+                owner = mongo.db.users.find_one({"_id": owner_obj_id})
+                if not owner:
+                    return jsonify({"error": "Charge code owner not found"}), 404
+                update_data["owner_id"] = owner_obj_id
+                update_data["owner_name"] = owner.get("name", "")
+                update_data["owner_email"] = owner.get("email", "")
+            else:
+                update_data["owner_id"] = None
+                update_data["owner_name"] = ""
+                update_data["owner_email"] = ""
         if "is_active" in data:
             update_data["is_active"] = bool(data["is_active"])
 

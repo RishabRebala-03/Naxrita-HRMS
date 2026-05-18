@@ -49,7 +49,7 @@ const formatDate = (dateStr) => {
   }
 };
 
-const ManagerDashboard = ({ user, onNavigateToProfile }) => {
+const ManagerDashboard = ({ user, onNavigate, onNavigateToProfile }) => {
   const [stats, setStats] = useState({
     totalTeamMembers: 0,
     pendingLeaves: 0,
@@ -64,6 +64,15 @@ const ManagerDashboard = ({ user, onNavigateToProfile }) => {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [showHierarchy, setShowHierarchy] = useState(false);
+
+  const handleNavigate = useCallback(
+    (target) => {
+      if (target) {
+        onNavigate?.(target);
+      }
+    },
+    [onNavigate]
+  );
 
   const fetchManagerData = useCallback(async () => {
     if (!user?.email) return;
@@ -150,27 +159,35 @@ const ManagerDashboard = ({ user, onNavigateToProfile }) => {
         value: stats.totalTeamMembers,
         note: "Direct reportees assigned to your workspace",
         icon: Users,
+        linkLabel: "Open team directory",
+        action: () => handleNavigate("employees"),
       },
       {
         title: "Working today",
         value: stats.workingToday,
         note: "Available team capacity for the day",
         icon: BriefcaseBusiness,
+        linkLabel: "Review available team",
+        action: () => handleNavigate("employees"),
       },
       {
         title: "On leave today",
         value: stats.onLeaveToday,
         note: "Approved leave overlapping today",
         icon: UserCheck,
+        linkLabel: "Open leave workspace",
+        action: () => handleNavigate("leaves"),
       },
       {
         title: "Pending approvals",
         value: stats.pendingLeaves,
         note: "Leave requests waiting for your decision",
         icon: Clock3,
+        linkLabel: "Review approvals",
+        action: () => handleNavigate("leaves"),
       },
     ],
-    [stats]
+    [handleNavigate, stats]
   );
 
   const updateStatus = async (leaveId, status, rejectionReason = "") => {
@@ -261,13 +278,26 @@ const ManagerDashboard = ({ user, onNavigateToProfile }) => {
           const Icon = card.icon;
 
           return (
-            <article key={card.title} className="fiori-stat-card">
+            <article
+              key={card.title}
+              className="fiori-stat-card is-actionable"
+              onClick={card.action}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  card.action();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <div className="fiori-stat-topline">
                 <span className="fiori-stat-label">{card.title}</span>
                 <Icon size={18} />
               </div>
               <div className="fiori-stat-value">{card.value}</div>
               <div className="fiori-stat-note">{card.note}</div>
+              <div className="fiori-inline-link">{card.linkLabel}</div>
             </article>
           );
         })}
@@ -356,12 +386,13 @@ const ManagerDashboard = ({ user, onNavigateToProfile }) => {
             )}
           </section>
 
-          <section className="fiori-panel">
+          <section className="fiori-panel is-clickable" onClick={() => handleNavigate("leaves")}>
             <div className="fiori-panel-header">
               <div>
                 <h3>Recent team decisions</h3>
                 <p>Latest approved and rejected leave actions for your team.</p>
               </div>
+              <div className="fiori-card-link">Open leave workspace</div>
             </div>
 
             {recentActions.length === 0 ? (
@@ -475,21 +506,21 @@ const ManagerDashboard = ({ user, onNavigateToProfile }) => {
             </div>
 
             <div className="admin-priority-list">
-              <div className="admin-priority-item">
+              <div className="admin-priority-item is-clickable" onClick={() => handleNavigate("leaves")}>
                 <Clock3 size={18} />
                 <div>
                   <strong>Approval queue</strong>
                   <p>{stats.pendingLeaves} request(s) need a manager decision.</p>
                 </div>
               </div>
-              <div className="admin-priority-item">
+              <div className="admin-priority-item is-clickable" onClick={() => handleNavigate("employees")}>
                 <BriefcaseBusiness size={18} />
                 <div>
                   <strong>Team capacity</strong>
                   <p>{stats.workingToday} team member(s) are currently available today.</p>
                 </div>
               </div>
-              <div className="admin-priority-item">
+              <div className="admin-priority-item is-clickable" onClick={() => handleNavigate("leaves")}>
                 <UserCheck size={18} />
                 <div>
                   <strong>Leave coverage</strong>

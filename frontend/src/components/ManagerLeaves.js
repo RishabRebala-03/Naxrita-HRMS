@@ -55,6 +55,13 @@ const ManagerLeaves = ({ user }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [sortBy, setSortBy] = useState("newest");
 
+  const handleCardKeyDown = (event, action) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      action();
+    }
+  };
+
   const getMinDate = () => {
     const today = new Date();
 
@@ -290,37 +297,65 @@ const ManagerLeaves = ({ user }) => {
       </header>
 
       <div className="admin-dashboard-grid admin-dashboard-grid-compact">
-        <article className="fiori-stat-card">
+        <article
+          className="fiori-stat-card is-actionable"
+          onClick={() => setActiveTab("pending")}
+          onKeyDown={(event) => handleCardKeyDown(event, () => setActiveTab("pending"))}
+          role="button"
+          tabIndex={0}
+        >
           <div className="fiori-stat-topline">
             <span className="fiori-stat-label">Pending approvals</span>
             <ShieldAlert size={18} />
           </div>
           <div className="fiori-stat-value">{pendingLeaves.length}</div>
           <div className="fiori-stat-note">Requests currently assigned to you</div>
+          <div className="fiori-inline-link">Open approval queue</div>
         </article>
-        <article className="fiori-stat-card">
+        <article
+          className="fiori-stat-card is-actionable"
+          onClick={() => setActiveTab("myLeaves")}
+          onKeyDown={(event) => handleCardKeyDown(event, () => setActiveTab("myLeaves"))}
+          role="button"
+          tabIndex={0}
+        >
           <div className="fiori-stat-topline">
             <span className="fiori-stat-label">My balance</span>
             <CalendarClock size={18} />
           </div>
           <div className="fiori-stat-value">{totalMyBalance}</div>
           <div className="fiori-stat-note">Sick and planned leave days available</div>
+          <div className="fiori-inline-link">Open my leaves</div>
         </article>
-        <article className="fiori-stat-card">
+        <article
+          className="fiori-stat-card is-actionable"
+          onClick={() => setActiveTab("myLeaves")}
+          onKeyDown={(event) => handleCardKeyDown(event, () => setActiveTab("myLeaves"))}
+          role="button"
+          tabIndex={0}
+        >
           <div className="fiori-stat-topline">
             <span className="fiori-stat-label">My approvals</span>
             <CheckCircle2 size={18} />
           </div>
           <div className="fiori-stat-value">{approvedHistory}</div>
           <div className="fiori-stat-note">{rejectedHistory} rejected requests in your history</div>
+          <div className="fiori-inline-link">Open my history</div>
         </article>
-        <article className="fiori-stat-card">
+        <article
+          className="fiori-stat-card is-actionable"
+          onClick={() => setActiveTab("teamBalance")}
+          onKeyDown={(event) => handleCardKeyDown(event, () => setActiveTab("teamBalance"))}
+          role="button"
+          tabIndex={0}
+        >
           <div className="fiori-stat-topline">
             <span className="fiori-stat-label">Team members</span>
             <Users size={18} />
           </div>
           <div className="fiori-stat-value">{teamMembers.length}</div>
           <div className="fiori-stat-note">Direct reports with leave balances</div>
+          <div className="fiori-inline-link">Open team balance</div>
         </article>
       </div>
 

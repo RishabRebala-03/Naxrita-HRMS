@@ -119,7 +119,7 @@ def validate_daily_work_hours(entries):
         if total > 9
     ]
     if over_limit:
-        return "Daily working hours cannot exceed 9 hours: " + ", ".join(over_limit)
+        return "Total working hours across all charge codes cannot exceed 9 hours per day: " + ", ".join(over_limit)
     return None
 
 
@@ -311,7 +311,7 @@ def build_validated_timesheet_entries(employee_id, period_start, period_end, ent
         total_for_date = work_total + system_hours_by_date.get(entry_date, 0)
         if total_for_date > WORKDAY_HOURS:
             return None, None, (
-                f"{entry_date} has {total_for_date} total hours. "
+                f"{entry_date} has {total_for_date} total hours across all charge codes. "
                 f"Maximum allowed is {WORKDAY_HOURS} hours."
             )
 
@@ -1138,6 +1138,16 @@ def get_all_timesheets():
                         ts["employee_name"]       = ts.get("employee_name") or emp.get("name", "")
                         ts["employee_email"]      = ts.get("employee_email") or emp.get("email", "")
                         ts["employee_department"] = emp.get("department", "")
+                except Exception:
+                    pass
+
+            reporting_lead_id = ts.get("reporting_lead_id")
+            if reporting_lead_id and (not ts.get("reporting_lead_name") or not ts.get("reporting_lead_email")):
+                try:
+                    reporting_lead = mongo.db.users.find_one({"_id": ObjectId(reporting_lead_id)})
+                    if reporting_lead:
+                        ts["reporting_lead_name"] = reporting_lead.get("name", "")
+                        ts["reporting_lead_email"] = reporting_lead.get("email", "")
                 except Exception:
                     pass
             result.append(ts)

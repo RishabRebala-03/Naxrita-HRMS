@@ -311,6 +311,7 @@ function App() {
           return (
             <ManagerDashboard
               user={currentUser}
+              onNavigate={handleSectionChange}
               onNavigateToProfile={handleNavigateToProfile}
             />
           );
@@ -406,7 +407,13 @@ function App() {
         if (role === "Admin") {
           return <AdminDashboard user={currentUser} onNavigate={handleSectionChange} />;
         } else if (role === "Manager") {
-          return <ManagerDashboard user={currentUser} onNavigateToProfile={handleNavigateToProfile} />;
+          return (
+            <ManagerDashboard
+              user={currentUser}
+              onNavigate={handleSectionChange}
+              onNavigateToProfile={handleNavigateToProfile}
+            />
+          );
         } else {
           return (
             <EmployeeDashboard

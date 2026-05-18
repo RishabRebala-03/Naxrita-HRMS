@@ -240,7 +240,9 @@ function SelectWrap({ value, onChange, children, style = {} }) {
   );
 }
 
-function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled }) {
+function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled, selectedIds = [] }) {
+  const unavailableIds = new Set(selectedIds.filter((id) => id && id !== selectedId));
+
   return (
     <ValueHelpSelect
       value={selectedId}
@@ -250,11 +252,13 @@ function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled }) {
       searchPlaceholder="Search charge codes"
       options={[
         { value: '', label: 'Select charge code' },
-        ...chargeCodes.map((cc) => ({
-          value: cc.charge_code_id,
-          label: `${cc.charge_code} - ${cc.charge_code_name}`,
-          description: cc.charge_code_id,
-        })),
+        ...chargeCodes
+          .filter((cc) => !unavailableIds.has(cc.charge_code_id))
+          .map((cc) => ({
+            value: cc.charge_code_id,
+            label: `${cc.charge_code} - ${cc.charge_code_name}`,
+            description: cc.charge_code_id,
+          })),
       ]}
     />
   );
@@ -408,20 +412,91 @@ const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
   return Array.from(leaveByDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 };
 
-const createEmptyWorkEntries = (dates, lockedDateSet = new Set()) =>
+const isWeekendDate = (dateStr) => {
+  const day = parseISO(dateStr).getDay();
+  return day === 0 || day === 6;
+};
+
+const getDefaultWorkEntryValue = (dateStr, defaultHoursByDate = {}) => {
+  const defaultHours = Number(defaultHoursByDate[dateStr] || 0);
+  if (!Number.isFinite(defaultHours) || defaultHours <= 0) return '0';
+  return Number.isInteger(defaultHours)
+    ? String(defaultHours)
+    : String(parseFloat(defaultHours.toFixed(2)));
+};
+
+const createEmptyWorkEntries = (dates, lockedDateSet = new Set(), defaultHoursByDate = {}) =>
   dates.map((date) => ({
     date,
-    hours: 0,
-    value: '',
+    hours: lockedDateSet.has(date) ? 0 : Number(defaultHoursByDate[date] || 0),
+    value: lockedDateSet.has(date) ? '' : getDefaultWorkEntryValue(date, defaultHoursByDate),
     entry_type: 'work',
     locked: lockedDateSet.has(date),
   }));
 
-const createEmptyWorkRow = (id, dates, lockedDateSet = new Set()) => ({
+const createEmptyWorkRow = (id, dates, lockedDateSet = new Set(), defaultHoursByDate = {}) => ({
   id,
   chargeCodeId: '',
-  entries: createEmptyWorkEntries(dates, lockedDateSet),
+  entries: createEmptyWorkEntries(dates, lockedDateSet, defaultHoursByDate),
 });
+
+const buildLiveSummaryEntries = ({
+  rows = [],
+  chargeCodes = [],
+  approvedLeaveEntries = [],
+  holidays = [],
+}) => {
+  const chargeCodeById = Object.fromEntries(
+    chargeCodes.map((chargeCode) => [chargeCode.charge_code_id, chargeCode])
+  );
+  const holidayDates = new Set(holidays.map((holiday) => holiday.date));
+
+  const workEntries = rows.flatMap((row) => {
+    const chargeCode = chargeCodeById[row.chargeCodeId] || {};
+    return row.entries.flatMap((entry) => {
+      const rawValue = entry.value !== undefined ? entry.value : String(entry.hours ?? '');
+      const hours = parseFloat(rawValue);
+      if (!Number.isFinite(hours) || hours <= 0) return [];
+
+      return [{
+        date: entry.date,
+        entry_type: 'work',
+        charge_code_id: row.chargeCodeId || '',
+        charge_code: chargeCode.charge_code || '',
+        charge_code_name: chargeCode.charge_code_name || '',
+        hours,
+        description: '',
+      }];
+    });
+  });
+
+  const leaveEntries = approvedLeaveEntries
+    .filter((leave) => !holidayDates.has(leave.date))
+    .map((leave) => ({
+      date: leave.date,
+      entry_type: 'leave',
+      leave_type: leave.leaveType,
+      leave_code: leave.code,
+      charge_code: leave.code,
+      charge_code_name: leave.label,
+      hours: Number(leave.hours || 0),
+      description: leave.label,
+      leave_id: leave.leaveId,
+      is_half_day: leave.isHalfDay,
+      half_day_period: leave.halfDayPeriod,
+    }));
+
+  const holidayEntries = holidays.map((holiday) => ({
+    date: holiday.date,
+    entry_type: 'holiday',
+    holiday_name: holiday.holiday_name || holiday.name || '',
+    code: holiday.code || 'PH',
+    hours: Number(holiday.hours || DAILY_WORK_HOUR_LIMIT),
+    description: holiday.description || `Public Holiday: ${holiday.holiday_name || holiday.name || 'Holiday'}`,
+  }));
+
+  return [...workEntries, ...leaveEntries, ...holidayEntries];
+};
 
 // ─── TimesheetGrid ────────────────────────────────────────────────────────────
 function TimesheetGrid({
@@ -459,13 +534,31 @@ function TimesheetGrid({
     const day = parseISO(dateStr).getDay();
     return day >= 1 && day <= 5;
   };
-  const displayHours = (hours) => (hours ? hours.toFixed(1) : '');
+  const formatHoursValue = (hours) => {
+    const numericHours = Number(hours);
+    if (!Number.isFinite(numericHours)) return '';
+    return Number.isInteger(numericHours)
+      ? String(numericHours)
+      : String(parseFloat(numericHours.toFixed(2)));
+  };
+  const displayHours = (hours, showZero = false) => {
+    if (!hours && showZero) return '0';
+    return hours ? formatHoursValue(hours) : '';
+  };
   const holidayHoursForDate = (dateStr) => (holidayByDate[dateStr] ? WORKDAY_HOURS : 0);
   const leaveHoursForDate = (dateStr) => (leaveByDate[dateStr]?.hours || 0);
   const workHourLimitForDate = (dateStr) =>
     Math.max(0, WORKDAY_HOURS - holidayHoursForDate(dateStr) - leaveHoursForDate(dateStr));
+  const maxHoursForRowOnDate = (rowId, dateStr) => {
+    const otherRowHours = rows.reduce((sum, currentRow) => {
+      if (currentRow.id === rowId) return sum;
+      return sum + numericVal(getEntry(currentRow, dateStr));
+    }, 0);
+    return Math.max(0, workHourLimitForDate(dateStr) - otherRowHours);
+  };
   const totalHoursForDate = (dateStr) => getColTotal(dateStr) + holidayHoursForDate(dateStr) + leaveHoursForDate(dateStr);
   const workScheduleForDate = (dateStr) => (isWeekday(dateStr) ? WORKDAY_HOURS : 0);
+  const holidayPayoutHoursForDate = (dateStr) => (isWeekendDate(dateStr) ? getColTotal(dateStr) : 0);
   const supportCheckboxRows = [
     'Shift Allowance – Shift Type B',
     'Shift Allowance – Shift Type C',
@@ -497,6 +590,7 @@ function TimesheetGrid({
     assignedLocation = 'Not assigned',
     companyCostCenter = 'Not assigned',
   } = assignmentMeta;
+  const selectedChargeCodeIds = rows.map((row) => row.chargeCodeId).filter(Boolean);
 
   return (
     <div className="mte-sheet-card" style={{ ...S.card, overflow: 'visible' }}>
@@ -628,6 +722,7 @@ function TimesheetGrid({
                       selectedId={row.chargeCodeId}
                       onChange={(id) => onRowUpdate(row.id, { chargeCodeId: id })}
                       disabled={readOnly}
+                      selectedIds={selectedChargeCodeIds}
                     />
                   </td>
 
@@ -636,7 +731,7 @@ function TimesheetGrid({
                     const leaveEntry = leaveByDate[d];
                     const entry = getEntry(row, d);
                     const isFullDayLeave = leaveEntry && !leaveEntry.isHalfDay;
-                    const workHourLimit = workHourLimitForDate(d);
+                    const rowHourLimit = maxHoursForRowOnDate(row.id, d);
                     return (
                       <td key={d} style={{
                         padding: '8px', textAlign: 'center',
@@ -668,16 +763,19 @@ function TimesheetGrid({
                             className="mte-sheet-hour-input"
                             type="number"
                             min="0"
-                            max={workHourLimit}
+                            max={rowHourLimit}
                             step="0.25"
                             value={entry.value ?? ''}
                             disabled={readOnly}
                             title={leaveEntry ? `${leaveEntry.label} covers ${displayHours(leaveEntry.hours)} hours on this date` : undefined}
+                            onFocus={(event) => {
+                              if (event.target.value === '0') event.target.select();
+                            }}
                             onChange={(e) => {
                               const typedValue = e.target.value;
                               const typedHours = parseFloat(typedValue);
                               const cappedHours = Number.isFinite(typedHours)
-                                ? Math.min(Math.max(typedHours, 0), workHourLimit)
+                                ? Math.min(Math.max(typedHours, 0), rowHourLimit)
                                 : 0;
                               const nextValue = typedValue === ''
                                 ? ''
@@ -744,7 +842,9 @@ function TimesheetGrid({
                 </td>
                 {dates.map((d) => (
                   <td key={`leave-cell-${leave.date}-${d}`} className="mte-sheet-static-value-cell">
-                    {d === leave.date ? displayHours(leave.hours) : ''}
+                    {d === leave.date
+                      ? displayHours(leave.hours)
+                      : displayHours(0, true)}
                   </td>
                 ))}
                 <td className="mte-sheet-static-total-cell">{displayHours(leave.hours)}</td>
@@ -787,15 +887,15 @@ function TimesheetGrid({
               </td>
               {dates.map((d) => (
                 <td key={`total-hours-${d}`} className="mte-sheet-static-value-cell">
-                  {displayHours(totalHoursForDate(d))}
+                  {displayHours(totalHoursForDate(d), true)}
                 </td>
               ))}
-              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + totalHoursForDate(dateStr), 0))}</td>
+              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + totalHoursForDate(dateStr), 0), true)}</td>
               {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
             <tr className="mte-sheet-static-row mte-sheet-static-divider-top">
-              <td className="mte-sheet-static-label mte-sheet-underlined-label" style={{
+              <td className="mte-sheet-static-label" style={{
                 padding: '10px 16px',
                 position: 'sticky', left: 0,
                 background: C.white,
@@ -807,10 +907,10 @@ function TimesheetGrid({
               </td>
               {dates.map((d) => (
                 <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell">
-                  {displayHours(workScheduleForDate(d))}
+                  {displayHours(workScheduleForDate(d), isWeekendDate(d))}
                 </td>
               ))}
-              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + workScheduleForDate(dateStr), 0))}</td>
+              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + workScheduleForDate(dateStr), 0), true)}</td>
               {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
@@ -844,9 +944,13 @@ function TimesheetGrid({
                 Holiday Payout
               </td>
               {dates.map((d) => (
-                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell" />
+                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell">
+                  {isWeekendDate(d) ? displayHours(holidayPayoutHoursForDate(d), true) : ''}
+                </td>
               ))}
-              <td className="mte-sheet-static-total-cell">0</td>
+              <td className="mte-sheet-static-total-cell">
+                {displayHours(dates.reduce((sum, dateStr) => sum + holidayPayoutHoursForDate(dateStr), 0), true)}
+              </td>
               {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
@@ -887,7 +991,13 @@ function TimesheetGrid({
 }
 
 // ─── TimesheetPage (Employee) ─────────────────────────────────────────────────
-function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded = false }) {
+function TimesheetPage({
+  user,
+  selectedPeriod,
+  onSelectedPeriodChange,
+  onSheetSnapshotChange,
+  embedded = false,
+}) {
   const availablePeriods = useMemo(() => getAvailablePeriods(), []);
   const [internalSelectedPeriod, setInternalSelectedPeriod] = useState(availablePeriods[0]?.value || '');
   const [timesheetStatus, setTimesheetStatus]   = useState('draft');
@@ -898,12 +1008,19 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
   const [holidays, setHolidays]                 = useState([]);
   const [loading, setLoading]                   = useState(false);
   const [profile, setProfile]                   = useState(user || {});
+  const [sheetLoaded, setSheetLoaded]           = useState(false);
   // FIX 2: reload trigger — incrementing forces the timesheet data useEffect to re-run
   const [reloadTrigger, setReloadTrigger]       = useState(0);
+  const hasLocalTimesheetEditsRef = useRef(false);
+  const saveDraftSilentlyRef = useRef(null);
 
   const userId = getUserId(user);
   const activePeriod = selectedPeriod ?? internalSelectedPeriod;
-  const setActivePeriod = onSelectedPeriodChange ?? setInternalSelectedPeriod;
+  const setActivePeriod = (nextPeriod) => {
+    hasLocalTimesheetEditsRef.current = false;
+    setSheetLoaded(false);
+    (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
+  };
   const selectedPeriodOption = availablePeriods.find((period) => period.value === activePeriod) || availablePeriods[0];
   const assignmentMeta = useMemo(() => getTimesheetAssignmentMeta(profile), [profile]);
 
@@ -939,6 +1056,15 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         .map((leave) => leave.date),
     ]),
     [holidayByDate, approvedLeaveByDate]
+  );
+  const halfDayWorkDefaultsByDate = useMemo(
+    () => Object.fromEntries(
+      Object.entries(approvedLeaveByDate)
+        .filter(([, leave]) => leave.isHalfDay && !holidayByDate[leave.date])
+        .map(([date, leave]) => [date, Math.max(0, DAILY_WORK_HOUR_LIMIT - (leave.hours || 0))])
+        .filter(([, remainingHours]) => remainingHours > 0)
+    ),
+    [approvedLeaveByDate, holidayByDate]
   );
 
   const loadTimesheetReferenceData = useCallback(() => {
@@ -980,7 +1106,9 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
   // FIX 2: Added reloadTrigger to deps so this re-runs after recall/submit
   useEffect(() => {
     if (!userId || !dates.length || !chargeCodes.length) return;
+    if (hasLocalTimesheetEditsRef.current) return;
 
+    setSheetLoaded(false);
     fetchAPI(`/timesheets/employee/${userId}`)
       .then((existing) => {
         const match = Array.isArray(existing)
@@ -1004,6 +1132,12 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
             if (!ccMap[ccId]) ccMap[ccId] = {};
             ccMap[ccId][e.date] = e;
           });
+          const savedWorkTotalsByDate = {};
+          Object.values(ccMap).forEach((byDate) => {
+            Object.entries(byDate).forEach(([date, entry]) => {
+              savedWorkTotalsByDate[date] = (savedWorkTotalsByDate[date] || 0) + Number(entry.hours || 0);
+            });
+          });
 
           const loadedRows = Object.entries(ccMap).map(([ccId, byDate], i) => {
             // Try to find the matching charge code in our loaded list to get the proper id
@@ -1019,26 +1153,34 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
                 ? { date: d, hours: 0, value: '', entry_type: 'work', locked: true }
                 : byDate[d]
                 // FIX 3: Use hours as the display value, not description
-                ? { date: d, hours: byDate[d].hours || 0, value: String(byDate[d].hours || ''), entry_type: 'work' }
-                : { date: d, hours: 0, value: '', entry_type: 'work' }
+                ? { date: d, hours: byDate[d].hours || 0, value: String(byDate[d].hours ?? getDefaultWorkEntryValue(d)), entry_type: 'work' }
+                : {
+                    date: d,
+                    hours: i === 0 && !savedWorkTotalsByDate[d] ? Number(halfDayWorkDefaultsByDate[d] || 0) : 0,
+                    value: i === 0 && !savedWorkTotalsByDate[d]
+                      ? getDefaultWorkEntryValue(d, halfDayWorkDefaultsByDate)
+                      : getDefaultWorkEntryValue(d),
+                    entry_type: 'work',
+                  }
               ),
             };
           });
 
           if (loadedRows.length === 0) {
-            setRows([createEmptyWorkRow('row1', dates, lockedDateSet)]);
+            setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
           } else {
             setRows(loadedRows);
           }
         } else {
           setTimesheetStatus('draft');
-          setRows([createEmptyWorkRow('row1', dates, lockedDateSet)]);
+          setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
         }
       })
       .catch(() => {
-        setRows([createEmptyWorkRow('row1', dates, lockedDateSet)]);
-      });
-  }, [userId, dates, chargeCodes, reloadTrigger, lockedDateSet]); // FIX 2: reloadTrigger added
+        setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
+      })
+      .finally(() => setSheetLoaded(true));
+  }, [userId, dates, chargeCodes, reloadTrigger, lockedDateSet, halfDayWorkDefaultsByDate]); // FIX 2: reloadTrigger added
 
   const validate = useCallback(() => {
     const errors = [];
@@ -1053,6 +1195,13 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
     if (rows.length === 0 && !hasSystemEntries) errors.push('Add at least one charge code row');
     if (rowsWithHours.some((row) => !row.chargeCodeId)) {
       errors.push(`${rowsWithHours.filter((row) => !row.chargeCodeId).length} row(s) missing a charge code`);
+    }
+    const duplicateChargeCodes = rows
+      .map((row) => row.chargeCodeId)
+      .filter(Boolean)
+      .filter((chargeCodeId, index, chargeCodeIds) => chargeCodeIds.indexOf(chargeCodeId) !== index);
+    if (duplicateChargeCodes.length > 0) {
+      errors.push('Each charge code can be added only once in a timesheet');
     }
     if (rows.every((r) => r.entries.every((e) => !e.hours || e.hours === 0)) && !hasSystemEntries)
       errors.push('Enter hours for at least one row');
@@ -1075,7 +1224,10 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         errors.push(`${date} is a holiday and cannot contain work hours`);
       }
       if (total + systemHours > DAILY_WORK_HOUR_LIMIT) {
-        errors.push(`${date} has ${total + systemHours} total hours. Maximum allowed is ${DAILY_WORK_HOUR_LIMIT} hours`);
+        errors.push(
+          `${date} has ${total + systemHours} total hours across all charge codes. `
+          + `Maximum allowed is ${DAILY_WORK_HOUR_LIMIT} hours`
+        );
       }
     });
     return errors;
@@ -1095,11 +1247,15 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
       .reduce((sum, leave) => sum + (leave.hours || 0), 0)
     + holidays.reduce((sum, holiday) => sum + (holiday.hours || DAILY_WORK_HOUR_LIMIT), 0);
 
-  const buildWorkEntries = ({ requireChargeCode = true } = {}) => {
+  const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
+  const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
+  const errors       = validationErrors;
+
+  const buildWorkEntries = useCallback(({ requireChargeCode = true, sourceRows = rows } = {}) => {
     const entries = [];
     const totalsByDate = {};
 
-    rows.forEach((row) => {
+    sourceRows.forEach((row) => {
       row.entries.forEach((e) => {
         const rawVal = e.value !== undefined ? e.value : String(e.hours || '');
         const trimmed = String(rawVal).trim();
@@ -1126,6 +1282,14 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
       });
     });
 
+    const duplicateChargeCode = sourceRows
+      .map((row) => row.chargeCodeId)
+      .filter(Boolean)
+      .find((chargeCodeId, index, chargeCodeIds) => chargeCodeIds.indexOf(chargeCodeId) !== index);
+    if (duplicateChargeCode) {
+      throw new Error('Each charge code can be added only once in a timesheet');
+    }
+
     const overLimit = Object.entries(totalsByDate).find(([date, total]) => {
       const systemHours = (approvedLeaveByDate[date]?.hours || 0) + (holidayByDate[date] ? DAILY_WORK_HOUR_LIMIT : 0);
       return total + systemHours > DAILY_WORK_HOUR_LIMIT;
@@ -1133,11 +1297,91 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
     if (overLimit) {
       const [date, total] = overLimit;
       const systemHours = (approvedLeaveByDate[date]?.hours || 0) + (holidayByDate[date] ? DAILY_WORK_HOUR_LIMIT : 0);
-      throw new Error(`${date} has ${total + systemHours} total hours. Maximum allowed is ${DAILY_WORK_HOUR_LIMIT} hours`);
+      throw new Error(
+        `${date} has ${total + systemHours} total hours across all charge codes. `
+        + `Maximum allowed is ${DAILY_WORK_HOUR_LIMIT} hours`
+      );
     }
 
     return entries;
-  };
+  }, [approvedLeaveByDate, holidayByDate, lockedDateSet, rows]);
+
+  const liveSummaryEntries = useMemo(
+    () => buildLiveSummaryEntries({
+      rows,
+      chargeCodes,
+      approvedLeaveEntries,
+      holidays,
+    }),
+    [approvedLeaveEntries, chargeCodes, holidays, rows]
+  );
+
+  useEffect(() => {
+    if (!onSheetSnapshotChange || !sheetLoaded || !activePeriod || !dates.length) return;
+
+    onSheetSnapshotChange(activePeriod, {
+      employee_id: userId,
+      employee_name: profile.name || user?.name || '',
+      employee_email: profile.email || user?.email || '',
+      employee_department: profile.department || user?.department || '',
+      period_start: dates[0],
+      period_end: dates[dates.length - 1],
+      entries: liveSummaryEntries,
+      total_hours: liveSummaryEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0),
+      work_hours: getEntriesWorkHours(liveSummaryEntries),
+      status: timesheetStatus,
+      employee_work_location: profile.workLocation || '',
+      employee_assigned_location: profile.assignedLocation || profile.costCenter || profile.workLocation || '',
+      employee_company_code: profile.companyCode || '',
+      employee_cost_center: profile.costCenter || '',
+    });
+  }, [
+    activePeriod,
+    dates,
+    liveSummaryEntries,
+    onSheetSnapshotChange,
+    profile,
+    sheetLoaded,
+    timesheetStatus,
+    user,
+    userId,
+  ]);
+
+  const saveDraftSilently = useCallback(async () => {
+    if (!hasLocalTimesheetEditsRef.current || isReadOnly || !userId || !dates.length) return;
+
+    try {
+      const entries = buildWorkEntries();
+      await fetchAPI('/timesheets/save_draft', {
+        method: 'POST',
+        body: JSON.stringify({
+          employee_id: userId,
+          period_start: dates[0],
+          period_end: dates[dates.length - 1],
+          entries,
+        }),
+      });
+      hasLocalTimesheetEditsRef.current = false;
+    } catch (_) {
+      // Silent autosave should never interrupt typing or replace validation.
+    }
+  }, [buildWorkEntries, dates, isReadOnly, userId]);
+
+  useEffect(() => {
+    if (!hasLocalTimesheetEditsRef.current || isReadOnly) return undefined;
+    const autoSaveTimer = setTimeout(() => {
+      saveDraftSilently();
+    }, 1500);
+    return () => clearTimeout(autoSaveTimer);
+  }, [rows, saveDraftSilently, isReadOnly]);
+
+  useEffect(() => {
+    saveDraftSilentlyRef.current = saveDraftSilently;
+  }, [saveDraftSilently]);
+
+  useEffect(() => () => {
+    saveDraftSilentlyRef.current?.();
+  }, []);
 
   const findCurrentTimesheet = async () => {
     const existing = await fetchAPI(`/timesheets/employee/${userId}`);
@@ -1165,10 +1409,12 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         await fetchAPI(`/timesheets/recall/${match._id || match.id}`, { method: 'PUT' });
       }
       // FIX 2: increment trigger so the data useEffect re-fetches fresh rows
+      hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
     } catch (err) {
       // Even on error, reset to draft and reload
       setTimesheetStatus('draft');
+      hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
     } finally {
       setLoading(false);
@@ -1206,6 +1452,7 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         });
       }
       // FIX 2: reload after submit so lead sees fresh data and employee sees correct state
+      hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
       alert('Timesheet submitted successfully!');
     } catch (err) {
@@ -1230,6 +1477,7 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         }),
       });
       setTimesheetStatus('draft');
+      hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
       alert('Draft saved successfully');
     } catch (err) {
@@ -1249,7 +1497,8 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         await fetchAPI(`/timesheets/delete/${match._id || match.id}`, { method: 'DELETE' });
       }
       setTimesheetStatus('draft');
-      setRows([createEmptyWorkRow('row1', dates, lockedDateSet)]);
+      hasLocalTimesheetEditsRef.current = false;
+      setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
       setReloadTrigger((t) => t + 1);
       alert('Timesheet deleted successfully');
     } catch (err) {
@@ -1258,10 +1507,6 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
       setLoading(false);
     }
   };
-
-  const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
-  const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
-  const errors       = validationErrors;
 
   const statusMessage = () => {
     const isPending  = timesheetStatus === 'pending_lead';
@@ -1302,6 +1547,7 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
               className="mte-native-select"
               value={activePeriod}
               onChange={(event) => {
+                saveDraftSilentlyRef.current?.();
                 setActivePeriod(event.target.value);
                 setTimesheetStatus('draft');
               }}
@@ -1350,9 +1596,12 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
           <Trash2 size={18} />
           <span>Delete</span>
         </button>
-        <button type="button" className="mte-tool-button" onClick={() => setRows((previous) => [...previous, {
-          ...createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet),
-        }])}>
+        <button type="button" className="mte-tool-button" onClick={() => {
+          hasLocalTimesheetEditsRef.current = true;
+          setRows((previous) => [...previous, {
+            ...createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet),
+          }]);
+        }}>
           <Plus size={18} />
           <span>Add New Row</span>
         </button>
@@ -1399,9 +1648,18 @@ function TimesheetPage({ user, selectedPeriod, onSelectedPeriodChange, embedded 
         dates={dates}
         rows={rows}
         chargeCodes={chargeCodes}
-        onRowUpdate={(id, u) => setRows((p) => p.map((r) => r.id === id ? { ...r, ...u } : r))}
-        onRowAdd={() => setRows((p) => [...p, createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet)])}
-        onRowDelete={(id) => setRows((p) => p.filter((r) => r.id !== id))}
+        onRowUpdate={(id, u) => {
+          hasLocalTimesheetEditsRef.current = true;
+          setRows((p) => p.map((r) => r.id === id ? { ...r, ...u } : r));
+        }}
+        onRowAdd={() => {
+          hasLocalTimesheetEditsRef.current = true;
+          setRows((p) => [...p, createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet)]);
+        }}
+        onRowDelete={(id) => {
+          hasLocalTimesheetEditsRef.current = true;
+          setRows((p) => p.filter((r) => r.id !== id));
+        }}
         readOnly={isReadOnly}
         approvedLeaves={approvedLeaves}
         holidays={holidays}
@@ -1673,7 +1931,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                               }}>
                                 {entry && entry.hours > 0
                                   ? <strong style={{ color: C.text }}>{entry.hours}h</strong>
-                                  : <span style={{ color: C.borderLight }}>—</span>}
+                                  : <span style={{ color: C.textMid }}>0</span>}
                               </td>
                             );
                           })}
@@ -1702,7 +1960,9 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                           fontWeight: '700', color: C.purple, fontSize: '13px',
                           borderLeft: `1px solid ${C.borderLight}`,
                         }}>
-                          {getDateTotal(date) > 0 ? `${getDateTotal(date)}h` : <span style={{ color: C.textMid, fontWeight: '400' }}>—</span>}
+                          {getDateTotal(date) > 0
+                            ? `${getDateTotal(date)}h`
+                            : <span style={{ color: C.textMid, fontWeight: '400' }}>0</span>}
                         </td>
                       ))}
                       <td style={{
@@ -1959,7 +2219,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                                 }}>
                                   {entry && entry.hours > 0
                                     ? <strong style={{ color: C.text }}>{entry.hours}h</strong>
-                                    : <span style={{ color: C.borderLight }}>—</span>}
+                                    : <span style={{ color: C.textMid }}>0</span>}
                                 </td>
                               );
                             })}
@@ -1980,7 +2240,9 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                         </td>
                         {allDates.map((date) => (
                           <td key={date} style={{ padding: '10px 4px', textAlign: 'center', fontWeight: '700', color: C.purple, fontSize: '13px', borderLeft: `1px solid ${C.borderLight}` }}>
-                            {getDateTotal(date) > 0 ? `${getDateTotal(date)}h` : <span style={{ color: C.textMid, fontWeight: '400' }}>—</span>}
+                            {getDateTotal(date) > 0
+                              ? `${getDateTotal(date)}h`
+                              : <span style={{ color: C.textMid, fontWeight: '400' }}>0</span>}
                           </td>
                         ))}
                         <td style={{ padding: '10px 10px', textAlign: 'center', fontWeight: '700', background: C.purpleLight, color: C.purple, fontSize: '14px', borderLeft: `1px solid ${C.totalBorder}` }}>
@@ -3093,16 +3355,36 @@ function TeamTimesheets({ user }) {
   );
 }
 
+const getLeadApprovalMeta = (timesheet) => {
+  const history = Array.isArray(timesheet?.approval_history) ? timesheet.approval_history : [];
+  const leadApproval = [...history]
+    .reverse()
+    .find((entry) => entry.stage === 'lead' && entry.action === 'approved');
+
+  return {
+    name: leadApproval?.approver_name || timesheet?.lead_approved_by || '',
+    timestamp: leadApproval?.timestamp || timesheet?.lead_approved_at || '',
+  };
+};
+
+const getReportingLeadLabel = (timesheet) =>
+  timesheet.reporting_lead_name
+  || getLeadApprovalMeta(timesheet).name
+  || 'Unassigned lead';
+
 // ─── AdminTimesheets ──────────────────────────────────────────────────────────
 function AdminTimesheets() {
   const [timesheets,       setTimesheets]       = useState([]);
   const [employees,        setEmployees]        = useState([]);
   const [loading,          setLoading]          = useState(false);
   const [searchTerm,       setSearchTerm]       = useState('');
-  const [statusFilter,     setStatusFilter]     = useState('all');
+  const [statusFilter,     setStatusFilter]     = useState('approved');
   const [typeFilter,       setTypeFilter]       = useState('all');
   const [dateRange,        setDateRange]        = useState(blankDateRange);
   const [selectedEmployee, setSelectedEmployee] = useState('all');
+  const [departmentFilter, setDepartmentFilter] = useState('all');
+  const [leadFilter,       setLeadFilter]       = useState('all');
+  const [groupMode,        setGroupMode]        = useState('department');
   const [viewingTimesheet, setViewingTimesheet] = useState(null);
   const [fullPageView,     setFullPageView]     = useState(false);
 
@@ -3125,42 +3407,308 @@ function AdminTimesheets() {
   const filtered = timesheets.filter((ts) => {
     const name  = (ts.employee_name  || '').toLowerCase();
     const email = (ts.employee_email || '').toLowerCase();
+    const department = ts.employee_department || 'Unassigned';
+    const leadLabel = getReportingLeadLabel(ts).toLowerCase();
+    const leadKey = ts.reporting_lead_id || getLeadApprovalMeta(ts).name || 'Unassigned';
     const q     = searchTerm.toLowerCase();
-    return (name.includes(q) || email.includes(q))
-      && (statusFilter     === 'all' || ts.status      === statusFilter)
+    const matchesStatus = statusFilter === 'all'
+      || (statusFilter === 'pending' && ts.status?.startsWith('pending'))
+      || (statusFilter === 'rejected' && ts.status?.startsWith('rejected'))
+      || ts.status === statusFilter;
+    return (name.includes(q) || email.includes(q) || department.toLowerCase().includes(q) || leadLabel.includes(q))
+      && matchesStatus
       && (selectedEmployee === 'all' || ts.employee_id === selectedEmployee)
+      && (departmentFilter === 'all' || department === departmentFilter)
+      && (leadFilter === 'all' || leadKey === leadFilter)
       && timesheetHasEntryType(ts, typeFilter)
       && isTimesheetInRange(ts, dateRange);
   });
+
+  const departmentOptions = useMemo(
+    () => Array.from(
+      new Set(timesheets.map((item) => item.employee_department || 'Unassigned'))
+    ).sort((first, second) => first.localeCompare(second)),
+    [timesheets]
+  );
+
+  const leadOptions = useMemo(() => {
+    const map = new Map();
+    timesheets.forEach((item) => {
+      const leadKey = item.reporting_lead_id || getLeadApprovalMeta(item).name || 'Unassigned';
+      const label = getReportingLeadLabel(item);
+      if (!map.has(leadKey)) {
+        map.set(leadKey, label);
+      }
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((first, second) => first.label.localeCompare(second.label));
+  }, [timesheets]);
+
+  const groupedTimesheets = useMemo(() => {
+    if (groupMode === 'flat') {
+      return [{ key: 'all', label: 'All filtered timesheets', items: filtered }];
+    }
+
+    const groups = new Map();
+    filtered.forEach((timesheet) => {
+      const key = groupMode === 'team'
+        ? (timesheet.reporting_lead_id || getLeadApprovalMeta(timesheet).name || 'Unassigned')
+        : (timesheet.employee_department || 'Unassigned');
+      const label = groupMode === 'team'
+        ? getReportingLeadLabel(timesheet)
+        : (timesheet.employee_department || 'Unassigned');
+      if (!groups.has(key)) {
+        groups.set(key, { key, label, items: [] });
+      }
+      groups.get(key).items.push(timesheet);
+    });
+
+    return Array.from(groups.values())
+      .sort((first, second) => first.label.localeCompare(second.label));
+  }, [filtered, groupMode]);
 
   const stats = {
     total:    timesheets.length,
     pending:  timesheets.filter((t) => t.status?.startsWith('pending')).length,
     approved: timesheets.filter((t) => t.status === 'approved').length,
     rejected: timesheets.filter((t) => t.status?.startsWith('rejected')).length,
-    hours:    timesheets.reduce((s, t) => s + (t.total_hours || 0), 0),
+    approvedHours: timesheets
+      .filter((t) => t.status === 'approved')
+      .reduce((s, t) => s + (t.total_hours || 0), 0),
+    departments: departmentOptions.length,
+    leads: leadOptions.length,
   };
   const searchSuggestions = useMemo(
-    () => uniqSuggestions(timesheets, ['employee_name', 'employee_email']),
+    () => uniqSuggestions(timesheets, ['employee_name', 'employee_email', 'employee_department', 'reporting_lead_name']),
     [timesheets]
   );
+  const activeFilterCount = [
+    searchTerm.trim(),
+    selectedEmployee !== 'all',
+    departmentFilter !== 'all',
+    leadFilter !== 'all',
+    statusFilter !== 'approved',
+    typeFilter !== 'all',
+    dateRange.start,
+    dateRange.end,
+  ].filter(Boolean).length;
+
+  const resetAdminFilters = () => {
+    setSearchTerm('');
+    setSelectedEmployee('all');
+    setDepartmentFilter('all');
+    setLeadFilter('all');
+    setStatusFilter('approved');
+    setTypeFilter('all');
+    setDateRange({ ...blankDateRange });
+  };
+
+  const renderTimesheetTable = (rows) => (
+    <div style={{ ...S.card, overflow: 'hidden', marginBottom: '20px' }}>
+      <div style={S.tableScroll}>
+        <table style={{ ...S.table, minWidth: '1060px' }}>
+          <thead style={S.thead}>
+            <tr>
+              {['Employee', 'Department', 'Reporting Lead', 'Period', 'Total Hours', 'Submitted', 'Status', 'Lead Approval', 'Actions'].map((h) => (
+                <th key={h} style={
+                  h === 'Total Hours'                  ? S.thRight
+                  : h === 'Status' || h === 'Actions' ? S.thCenter
+                  : S.th
+                }>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={9} style={{ ...S.tdMid, textAlign: 'center', padding: '40px' }}>Loading…</td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={9} style={{ ...S.tdMid, textAlign: 'center', padding: '40px' }}>No timesheets found</td></tr>
+            ) : rows.map((ts, i) => {
+              const period = ts.period_start && ts.period_end
+                ? `${format(new Date(ts.period_start), 'MMM d')} – ${format(new Date(ts.period_end), 'MMM d, yyyy')}`
+                : '—';
+              const leadApproval = getLeadApprovalMeta(ts);
+              return (
+                <tr key={ts._id} style={i % 2 === 0 ? S.trEven : S.trOdd}>
+                  <td style={S.td}>
+                    <div style={{ fontWeight: '500' }}>{ts.employee_name}</div>
+                    <div style={{ fontSize: '12px', color: C.textMid }}>{ts.employee_email}</div>
+                  </td>
+                  <td style={S.tdMid}>{ts.employee_department || 'Unassigned'}</td>
+                  <td style={S.td}>
+                    <div style={{ fontWeight: '500' }}>{getReportingLeadLabel(ts)}</div>
+                    <div style={{ fontSize: '12px', color: C.textMid }}>{ts.reporting_lead_email || '—'}</div>
+                  </td>
+                  <td style={S.td}>{period}</td>
+                  <td style={S.tdRight}><strong>{ts.total_hours || 0}h</strong></td>
+                  <td style={S.tdMid}>
+                    {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
+                  </td>
+                  <td style={S.tdCenter}><StatusBadge status={ts.status} /></td>
+                  <td style={S.td}>
+                    {leadApproval.name ? (
+                      <>
+                        <div style={{ fontWeight: '500' }}>{leadApproval.name}</div>
+                        <div style={{ fontSize: '12px', color: C.textMid }}>
+                          {leadApproval.timestamp ? format(new Date(leadApproval.timestamp), 'MMM d, yyyy') : 'Date unavailable'}
+                        </div>
+                      </>
+                    ) : (
+                      <span style={{ color: C.textMid }}>
+                        {ts.status === 'pending_lead' ? `Awaiting ${getReportingLeadLabel(ts)}` : '—'}
+                      </span>
+                    )}
+                  </td>
+                  <td style={S.tdCenter}>
+                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+                      <button
+                        onClick={async () => {
+                          try {
+                            const full = await fetchAPI(`/timesheets/${ts._id}`);
+                            setViewingTimesheet(full);
+                          } catch (_) {
+                            setViewingTimesheet(ts);
+                          }
+                          setFullPageView(true);
+                        }}
+                        style={S.btnIcon}
+                        title="View full timesheet"
+                      >
+                        <Eye size={15} />
+                      </button>
+                      <button
+                        onClick={() => {
+                          const rows = (ts.entries || []).map(e => {
+                            const looked = ccLookup[e.charge_code_id] || ccLookup[e.charge_code] || {};
+                            const code  = e.charge_code      || looked.code || '';
+                            const cname = e.charge_code_name || looked.name || '';
+                            return buildCsvRow([
+                              ts.employee_name  || '',
+                              ts.employee_email || '',
+                              ts.employee_department || '',
+                              getReportingLeadLabel(ts),
+                              leadApproval.name || '',
+                              leadApproval.timestamp || '',
+                              ts.period_start,
+                              ts.period_end,
+                              e.date,
+                              e.entry_type,
+                              code,
+                              cname,
+                              e.hours || 0,
+                              e.description || '',
+                            ]);
+                          });
+                          const header = buildCsvRow([
+                            'Employee Name',
+                            'Email',
+                            'Department',
+                            'Reporting Lead',
+                            'Approved By Lead',
+                            'Lead Approved At',
+                            'Period Start',
+                            'Period End',
+                            'Date',
+                            'Type',
+                            'Charge Code',
+                            'Charge Code Name',
+                            'Hours',
+                            'Description',
+                          ]);
+                          const csv = [header, ...rows].join('\n');
+                          const blob = new Blob([csv], { type: 'text/csv' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `timesheet_${ts.employee_name?.replace(/\s+/g, '_')}_${ts.period_start}.csv`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                        style={S.btnIcon}
+                        title="Export this timesheet"
+                      >
+                        <Download size={15} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const exportFilteredTimesheets = () => {
+    const rows = filtered.flatMap((timesheet) => {
+      const leadApproval = getLeadApprovalMeta(timesheet);
+      return (timesheet.entries || []).map((entry) => {
+        const looked = ccLookup[entry.charge_code_id] || ccLookup[entry.charge_code] || {};
+        const code = entry.charge_code || looked.code || '';
+        const chargeCodeName = entry.charge_code_name || looked.name || '';
+        return buildCsvRow([
+          timesheet.employee_name || '',
+          timesheet.employee_email || '',
+          timesheet.employee_department || '',
+          getReportingLeadLabel(timesheet),
+          leadApproval.name || '',
+          leadApproval.timestamp || '',
+          timesheet.period_start,
+          timesheet.period_end,
+          entry.date,
+          entry.entry_type,
+          code,
+          chargeCodeName,
+          entry.hours || 0,
+          entry.description || '',
+        ]);
+      });
+    });
+
+    const header = buildCsvRow([
+      'Employee Name',
+      'Email',
+      'Department',
+      'Reporting Lead',
+      'Approved By Lead',
+      'Lead Approved At',
+      'Period Start',
+      'Period End',
+      'Date',
+      'Type',
+      'Charge Code',
+      'Charge Code Name',
+      'Hours',
+      'Description',
+    ]);
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `admin_timesheets_${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div style={S.page}>
       <div style={S.inner}>
         <div style={{ ...S.maxW, maxWidth: '1800px' }}>
           <div style={S.pageHeader}>
-            <h1 style={S.pageTitle}>All Timesheets</h1>
-            <p style={S.pageSub}>Complete organisation-wide timesheet overview</p>
+            <h1 style={S.pageTitle}>Admin Timesheet Review</h1>
+            <p style={S.pageSub}>Review lead-approved employee timesheets by department or reporting team</p>
           </div>
 
           <div style={S.statsGrid5}>
             {[
-              { label: 'Total',       value: stats.total,       sub: 'All time',        Icon: FileText    },
-              { label: 'Pending',     value: stats.pending,     sub: 'In queue',         Icon: Clock       },
-              { label: 'Approved',    value: stats.approved,    sub: 'Completed',        Icon: CheckCircle },
-              { label: 'Rejected',    value: stats.rejected,    sub: 'Needs revision',   Icon: XCircle     },
-              { label: 'Total Hours', value: `${stats.hours}h`, sub: 'All employees',    Icon: TrendingUp  },
+              { label: 'Approved',    value: stats.approved,    sub: 'Lead-approved',    Icon: CheckCircle },
+              { label: 'Departments', value: stats.departments, sub: 'With timesheets',  Icon: FileText    },
+              { label: 'Teams',       value: stats.leads,       sub: 'Reporting leads',  Icon: UserCheck   },
+              { label: 'Total Hours', value: `${stats.approvedHours}h`, sub: 'Approved only',    Icon: TrendingUp  },
+              { label: 'Pending',     value: stats.pending,     sub: 'Still in queue',   Icon: Clock       },
             ].map(({ label, value, sub, Icon }) => (
               <div key={label} style={S.statCard}>
                 <div style={S.statRow}><span style={S.statLabel}>{label}</span><Icon size={18} style={{ color: C.purpleMid }} /></div>
@@ -3170,156 +3718,152 @@ function AdminTimesheets() {
             ))}
           </div>
 
-          <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '20px' }}>
-            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <ValueHelpSearch
-                value={searchTerm}
-                onChange={setSearchTerm}
-                suggestions={searchSuggestions}
-                placeholder="Search by employee name or email..."
-                style={{ flex: 1, minWidth: '240px' }}
-              />
-              <SelectWrap value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} style={{ minWidth: '180px' }}>
-                <option value="all">All Employees</option>
-                {employees.map((e) => (
-                  <option key={e._id} value={e._id}>{e.name}</option>
+          <div className="mte-admin-review-filters">
+            <div className="mte-admin-review-filters-head">
+              <div>
+                <h3>Review Filters</h3>
+                <p>
+                  Showing {filtered.length} of {timesheets.length} timesheets
+                  {activeFilterCount ? ` with ${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'} applied` : ''}
+                </p>
+              </div>
+
+              <div className="mte-admin-review-view" role="group" aria-label="Timesheet review view">
+                {[
+                  { key: 'department', label: 'Department-wise', Icon: Building2 },
+                  { key: 'team', label: 'Team-wise', Icon: Users },
+                  { key: 'flat', label: 'Flat table', Icon: LayoutGrid },
+                ].map(({ key, label, Icon }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={groupMode === key ? 'is-active' : ''}
+                    onClick={() => setGroupMode(key)}
+                    aria-pressed={groupMode === key}
+                  >
+                    <Icon size={14} />
+                    <span>{label}</span>
+                  </button>
                 ))}
-              </SelectWrap>
-              <SelectWrap value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-                <option value="all">All Statuses</option>
-                <option value="pending_lead">Pending Approval</option>
-                <option value="pending_manager">Pending Manager (Legacy)</option>
-                <option value="approved">Approved</option>
-                <option value="rejected_by_lead">Rejected</option>
-                <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
-              </SelectWrap>
-              <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-                <option value="all">All Types</option>
-                <option value="work">Work</option>
-                <option value="holiday">Holiday</option>
-                <option value="leave">Leave</option>
-              </SelectWrap>
-              <input
-                type="date"
-                value={dateRange.start}
-                onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
-                style={S.input}
-                title="Period from"
-              />
-              <input
-                type="date"
-                value={dateRange.end}
-                onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
-                style={S.input}
-                title="Period to"
-              />
-              <button onClick={() => alert('Exporting…')} style={S.btnPrimary}>
-                <Download size={14} /> Export
-              </button>
+              </div>
+            </div>
+
+            <div className="mte-admin-review-filter-grid">
+              <label className="mte-admin-review-filter-field mte-admin-review-filter-search">
+                <span>Search</span>
+                <ValueHelpSearch
+                  value={searchTerm}
+                  onChange={setSearchTerm}
+                  suggestions={searchSuggestions}
+                  placeholder="Employee, email, department, or lead"
+                />
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Employee</span>
+                <SelectWrap value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} style={{ width: '100%' }}>
+                  <option value="all">All Employees</option>
+                  {employees.map((e) => (
+                    <option key={e._id} value={e._id}>{e.name}</option>
+                  ))}
+                </SelectWrap>
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Department</span>
+                <SelectWrap value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: '100%' }}>
+                  <option value="all">All Departments</option>
+                  {departmentOptions.map((department) => (
+                    <option key={department} value={department}>{department}</option>
+                  ))}
+                </SelectWrap>
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Lead</span>
+                <SelectWrap value={leadFilter} onChange={(e) => setLeadFilter(e.target.value)} style={{ width: '100%' }}>
+                  <option value="all">All Leads</option>
+                  {leadOptions.map((lead) => (
+                    <option key={lead.value} value={lead.value}>{lead.label}</option>
+                  ))}
+                </SelectWrap>
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Status</span>
+                <SelectWrap value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={{ width: '100%' }}>
+                  <option value="all">All Statuses</option>
+                  <option value="pending">Pending</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                </SelectWrap>
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Entry Type</span>
+                <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: '100%' }}>
+                  <option value="all">All Types</option>
+                  <option value="work">Work</option>
+                  <option value="holiday">Holiday</option>
+                  <option value="leave">Leave</option>
+                </SelectWrap>
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Period From</span>
+                <input
+                  type="date"
+                  value={dateRange.start}
+                  onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
+                  className="mte-admin-review-date"
+                />
+              </label>
+
+              <label className="mte-admin-review-filter-field">
+                <span>Period To</span>
+                <input
+                  type="date"
+                  value={dateRange.end}
+                  onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
+                  className="mte-admin-review-date"
+                />
+              </label>
+
+              <div className="mte-admin-review-actions">
+                <button type="button" className="mte-admin-review-btn" onClick={resetAdminFilters}>
+                  <RefreshCw size={14} />
+                  <span>Reset</span>
+                </button>
+                <button type="button" className="mte-admin-review-btn is-primary" onClick={exportFilteredTimesheets}>
+                  <Download size={14} />
+                  <span>Export</span>
+                </button>
+              </div>
             </div>
           </div>
 
-          <div style={{ ...S.card, overflow: 'hidden', marginBottom: '20px' }}>
-            <div style={S.tableScroll}>
-              <table style={{ ...S.table, minWidth: '900px' }}>
-                <thead style={S.thead}>
-                  <tr>
-                    {['Employee', 'Department', 'Period', 'Total Hours', 'Submitted', 'Status', 'Approver', 'Actions'].map((h) => (
-                      <th key={h} style={
-                        h === 'Total Hours'                  ? S.thRight
-                        : h === 'Status' || h === 'Actions' ? S.thCenter
-                        : S.th
-                      }>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {loading ? (
-                    <tr><td colSpan={8} style={{ ...S.tdMid, textAlign: 'center', padding: '40px' }}>Loading…</td></tr>
-                  ) : filtered.length === 0 ? (
-                    <tr><td colSpan={8} style={{ ...S.tdMid, textAlign: 'center', padding: '40px' }}>No timesheets found</td></tr>
-                  ) : filtered.map((ts, i) => {
-                    const period = ts.period_start && ts.period_end
-                      ? `${format(new Date(ts.period_start), 'MMM d')} – ${format(new Date(ts.period_end), 'MMM d, yyyy')}`
-                      : '—';
-                    return (
-                      <tr key={ts._id} style={i % 2 === 0 ? S.trEven : S.trOdd}>
-                        <td style={S.td}>
-                          <div style={{ fontWeight: '500' }}>{ts.employee_name}</div>
-                          <div style={{ fontSize: '12px', color: C.textMid }}>{ts.employee_email}</div>
-                        </td>
-                        <td style={S.tdMid}>{ts.employee_department || '—'}</td>
-                        <td style={S.td}>{period}</td>
-                        <td style={S.tdRight}><strong>{ts.total_hours || 0}h</strong></td>
-                        <td style={S.tdMid}>
-                          {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
-                        </td>
-                        <td style={S.tdCenter}><StatusBadge status={ts.status} /></td>
-                        <td style={S.tdMid}>
-                          {ts.status === 'pending_lead'     ? 'Reporting Lead'
-                          : ts.status === 'pending_manager' ? 'Manager (Legacy)'
-                          : ts.status === 'approved'        ? (ts.lead_approved_by || ts.manager_approved_by || 'Lead')
-                          : '—'}
-                        </td>
-                        <td style={S.tdCenter}>
-                          <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                            <button
-                              onClick={async () => {
-                                try {
-                                  const full = await fetchAPI(`/timesheets/${ts._id}`);
-                                  setViewingTimesheet(full);
-                                } catch (_) {
-                                  setViewingTimesheet(ts);
-                                }
-                                setFullPageView(true);
-                              }}
-                              style={S.btnIcon}
-                            >
-                              <Eye size={15} />
-                            </button>
-                            <button
-                              onClick={() => {
-                                const rows = (ts.entries || []).map(e => {
-                                  const looked = ccLookup[e.charge_code_id] || ccLookup[e.charge_code] || {};
-                                  const code  = e.charge_code      || looked.code || '';
-                                  const cname = e.charge_code_name || looked.name || '';
-                                  return buildCsvRow([
-                                    ts.employee_name  || '',
-                                    ts.employee_email || '',
-                                    ts.employee_department || '',
-                                    ts.period_start,
-                                    ts.period_end,
-                                    e.date,
-                                    e.entry_type,
-                                    code,
-                                    cname,
-                                    e.hours || 0,
-                                    e.description || '',
-                                  ]);
-                                });
-                                const header = buildCsvRow(['Employee Name','Email','Department','Period Start','Period End','Date','Type','Charge Code','Charge Code Name','Hours','Description']);
-                                const csv = [header, ...rows].join('\n');
-                                const blob = new Blob([csv], { type: 'text/csv' });
-                                const url = URL.createObjectURL(blob);
-                                const a = document.createElement('a');
-                                a.href = url;
-                                a.download = `timesheet_${ts.employee_name?.replace(/\s+/g, '_')}_${ts.period_start}.csv`;
-                                a.click();
-                                URL.revokeObjectURL(url);
-                              }}
-                              style={S.btnIcon}
-                            >
-                              <Download size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+          {groupedTimesheets.length === 0 ? (
+            renderTimesheetTable([])
+          ) : (
+            groupedTimesheets.map((group) => (
+              <section key={group.key} style={{ marginBottom: '20px' }}>
+                {groupMode !== 'flat' ? (
+                  <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '10px' }}>
+                    <div style={S.rowBetween}>
+                      <div>
+                        <div style={{ fontSize: '15px', fontWeight: '600', color: C.text }}>{group.label}</div>
+                        <div style={{ fontSize: '12px', color: C.textMid }}>
+                          {group.items.length} timesheet{group.items.length !== 1 ? 's' : ''} ·{' '}
+                          {group.items.reduce((sum, item) => sum + (item.total_hours || 0), 0)}h
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+                {renderTimesheetTable(group.items)}
+              </section>
+            ))
+          )}
 
           {viewingTimesheet && fullPageView && (
             <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: C.bg, overflowY: 'auto' }}>
@@ -3338,10 +3882,10 @@ function AdminTimesheets() {
             <p style={S.infoTitle}>Admin View</p>
             <ul style={S.infoList}>
               {[
-                'View all employee timesheets across the organisation',
-                'Timesheets are approved by each employee\'s reporting lead (single-stage approval)',
-                'Filter by employee, department, or status',
-                'Export data for reporting and payroll processing',
+                'Lead-approved timesheets are shown by default for payroll-ready review',
+                'Switch between department-wise, team-wise, and flat views',
+                'Filter by employee, department, reporting lead, status, entry type, or period',
+                'Lead approval name and date are visible directly in the admin grid',
               ].map((t, i) => <li key={i} style={S.infoItem}>• {t}</li>)}
             </ul>
           </div>
@@ -3358,7 +3902,8 @@ function getChargeCodeGridRow(item = {}, index = 0) {
   const country = item.country || item.countryRegion || item.country_region || '-';
   const type = item.type || item.charge_type || '-';
   const subType = item.subType || item.sub_type || item.subtype || '-';
-  const owner = item.owner || item.owner_email || item.created_by_name || item.assigned_by_name || '-';
+  const owner = item.owner_name || item.owner || item.created_by_name || item.assigned_by_name || '-';
+  const ownerEmail = item.owner_email || '';
 
   return {
     id: item._id || item.charge_code_id || code || `charge-code-${index}`,
@@ -3369,6 +3914,7 @@ function getChargeCodeGridRow(item = {}, index = 0) {
     type,
     subType,
     owner,
+    ownerEmail,
     active: item.is_active !== false,
     raw: item,
   };
@@ -3387,6 +3933,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     client: '',
     country: '',
     description: '',
+    ownerId: '',
   };
   const [chargeCodeForm, setChargeCodeForm] = useState(emptyChargeCodeForm);
   const [filter, setFilter] = useState('All');
@@ -3441,12 +3988,36 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     if (filter === 'Selected') return normalized.filter((row) => selectedRows.includes(row.id));
     return normalized;
   }, [codes, displayRows, filter, selectedRows]);
+  const chargeCodeStats = useMemo(() => {
+    const normalized = codes.map(getChargeCodeGridRow);
+    const owners = new Set(
+      normalized
+        .map((row) => row.owner)
+        .filter((owner) => owner && owner !== '-')
+    );
 
-  const businessDevelopmentCount = rows.filter((row) =>
-    [row.client, row.description, row.type].some((value) =>
-      String(value || '').toLowerCase().includes('business')
-    )
-  ).length;
+    return {
+      total: normalized.length,
+      active: normalized.filter((row) => row.active).length,
+      displayed: normalized.filter((row) => displayRows[row.id] !== false).length,
+      selected: selectedRows.length,
+      owners: owners.size,
+      selectedEmployees: selectedEmployees.length,
+    };
+  }, [codes, displayRows, selectedEmployees.length, selectedRows.length]);
+  const summaryCards = adminMode
+    ? [
+        { label: 'Charge Codes', value: chargeCodeStats.total, sub: 'Created records', Icon: FileText },
+        { label: 'Active', value: chargeCodeStats.active, sub: 'Available for assignment', Icon: CheckCircle },
+        { label: 'Owners', value: chargeCodeStats.owners, sub: 'Named charge-code owners', Icon: UserCheck },
+        { label: 'Selected', value: chargeCodeStats.selected, sub: 'Ready to assign', Icon: Users },
+      ]
+    : [
+        { label: 'Assigned', value: chargeCodeStats.total, sub: 'Available charge codes', Icon: FileText },
+        { label: 'Displayed', value: chargeCodeStats.displayed, sub: 'Visible in timesheets', Icon: Eye },
+        { label: 'Selected', value: chargeCodeStats.selected, sub: 'Marked in this view', Icon: CheckCircle },
+        { label: 'Active', value: chargeCodeStats.active, sub: 'Currently enabled', Icon: UserCheck },
+      ];
 
   const toggleSelectedRow = (rowId) => {
     setSelectedRows((previous) =>
@@ -3484,6 +4055,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
           sub_type: chargeCodeForm.subType.trim(),
           client: chargeCodeForm.client.trim(),
           country: chargeCodeForm.country.trim(),
+          owner_id: chargeCodeForm.ownerId || '',
           is_active: true,
           created_by: userId,
         }),
@@ -3542,118 +4114,201 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
 
   return (
     <div className="mte-chargecodes-shell">
-      <div className={`mte-chargecodes-topbar ${adminMode ? '' : 'is-employee'}`}>
-        {adminMode ? (
-          <div className="mte-chargecodes-add">
-            <div className="mte-chargecodes-add-grid">
-              <input
-                value={chargeCodeForm.code}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, code: event.target.value }))}
-                placeholder="Charge Code"
-                disabled={loading}
-              />
-              <input
-                value={chargeCodeForm.type}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, type: event.target.value }))}
-                placeholder="Type"
-                disabled={loading}
-              />
-              <input
-                value={chargeCodeForm.subType}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, subType: event.target.value }))}
-                placeholder="Subtype"
-                disabled={loading}
-              />
-              <input
-                value={chargeCodeForm.client}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, client: event.target.value }))}
-                placeholder="Client"
-                disabled={loading}
-              />
-              <input
-                value={chargeCodeForm.country}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, country: event.target.value }))}
-                placeholder="Country"
-                disabled={loading}
-              />
-              <input
-                value={chargeCodeForm.description}
-                onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, description: event.target.value }))}
-                placeholder="Description"
-                disabled={loading}
-              />
+      <div className="mte-chargecodes-summary-grid">
+        {summaryCards.map(({ label, value, sub, Icon }) => (
+          <article className="mte-chargecodes-summary-card" key={label}>
+            <div className="mte-chargecodes-summary-topline">
+              <span>{label}</span>
+              <Icon size={17} />
             </div>
-            <button type="button" onClick={handleAddCode} disabled={loading}>Add</button>
-          </div>
-        ) : null}
-
-        <div className="mte-chargecodes-business">
-          <button type="button" aria-label="Business development charge codes">
-            <Plus size={16} />
-          </button>
-          <span>BUSINESS DEVELOPMENT</span>
-          <small>{businessDevelopmentCount}</small>
-        </div>
-
-        {adminMode ? (
-          <div className="mte-chargecodes-employee-pick">
-            <ValueHelpSelect
-              value=""
-              onChange={(employeeId) => {
-                if (!employeeId) return;
-                setSelectedEmployees((previous) =>
-                  previous.includes(employeeId) ? previous : [...previous, employeeId]
-                );
-              }}
-              placeholder={selectedEmployees.length ? `${selectedEmployees.length} employee(s) selected` : 'Select employee'}
-              searchPlaceholder="Search employees"
-              options={[
-                { value: '', label: 'Select employee' },
-                ...employees.map((employee) => ({
-                  value: employee._id,
-                  label: `${employee.name} - ${employee.email}`,
-                  description: employee.department || employee.employeeId,
-                })),
-              ]}
-            />
-          </div>
-        ) : null}
-
-        <div className="mte-chargecodes-actions">
-          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-            <option>All</option>
-            <option>Displayed</option>
-            <option>Selected</option>
-          </select>
-          <button type="button" onClick={() => {
-            setChargeCodeForm(emptyChargeCodeForm);
-            setSelectedRows([]);
-            setFilter('All');
-          }}>
-            New
-          </button>
-          <button type="button" className="is-primary" onClick={handleSubmit} disabled={loading}>
-            Submit
-          </button>
-        </div>
+            <strong>{value}</strong>
+            <small>{sub}</small>
+          </article>
+        ))}
       </div>
 
-      {selectedEmployees.length > 0 ? (
-        <div className="mte-chargecodes-selected-employees">
-          {selectedEmployees.map((employeeId) => {
-            const employee = employees.find((item) => item._id === employeeId);
-            return (
-              <button
-                key={employeeId}
-                type="button"
-                onClick={() => setSelectedEmployees((previous) => previous.filter((id) => id !== employeeId))}
-              >
-                {employee?.name || employeeId}
+      <div className={`mte-chargecodes-topbar ${adminMode ? '' : 'is-employee'}`}>
+        {adminMode ? (
+          <section className="mte-chargecodes-card mte-chargecodes-create-card">
+            <div className="mte-chargecodes-card-header">
+              <div>
+                <h3>Create Charge Code</h3>
+                <p>Add charge-code details and choose a clear owner.</p>
+              </div>
+            </div>
+            <div className="mte-chargecodes-add-grid">
+              <label className="mte-chargecodes-field">
+                <span>Charge Code</span>
+                <input
+                  value={chargeCodeForm.code}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, code: event.target.value }))}
+                  placeholder="Enter charge code"
+                  disabled={loading}
+                />
+              </label>
+              <label className="mte-chargecodes-field">
+                <span>Type</span>
+                <input
+                  value={chargeCodeForm.type}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, type: event.target.value }))}
+                  placeholder="Enter type"
+                  disabled={loading}
+                />
+              </label>
+              <label className="mte-chargecodes-field">
+                <span>Subtype</span>
+                <input
+                  value={chargeCodeForm.subType}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, subType: event.target.value }))}
+                  placeholder="Enter subtype"
+                  disabled={loading}
+                />
+              </label>
+              <label className="mte-chargecodes-field">
+                <span>Client</span>
+                <input
+                  value={chargeCodeForm.client}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, client: event.target.value }))}
+                  placeholder="Enter client"
+                  disabled={loading}
+                />
+              </label>
+              <label className="mte-chargecodes-field">
+                <span>Country</span>
+                <input
+                  value={chargeCodeForm.country}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, country: event.target.value }))}
+                  placeholder="Enter country"
+                  disabled={loading}
+                />
+              </label>
+              <label className="mte-chargecodes-field">
+                <span>Description</span>
+                <input
+                  value={chargeCodeForm.description}
+                  onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, description: event.target.value }))}
+                  placeholder="Enter description"
+                  disabled={loading}
+                />
+              </label>
+              <div className="mte-chargecodes-field mte-chargecodes-owner-field">
+                <span>Owner Name</span>
+                <ValueHelpSelect
+                  value={chargeCodeForm.ownerId}
+                  onChange={(ownerId) => setChargeCodeForm((previous) => ({ ...previous, ownerId }))}
+                  placeholder="Select owner name"
+                  searchPlaceholder="Search owner name"
+                  options={[
+                    { value: '', label: 'Select owner name' },
+                    ...employees.map((employee) => ({
+                      value: employee._id,
+                      label: `${employee.name} - ${employee.email}`,
+                      description: employee.department || employee.employeeId,
+                    })),
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="mte-chargecodes-add-actions">
+              <button type="button" onClick={handleAddCode} disabled={loading}>
+                <Plus size={14} />
+                <span>{loading ? 'Adding...' : 'Add Charge Code'}</span>
               </button>
-            );
-          })}
-        </div>
-      ) : null}
+            </div>
+          </section>
+        ) : null}
+
+        <section className={`mte-chargecodes-card mte-chargecodes-assign-card ${adminMode ? '' : 'is-display-preferences-card'}`}>
+          <div className="mte-chargecodes-card-header">
+            <div>
+              <h3>{adminMode ? 'Assign Charge Codes' : 'Display Preferences'}</h3>
+              <p>
+                {adminMode
+                  ? 'Select employees and assign the selected charge codes.'
+                  : 'Choose which charge codes should remain visible.'}
+              </p>
+            </div>
+          </div>
+
+          {adminMode ? (
+            <div className="mte-chargecodes-employee-pick">
+              <span>Assign to employee</span>
+              <ValueHelpSelect
+                value=""
+                onChange={(employeeId) => {
+                  if (!employeeId) return;
+                  setSelectedEmployees((previous) =>
+                    previous.includes(employeeId) ? previous : [...previous, employeeId]
+                  );
+                }}
+                placeholder={selectedEmployees.length ? `${selectedEmployees.length} employee(s) selected` : 'Select employee'}
+                searchPlaceholder="Search employees"
+                options={[
+                  { value: '', label: 'Select employee' },
+                  ...employees.map((employee) => ({
+                    value: employee._id,
+                    label: `${employee.name} - ${employee.email}`,
+                    description: employee.department || employee.employeeId,
+                  })),
+                ]}
+              />
+            </div>
+          ) : null}
+
+          {adminMode ? (
+            <label className="mte-chargecodes-filter-field mte-chargecodes-view-field">
+              <span>View</span>
+              <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+                <option>All</option>
+                <option>Displayed</option>
+                <option>Selected</option>
+              </select>
+            </label>
+          ) : null}
+
+          {selectedEmployees.length > 0 ? (
+            <div className="mte-chargecodes-selected-employees">
+              {selectedEmployees.map((employeeId) => {
+                const employee = employees.find((item) => item._id === employeeId);
+                return (
+                  <button
+                    key={employeeId}
+                    type="button"
+                    onClick={() => setSelectedEmployees((previous) => previous.filter((id) => id !== employeeId))}
+                  >
+                    {employee?.name || employeeId}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          <div className="mte-chargecodes-actions">
+            {!adminMode ? (
+              <label className="mte-chargecodes-filter-field mte-chargecodes-view-field">
+                <span>View</span>
+                <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+                  <option>All</option>
+                  <option>Displayed</option>
+                  <option>Selected</option>
+                </select>
+              </label>
+            ) : null}
+            <button type="button" onClick={() => {
+              setChargeCodeForm(emptyChargeCodeForm);
+              setSelectedRows([]);
+              setFilter('All');
+            }}>
+              <RefreshCw size={14} />
+              <span>Reset</span>
+            </button>
+            <button type="button" className="is-primary" onClick={handleSubmit} disabled={loading}>
+              {adminMode ? <UserCheck size={14} /> : <Save size={14} />}
+              <span>{adminMode ? 'Assign Selected' : 'Save Preferences'}</span>
+            </button>
+          </div>
+        </section>
+      </div>
 
       <div className="mte-chargecodes-table-wrap">
         <table className="mte-chargecodes-table">
@@ -3697,13 +4352,15 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                       <span />
                     </button>
                   </td>
-                  <td>{row.type}</td>
-                  <td>{row.subType}</td>
-                  <td>{row.client}</td>
-                  <td>{row.country}</td>
-                  <td>{row.description}</td>
-                  <td className={selected ? 'is-selected-code' : ''}>{row.code || '-'}</td>
-                  <td>
+                  <td title={row.type}>{row.type}</td>
+                  <td title={row.subType}>{row.subType}</td>
+                  <td title={row.client}>{row.client}</td>
+                  <td title={row.country}>{row.country}</td>
+                  <td title={row.description}>{row.description}</td>
+                  <td className={selected ? 'is-selected-code' : ''} title={row.code || '-'}>
+                    {row.code || '-'}
+                  </td>
+                  <td title={row.owner}>
                     <span className="mte-chargecodes-owner-dot" />
                     {row.owner}
                   </td>
@@ -4678,7 +5335,7 @@ function LocationsPanel({ selectedPeriod, periods, user }) {
       <div className="mte-locations-add-row">
         <label>Datewise Locations</label>
         <button type="button" onClick={handleAddLocation}>
-          <span>{selectedDates.length ? `Apply to ${selectedDates.length} date${selectedDates.length === 1 ? '' : 's'}` : 'Apply to All Dates'}</span>
+          <span>{selectedDates.length ? `Apply to ${selectedDates.length} date${selectedDates.length === 1 ? '' : 's'}` : 'Apply to All'}</span>
           <ChevronRight size={15} />
         </button>
         <p>Select dates below, choose a location, then apply it to those dates.</p>
@@ -4777,7 +5434,7 @@ function PreferencesPanel({ user }) {
   const email = user?.email || '';
 
   return (
-    <div className="mte-module-card">
+    <div className="mte-module-card mte-preferences-shell">
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
           <label>Time Report Reviewer(s):</label>
@@ -4798,7 +5455,7 @@ function PreferencesPanel({ user }) {
 
         <div className="mte-pref-field">
           <label>Notify of Submission:</label>
-          <input className="input" defaultValue="" placeholder="e.g. john.a.smith@accenture.com" />
+          <input className="input" defaultValue="" placeholder="e.g. john.a.smith@company.com" />
         </div>
         <div className="mte-pref-arrow">›</div>
         <div className="mte-pref-field">
@@ -4833,7 +5490,12 @@ function PreferencesPanel({ user }) {
   );
 }
 
-function PortalTimeWorkspace({ user, selectedPeriod, onSelectedPeriodChange }) {
+function PortalTimeWorkspace({
+  user,
+  selectedPeriod,
+  onSelectedPeriodChange,
+  onSheetSnapshotChange,
+}) {
   const hasTeamScope = Boolean(user?.role === 'Lead' || user?.role === 'Manager' || user?.reportsTo);
   const isAdmin = user?.role === 'Admin';
   const defaultView = isAdmin ? 'all' : 'entry';
@@ -4871,6 +5533,7 @@ function PortalTimeWorkspace({ user, selectedPeriod, onSelectedPeriodChange }) {
           user={user}
           selectedPeriod={selectedPeriod}
           onSelectedPeriodChange={onSelectedPeriodChange}
+          onSheetSnapshotChange={onSheetSnapshotChange}
           embedded
         />
       ) : null}
@@ -4911,7 +5574,7 @@ function getEffectiveSummaryEntries(entries = []) {
   });
 }
 
-function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
+function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSnapshot }) {
   const userId = getUserId(user);
   const isAdmin = user?.role === 'Admin';
   const period = periods.find((item) => item.value === selectedPeriod) || periods[0];
@@ -4920,6 +5583,11 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
   const [expenses, setExpenses] = useState([]);
   const [profile, setProfile] = useState(user || {});
   const [loading, setLoading] = useState(false);
+  const [summaryFilters, setSummaryFilters] = useState({
+    search: '',
+    department: 'all',
+    metric: 'all',
+  });
 
   const dates = useMemo(() => {
     if (!period) return [];
@@ -4980,7 +5648,13 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
     return () => clearInterval(refreshTimer);
   }, [loadSummary]);
 
-  const entries = getEffectiveSummaryEntries(timesheet?.entries || []);
+  const liveTimesheet = !isAdmin
+    && liveTimesheetSnapshot?.period_start === period?.start
+    && liveTimesheetSnapshot?.period_end === period?.end
+    ? liveTimesheetSnapshot
+    : null;
+  const summaryTimesheet = liveTimesheet || timesheet;
+  const entries = getEffectiveSummaryEntries(summaryTimesheet?.entries || []);
   const workEntries = entries.filter((entry) => (entry.entry_type || 'work') === 'work');
   const absenceEntries = entries.filter((entry) => ['leave', 'holiday'].includes(entry.entry_type));
   const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
@@ -4994,7 +5668,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
   const standardAvailable = Math.max(workSchedule - absenceHours, 0);
   const overtime = Math.max(workHours - standardAvailable, 0);
   const availablePercent = standardAvailable ? Math.round((workHours / standardAvailable) * 100) : 0;
-  const assignmentMeta = getTimesheetAssignmentMeta({ ...profile, ...timesheet });
+  const assignmentMeta = getTimesheetAssignmentMeta({ ...profile, ...summaryTimesheet });
   const country = profile.countryRegion || profile.country || 'India';
   const location = assignmentMeta.workLocation === 'Not assigned' ? country : assignmentMeta.workLocation;
 
@@ -5022,14 +5696,14 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
     return Object.values(grouped);
   }, [absenceHours, workEntries]);
 
-  const summaryRows = [
+  const summaryRows = useMemo(() => [
     ...chargeRows,
     { label: 'Total', hours: workHours, expenses: expenseTotal, absence: absenceHours, isTotal: true },
     { label: 'Work Schedule', hours: workSchedule, expenses: '', absence: '', isMeta: true },
     { label: 'Overtime', hours: overtime || '', expenses: '', absence: '', isMeta: true },
     { label: 'Standard Available Hours', hours: standardAvailable || '', expenses: '', absence: '', isMeta: true },
     { label: 'Percentage of Standard Available Hours', hours: standardAvailable ? `${availablePercent}%` : '', expenses: '', absence: '', isMeta: true },
-  ];
+  ], [absenceHours, availablePercent, chargeRows, expenseTotal, overtime, standardAvailable, workHours, workSchedule]);
 
   const leaveBalance = profile.leaveBalance || {};
   const earnedLeave = Number(leaveBalance.earned ?? leaveBalance.earnedLeave ?? 0);
@@ -5075,11 +5749,33 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
     });
     return Object.values(grouped).sort((a, b) => a.employee.localeCompare(b.employee));
   }, [allTimesheets, expenses, isAdmin]);
+  const summaryDepartmentOptions = useMemo(
+    () => Array.from(new Set(adminEmployeeRows.map((row) => row.department || 'Unassigned')))
+      .sort((first, second) => first.localeCompare(second)),
+    [adminEmployeeRows]
+  );
+  const summarySearch = summaryFilters.search.trim().toLowerCase();
+  const filteredAdminEmployeeRows = useMemo(() => {
+    if (!isAdmin) return [];
+    return adminEmployeeRows.filter((row) => {
+      const matchesSearch = !summarySearch
+        || [row.employee, row.email, row.department]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(summarySearch));
+      const matchesDepartment = summaryFilters.department === 'all'
+        || row.department === summaryFilters.department;
+      const matchesMetric = summaryFilters.metric === 'all'
+        || (summaryFilters.metric === 'hours' && row.hours > 0)
+        || (summaryFilters.metric === 'expenses' && row.expenses > 0)
+        || (summaryFilters.metric === 'documents' && row.documents.length > 0);
+      return matchesSearch && matchesDepartment && matchesMetric;
+    });
+  }, [adminEmployeeRows, isAdmin, summaryFilters.department, summaryFilters.metric, summarySearch]);
 
   const adminDepartmentRows = useMemo(() => {
     if (!isAdmin) return [];
     const grouped = {};
-    adminEmployeeRows.forEach((row) => {
+    filteredAdminEmployeeRows.forEach((row) => {
       const key = row.department || 'Unassigned';
       if (!grouped[key]) grouped[key] = { department: key, employees: 0, hours: 0, expenses: 0, documents: [] };
       grouped[key].employees += 1;
@@ -5088,22 +5784,128 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
       grouped[key].documents.push(...row.documents);
     });
     return Object.values(grouped).sort((a, b) => a.department.localeCompare(b.department));
-  }, [adminEmployeeRows, isAdmin]);
+  }, [filteredAdminEmployeeRows, isAdmin]);
+  const filteredSummaryRows = useMemo(() => {
+    if (isAdmin) return [];
+    return summaryRows.filter((row) => {
+      if (!summarySearch) return true;
+      return String(row.label || '').toLowerCase().includes(summarySearch);
+    });
+  }, [isAdmin, summaryRows, summarySearch]);
+  const resetSummaryFilters = () => {
+    setSummaryFilters({ search: '', department: 'all', metric: 'all' });
+  };
+  const exportSummary = () => {
+    const rowsForExport = isAdmin
+      ? [
+          buildCsvRow(['Employee Wise Summary']),
+          buildCsvRow(['Employee', 'Email', 'Department', 'Hours', 'Expenses', 'Documents']),
+          ...filteredAdminEmployeeRows.map((row) => buildCsvRow([
+            row.employee,
+            row.email || '',
+            row.department,
+            row.hours.toFixed(2),
+            row.expenses.toFixed(2),
+            row.documents.map((document) => document.name || document.url || 'Document').join('; '),
+          ])),
+          buildCsvRow([]),
+          buildCsvRow(['Department Wise Summary']),
+          buildCsvRow(['Department', 'Employees', 'Hours', 'Expenses', 'Documents']),
+          ...adminDepartmentRows.map((row) => buildCsvRow([
+            row.department,
+            row.employees,
+            row.hours.toFixed(2),
+            row.expenses.toFixed(2),
+            row.documents.map((document) => document.name || document.url || 'Document').join('; '),
+          ])),
+        ]
+      : [
+          buildCsvRow(['Charge Code', 'Hours', 'Expenses', 'Chargeable', 'Absences']),
+          ...filteredSummaryRows.map((row) => buildCsvRow([
+            row.label,
+            summaryCell(row.hours),
+            summaryCell(row.expenses, 2),
+            !row.isMeta ? summaryCell(row.hours) : '',
+            row.absence ? Number(row.absence).toFixed(1) : '',
+          ])),
+        ];
+    const csv = rowsForExport.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `summary_${period?.start || format(new Date(), 'yyyy-MM-dd')}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+  const summaryFilterCard = (
+    <section className="mte-summary-filter-card">
+      <div className="mte-summary-filter-head">
+        <div>
+          <h3>Summary Filters</h3>
+          <p>{isAdmin ? 'Find employees by name, email, department, or records with hours, expenses, and documents.' : 'Find summary rows by charge code or category name.'}</p>
+        </div>
+        <div className="mte-summary-filter-actions">
+          <button type="button" onClick={resetSummaryFilters}>
+            <RefreshCw size={14} />
+            <span>Reset</span>
+          </button>
+          <button type="button" className="is-primary" onClick={exportSummary}>
+            <Download size={14} />
+            <span>Export</span>
+          </button>
+        </div>
+      </div>
+      <div className={`mte-summary-filter-grid ${isAdmin ? '' : 'is-employee'}`}>
+        <label className="mte-summary-filter-field mte-summary-filter-search">
+          <span>Search</span>
+          <input
+            value={summaryFilters.search}
+            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, search: event.target.value }))}
+            placeholder={isAdmin ? 'Employee, email, or department' : 'Charge code or summary row'}
+          />
+        </label>
+        {isAdmin ? (
+          <>
+            <label className="mte-summary-filter-field">
+              <span>Department</span>
+              <select
+                value={summaryFilters.department}
+                onChange={(event) => setSummaryFilters((previous) => ({ ...previous, department: event.target.value }))}
+              >
+                <option value="all">All Departments</option>
+                {summaryDepartmentOptions.map((department) => (
+                  <option key={department} value={department}>{department}</option>
+                ))}
+              </select>
+            </label>
+            <label className="mte-summary-filter-field">
+              <span>Metric</span>
+              <select
+                value={summaryFilters.metric}
+                onChange={(event) => setSummaryFilters((previous) => ({ ...previous, metric: event.target.value }))}
+              >
+                <option value="all">All Records</option>
+                <option value="hours">With Hours</option>
+                <option value="expenses">With Expenses</option>
+                <option value="documents">With Documents</option>
+              </select>
+            </label>
+          </>
+        ) : null}
+      </div>
+    </section>
+  );
 
   if (isAdmin) {
     return (
       <div className="mte-summary-shell">
-        <div className="mte-summary-actions">
-          <button type="button" onClick={loadSummary}>Refresh</button>
-          <button type="button" className="is-primary" onClick={() => alert('Summary submitted successfully')} disabled={loading}>
-            Submit
-          </button>
-        </div>
+        {summaryFilterCard}
 
         <section className="mte-summary-group">
           <div className="mte-summary-group-header">
             <h3>Employee Wise Summary</h3>
-            <span>{period?.label}</span>
+            <span>{filteredAdminEmployeeRows.length} of {adminEmployeeRows.length} employees · {period?.label}</span>
           </div>
           <div className="mte-summary-table-wrap">
             <table className="mte-simple-table">
@@ -5115,9 +5917,9 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
               <tbody>
                 {loading ? (
                   <tr><td colSpan={6}>Loading summary...</td></tr>
-                ) : adminEmployeeRows.length === 0 ? (
+                ) : filteredAdminEmployeeRows.length === 0 ? (
                   <tr><td colSpan={6}>No employee data found for this period.</td></tr>
-                ) : adminEmployeeRows.map((row) => (
+                ) : filteredAdminEmployeeRows.map((row) => (
                   <tr key={`${row.employee}-${row.email}`}>
                     <td>{row.employee}</td>
                     <td>{row.email || '-'}</td>
@@ -5141,7 +5943,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
         <section className="mte-summary-group">
           <div className="mte-summary-group-header">
             <h3>Department Wise Summary</h3>
-            <span>Includes uploaded expense documents</span>
+            <span>{adminDepartmentRows.length} department{adminDepartmentRows.length === 1 ? '' : 's'} in view</span>
           </div>
           <div className="mte-summary-table-wrap">
             <table className="mte-simple-table">
@@ -5178,17 +5980,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
 
   return (
     <div className="mte-summary-shell">
-      <div className="mte-summary-actions">
-        <button type="button" onClick={loadSummary}>New</button>
-        <button
-          type="button"
-          className="is-primary"
-          onClick={() => alert('Summary submitted successfully')}
-          disabled={loading}
-        >
-          Submit
-        </button>
-      </div>
+      {summaryFilterCard}
 
       <div className="mte-summary-table-wrap">
         <table className="mte-summary-table">
@@ -5213,9 +6005,11 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
             </tr>
           </thead>
           <tbody>
-            {loading && !timesheet ? (
+            {loading && !summaryTimesheet ? (
               <tr><td colSpan={11}>Loading summary...</td></tr>
-            ) : summaryRows.map((row) => (
+            ) : filteredSummaryRows.length === 0 ? (
+              <tr><td colSpan={11}>No summary rows match the current filters.</td></tr>
+            ) : filteredSummaryRows.map((row) => (
               <tr key={row.label} className={row.isTotal || row.isMeta ? 'is-summary-row' : ''}>
                 <td>{row.label}</td>
                 <td>{summaryCell(row.hours)}</td>
@@ -5268,8 +6062,15 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods }) {
   );
 }
 
-function PortalSummaryWorkspace({ user, selectedPeriod, periods }) {
-  return <MyTimeSummaryWorkspace user={user} selectedPeriod={selectedPeriod} periods={periods} />;
+function PortalSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSnapshot }) {
+  return (
+    <MyTimeSummaryWorkspace
+      user={user}
+      selectedPeriod={selectedPeriod}
+      periods={periods}
+      liveTimesheetSnapshot={liveTimesheetSnapshot}
+    />
+  );
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
@@ -5277,6 +6078,13 @@ export default function Timesheets({ user }) {
   const periods = useMemo(() => getAvailablePeriods(), []);
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
+  const [liveTimesheetSnapshots, setLiveTimesheetSnapshots] = useState({});
+  const handleSheetSnapshotChange = useCallback((periodValue, snapshot) => {
+    setLiveTimesheetSnapshots((previous) => ({
+      ...previous,
+      [periodValue]: snapshot,
+    }));
+  }, []);
 
   const modules = [
     { key: 'time', label: 'TIME' },
@@ -5297,6 +6105,7 @@ export default function Timesheets({ user }) {
             user={user}
             selectedPeriod={selectedPeriod}
             onSelectedPeriodChange={setSelectedPeriod}
+            onSheetSnapshotChange={handleSheetSnapshotChange}
           />
         );
       case 'expenses':
@@ -5306,15 +6115,38 @@ export default function Timesheets({ user }) {
       case 'charge_codes':
         return user?.role === 'Admin' ? <ChargeCodeAdmin user={user} /> : <AssignedChargeCodesPanel user={user} />;
       case 'assignments':
-        return user?.role === 'Admin' ? <AssignmentAdmin user={user} /> : <PortalTimeWorkspace user={user} selectedPeriod={selectedPeriod} onSelectedPeriodChange={setSelectedPeriod} />;
+        return user?.role === 'Admin'
+          ? <AssignmentAdmin user={user} />
+          : (
+            <PortalTimeWorkspace
+              user={user}
+              selectedPeriod={selectedPeriod}
+              onSelectedPeriodChange={setSelectedPeriod}
+              onSheetSnapshotChange={handleSheetSnapshotChange}
+            />
+          );
       case 'adjustments':
         return <AdjustmentsPanel user={user} />;
       case 'summary':
-        return <PortalSummaryWorkspace user={user} selectedPeriod={selectedPeriod} periods={periods} />;
+        return (
+          <PortalSummaryWorkspace
+            user={user}
+            selectedPeriod={selectedPeriod}
+            periods={periods}
+            liveTimesheetSnapshot={liveTimesheetSnapshots[selectedPeriod]}
+          />
+        );
       case 'preferences':
         return <PreferencesPanel user={user} />;
       default:
-        return <PortalTimeWorkspace user={user} selectedPeriod={selectedPeriod} onSelectedPeriodChange={setSelectedPeriod} />;
+        return (
+          <PortalTimeWorkspace
+            user={user}
+            selectedPeriod={selectedPeriod}
+            onSelectedPeriodChange={setSelectedPeriod}
+            onSheetSnapshotChange={handleSheetSnapshotChange}
+          />
+        );
     }
   };
 
