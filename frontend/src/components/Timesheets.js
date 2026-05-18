@@ -440,6 +440,72 @@ const createEmptyWorkRow = (id, dates, lockedDateSet = new Set(), defaultHoursBy
   entries: createEmptyWorkEntries(dates, lockedDateSet, defaultHoursByDate),
 });
 
+const CHARGE_CODE_DISPLAY_EVENT = 'mte-charge-code-display-change';
+
+const getChargeCodeDisplayStorageKey = (userId) => `mte_charge_code_display_${userId}`;
+
+const getChargeCodeDisplayKeys = (item = {}) => Array.from(new Set([
+  item.charge_code_id,
+  item._id,
+  item.id,
+  item.code,
+  item.charge_code,
+  item.chargeCode,
+].filter(Boolean).map(String)));
+
+const readChargeCodeDisplayPreferences = (userId) => {
+  if (!userId || typeof localStorage === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(getChargeCodeDisplayStorageKey(userId)) || '{}') || {};
+  } catch (_) {
+    return {};
+  }
+};
+
+const writeChargeCodeDisplayPreferences = (userId, displayRows) => {
+  if (!userId || typeof localStorage === 'undefined') return;
+  localStorage.setItem(getChargeCodeDisplayStorageKey(userId), JSON.stringify(displayRows || {}));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(CHARGE_CODE_DISPLAY_EVENT, { detail: { userId } }));
+  }
+};
+
+const isChargeCodeDisplayed = (item = {}, displayRows = {}) => {
+  const keys = getChargeCodeDisplayKeys(item);
+  if (keys.some((key) => displayRows[key] === false)) return false;
+  if (keys.some((key) => displayRows[key] === true)) return true;
+  return item.is_active !== false;
+};
+
+const applyChargeCodeDisplayPreferences = (items = [], userId) => {
+  const displayRows = readChargeCodeDisplayPreferences(userId);
+  return items.filter((item) => isChargeCodeDisplayed(item, displayRows));
+};
+
+const buildGroupedLeaveRows = (approvedLeaveEntries = []) => {
+  const grouped = new Map();
+
+  approvedLeaveEntries.forEach((leave) => {
+    const key = `${leave.code || 'LV'}|${leave.label || 'Leave'}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        key,
+        code: leave.code,
+        label: leave.label,
+        hoursByDate: {},
+        totalHours: 0,
+      });
+    }
+
+    const row = grouped.get(key);
+    const hours = Number(leave.hours || 0);
+    row.hoursByDate[leave.date] = (row.hoursByDate[leave.date] || 0) + hours;
+    row.totalHours += hours;
+  });
+
+  return Array.from(grouped.values());
+};
+
 const buildLiveSummaryEntries = ({
   rows = [],
   chargeCodes = [],
@@ -527,6 +593,10 @@ function TimesheetGrid({
     () => buildApprovedLeaveEntries(approvedLeaves, dates)
       .filter((leave) => !holidayByDate[leave.date]),
     [approvedLeaves, dates, holidayByDate]
+  );
+  const groupedLeaveRows = useMemo(
+    () => buildGroupedLeaveRows(approvedLeaveEntries),
+    [approvedLeaveEntries]
   );
   const leaveByDate = Object.fromEntries(approvedLeaveEntries.map((leave) => [leave.date, leave]));
   const holidayDates = Object.keys(holidayByDate);
@@ -826,8 +896,8 @@ function TimesheetGrid({
               );
             })}
 
-            {approvedLeaveEntries.map((leave) => (
-              <tr key={`leave-${leave.date}`} className="mte-sheet-static-row">
+            {groupedLeaveRows.map((leave) => (
+              <tr key={`leave-${leave.key}`} className="mte-sheet-static-row">
                 <td className="mte-sheet-static-label" style={{
                   padding: '10px 16px',
                   position: 'sticky', left: 0,
@@ -841,13 +911,11 @@ function TimesheetGrid({
                   </span>
                 </td>
                 {dates.map((d) => (
-                  <td key={`leave-cell-${leave.date}-${d}`} className="mte-sheet-static-value-cell">
-                    {d === leave.date
-                      ? displayHours(leave.hours)
-                      : displayHours(0, true)}
+                  <td key={`leave-cell-${leave.key}-${d}`} className="mte-sheet-static-value-cell">
+                    {displayHours(leave.hoursByDate[d] || 0, true)}
                   </td>
                 ))}
-                <td className="mte-sheet-static-total-cell">{displayHours(leave.hours)}</td>
+                <td className="mte-sheet-static-total-cell">{displayHours(leave.totalHours)}</td>
                 {!readOnly && <td className="mte-sheet-sticky-end" />}
               </tr>
             ))}
@@ -1071,7 +1139,10 @@ function TimesheetPage({
     if (!userId) return;
 
     fetchAPI(`/charge_codes/employee/${userId}?active_only=true`)
-      .then((data) => setChargeCodes(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const assignedCodes = Array.isArray(data) ? data : [];
+        setChargeCodes(applyChargeCodeDisplayPreferences(assignedCodes, userId));
+      })
       .catch((err) => { console.error('Charge codes error:', err); setChargeCodes([]); });
 
     fetchAPI(`/leaves/history/${userId}`)
@@ -1090,6 +1161,23 @@ function TimesheetPage({
   }, [loadTimesheetReferenceData]);
 
   useEffect(() => {
+    if (!userId || typeof window === 'undefined') return undefined;
+
+    const refreshChargeCodes = (event) => {
+      if (event.type === 'storage' && event.key !== getChargeCodeDisplayStorageKey(userId)) return;
+      if (event.type === CHARGE_CODE_DISPLAY_EVENT && event.detail?.userId !== userId) return;
+      loadTimesheetReferenceData();
+    };
+
+    window.addEventListener('storage', refreshChargeCodes);
+    window.addEventListener(CHARGE_CODE_DISPLAY_EVENT, refreshChargeCodes);
+    return () => {
+      window.removeEventListener('storage', refreshChargeCodes);
+      window.removeEventListener(CHARGE_CODE_DISPLAY_EVENT, refreshChargeCodes);
+    };
+  }, [loadTimesheetReferenceData, userId]);
+
+  useEffect(() => {
     setProfile(user || {});
   }, [user]);
 
@@ -1105,7 +1193,7 @@ function TimesheetPage({
 
   // FIX 2: Added reloadTrigger to deps so this re-runs after recall/submit
   useEffect(() => {
-    if (!userId || !dates.length || !chargeCodes.length) return;
+    if (!userId || !dates.length) return;
     if (hasLocalTimesheetEditsRef.current) return;
 
     setSheetLoaded(false);
@@ -1123,10 +1211,13 @@ function TimesheetPage({
 
           // FIX 3: Build ccMap keyed by charge_code_id (or charge_code as fallback)
           // Store the full label (code + name) alongside entries
+          const visibleChargeCodeKeys = new Set(chargeCodes.flatMap(getChargeCodeDisplayKeys));
           const ccMap = {};
           (match.entries || []).forEach((e) => {
             if (e.entry_type && e.entry_type !== 'work') return;
             if (!e.charge_code_id && !e.charge_code) return;
+            const entryKeys = getChargeCodeDisplayKeys(e);
+            if (!entryKeys.some((key) => visibleChargeCodeKeys.has(key))) return;
             // Use charge_code_id as the stable key to match against chargeCodes dropdown
             const ccId = e.charge_code_id || e.charge_code || '';
             if (!ccMap[ccId]) ccMap[ccId] = {};
@@ -3950,18 +4041,13 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
       .then((data) => {
         const items = Array.isArray(data) ? data : [];
         setCodes(items);
-        let savedDisplayRows = {};
-        if (!adminMode) {
-          try {
-            savedDisplayRows = JSON.parse(localStorage.getItem(`mte_charge_code_display_${userId}`) || '{}');
-          } catch (_) {
-            savedDisplayRows = {};
-          }
-        }
+        const savedDisplayRows = adminMode ? {} : readChargeCodeDisplayPreferences(userId);
         setDisplayRows({
           ...items.reduce((acc, item, index) => {
             const row = getChargeCodeGridRow(item, index);
-            acc[row.id] = row.active;
+            getChargeCodeDisplayKeys(row.raw).forEach((key) => {
+              acc[key] = row.active;
+            });
             return acc;
           }, {}),
           ...savedDisplayRows,
@@ -3984,7 +4070,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
 
   const rows = useMemo(() => {
     const normalized = codes.map(getChargeCodeGridRow);
-    if (filter === 'Displayed') return normalized.filter((row) => displayRows[row.id]);
+    if (filter === 'Displayed') return normalized.filter((row) => isChargeCodeDisplayed(row.raw, displayRows));
     if (filter === 'Selected') return normalized.filter((row) => selectedRows.includes(row.id));
     return normalized;
   }, [codes, displayRows, filter, selectedRows]);
@@ -3999,7 +4085,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     return {
       total: normalized.length,
       active: normalized.filter((row) => row.active).length,
-      displayed: normalized.filter((row) => displayRows[row.id] !== false).length,
+      displayed: normalized.filter((row) => isChargeCodeDisplayed(row.raw, displayRows)).length,
       selected: selectedRows.length,
       owners: owners.size,
       selectedEmployees: selectedEmployees.length,
@@ -4025,6 +4111,18 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         ? previous.filter((id) => id !== rowId)
         : [...previous, rowId]
     );
+  };
+
+  const toggleDisplayRow = (row) => {
+    const nextDisplayed = !isChargeCodeDisplayed(row.raw, displayRows);
+    setDisplayRows((previous) => {
+      const next = { ...previous };
+      getChargeCodeDisplayKeys(row.raw).forEach((key) => {
+        next[key] = nextDisplayed;
+      });
+      if (!adminMode) writeChargeCodeDisplayPreferences(userId, next);
+      return next;
+    });
   };
 
   const handleAddCode = async () => {
@@ -4071,7 +4169,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
 
   const handleSubmit = async () => {
     if (!adminMode) {
-      localStorage.setItem(`mte_charge_code_display_${userId}`, JSON.stringify(displayRows));
+      writeChargeCodeDisplayPreferences(userId, displayRows);
       alert('Charge code display preferences saved');
       return;
     }
@@ -4332,7 +4430,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
               <tr><td colSpan={9}>No charge codes found</td></tr>
             ) : rows.map((row) => {
               const selected = selectedRows.includes(row.id);
-              const displayed = displayRows[row.id] !== false;
+              const displayed = isChargeCodeDisplayed(row.raw, displayRows);
               return (
                 <tr key={row.id}>
                   <td>
@@ -4347,7 +4445,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                       type="button"
                       className={`mte-chargecodes-toggle ${displayed ? 'is-on' : ''}`}
                       aria-pressed={displayed}
-                      onClick={() => setDisplayRows((previous) => ({ ...previous, [row.id]: !displayed }))}
+                      onClick={() => toggleDisplayRow(row)}
                     >
                       <span />
                     </button>
