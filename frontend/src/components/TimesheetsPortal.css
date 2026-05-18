@@ -1200,6 +1200,115 @@
   padding: 16px;
 }
 
+.mte-history-card {
+  overflow: hidden;
+  border: 1px solid #d9dee6;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.mte-history-filterbar {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.7fr) minmax(128px, 0.8fr) minmax(116px, 0.72fr) minmax(132px, 0.74fr) minmax(132px, 0.74fr);
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #d9dee6;
+  background: #f7f9fb;
+}
+
+.mte-history-filterbar > * {
+  min-width: 0;
+}
+
+.mte-history-filterbar .value-help,
+.mte-history-filterbar .value-help-search-field {
+  width: 100%;
+}
+
+.mte-history-filterbar .value-help-trigger,
+.mte-history-filterbar .value-help-search-field,
+.mte-history-date-input {
+  min-height: 34px;
+  border: 1px solid #d8dde6;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: none;
+}
+
+.mte-history-filterbar .value-help-trigger {
+  padding: 0 10px;
+}
+
+.mte-history-filterbar .value-help-label,
+.mte-history-filterbar .value-help-placeholder,
+.mte-history-filterbar .value-help-search-field .input,
+.mte-history-date-input {
+  color: #32363a;
+  font-size: 12px;
+}
+
+.mte-history-filterbar .value-help-search-field {
+  gap: 7px;
+  padding: 0 9px;
+}
+
+.mte-history-filterbar .value-help-search-field > .input {
+  min-height: 32px;
+  padding: 0;
+}
+
+.mte-history-date-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 9px;
+  outline: none;
+}
+
+.mte-history-filterbar .value-help-trigger:focus-visible,
+.mte-history-filterbar .value-help-search-field:focus-within,
+.mte-history-date-input:focus {
+  border-color: #6b5b7a;
+  box-shadow: 0 0 0 2px rgba(107, 91, 122, 0.12);
+}
+
+.mte-manager-filter-card {
+  margin-bottom: 14px;
+}
+
+.mte-manager-filterbar {
+  grid-template-columns: minmax(190px, 1.7fr) minmax(148px, 0.9fr) minmax(116px, 0.7fr) minmax(132px, 0.72fr) minmax(132px, 0.72fr) auto auto;
+}
+
+.mte-manager-filter-button {
+  min-height: 34px;
+  min-width: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #c9ced8;
+  border-radius: 5px;
+  background: #fff;
+  color: #32363a;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  cursor: pointer !important;
+}
+
+.mte-manager-filter-button.is-primary {
+  border-color: #4a7c59;
+  background: #4a7c59;
+  color: #fff;
+}
+
+.mte-manager-filter-button svg {
+  flex: 0 0 auto;
+}
+
 .mte-locations-actions {
   display: flex;
   align-items: center;
@@ -1884,6 +1993,14 @@
     grid-column: 1 / -1;
   }
 
+  .mte-history-filterbar {
+    grid-template-columns: minmax(220px, 1.4fr) repeat(2, minmax(128px, 1fr));
+  }
+
+  .mte-history-filter-search {
+    grid-column: 1 / -1;
+  }
+
   .mte-chargecodes-topbar {
     grid-template-columns: 1fr;
     align-items: stretch;
@@ -1952,6 +2069,15 @@
 
   .mte-admin-review-filter-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mte-history-filterbar {
+    grid-template-columns: 1fr 1fr;
+    padding: 8px;
+  }
+
+  .mte-history-filter-search {
+    grid-column: 1 / -1;
   }
 
   .mte-admin-review-actions {

@@ -2519,57 +2519,67 @@ function Approvals({ user }) {
             ))}
           </div>
 
-          <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '20px' }}>
-            <div style={S.rowBetween}>
-              <div style={S.rowGap4}>
+          <div className="mte-history-card mte-manager-filter-card">
+            <div className="mte-history-filterbar mte-manager-filterbar">
+              <div className="mte-history-filter-search">
                 <ValueHelpSearch
                   value={searchTerm}
                   onChange={setSearchTerm}
                   suggestions={searchSuggestions}
-                  placeholder="Search by name or email..."
-                  style={{ width: '260px' }}
+                  placeholder="Search name or email"
+                  style={{ width: '100%' }}
                 />
-                <SelectWrap value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              </div>
+              <SelectWrap
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                   <option value="all">All Statuses</option>
                   <option value="pending_lead">Pending Approval</option>
                   <option value="pending_manager">Pending Manager (Legacy)</option>
                   <option value="approved">Approved</option>
                   <option value="rejected_by_lead">Rejected</option>
                   <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
-                </SelectWrap>
-                <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              </SelectWrap>
+              <SelectWrap
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                   <option value="all">All Types</option>
                   <option value="work">Work</option>
                   <option value="holiday">Holiday</option>
                   <option value="leave">Leave</option>
-                </SelectWrap>
-                <input
-                  type="date"
-                  value={dateRange.start}
-                  onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
-                  style={S.input}
-                  title="Period from"
-                />
-                <input
-                  type="date"
-                  value={dateRange.end}
-                  onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
-                  style={S.input}
-                  title="Period to"
-                />
-                <button onClick={loadApprovals} style={S.btnSecondary} title="Refresh">
-                  <RefreshCw size={14} />
-                </button>
-              </div>
+              </SelectWrap>
+              <input
+                className="mte-history-date-input"
+                type="date"
+                value={dateRange.start}
+                onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
+                title="Period from"
+              />
+              <input
+                className="mte-history-date-input"
+                type="date"
+                value={dateRange.end}
+                onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
+                title="Period to"
+              />
+              <button type="button" onClick={loadApprovals} className="mte-manager-filter-button" title="Refresh">
+                <RefreshCw size={14} />
+              </button>
               {selectedTimesheets.length > 0 && (
                 <button
+                  type="button"
                   onClick={() => {
                     const selected = approvals.filter((a) => selectedTimesheets.includes(a._id || a.id));
                     selected.forEach((a) => handleApprove(a._id || a.id, a.status));
                   }}
-                  style={S.btnGreen}
+                  className="mte-manager-filter-button is-primary"
                 >
-                  <CheckCircle size={14} /> Approve Selected ({selectedTimesheets.length})
+                  <CheckCircle size={14} />
+                  <span>Approve ({selectedTimesheets.length})</span>
                 </button>
               )}
             </div>
@@ -2846,39 +2856,49 @@ function History({ user, onNavigate }) {
             ))}
           </div>
 
-          <div style={{ ...S.card, overflow: 'hidden' }}>
-            <div style={{ padding: '16px', borderBottom: `1px solid ${C.border}`, display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-              <ValueHelpSearch
-                value={searchQuery}
-                onChange={setSearchQuery}
-                suggestions={searchSuggestions}
-                placeholder="Search by period..."
-                style={{ flex: 1, minWidth: '220px' }}
-              />
-              <SelectWrap value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <div className="mte-history-card">
+            <div className="mte-history-filterbar">
+              <div className="mte-history-filter-search">
+                <ValueHelpSearch
+                  value={searchQuery}
+                  onChange={setSearchQuery}
+                  suggestions={searchSuggestions}
+                  placeholder="Search period"
+                  style={{ width: '100%' }}
+                />
+              </div>
+              <SelectWrap
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                 <option value="all">All Statuses</option>
                 <option value="pending">Pending</option>
                 <option value="approved">Approved</option>
                 <option value="rejected">Rejected</option>
               </SelectWrap>
-              <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <SelectWrap
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                 <option value="all">All Types</option>
                 <option value="work">Work</option>
                 <option value="holiday">Holiday</option>
                 <option value="leave">Leave</option>
               </SelectWrap>
               <input
+                className="mte-history-date-input"
                 type="date"
                 value={dateRange.start}
                 onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
-                style={S.input}
                 title="Period from"
               />
               <input
+                className="mte-history-date-input"
                 type="date"
                 value={dateRange.end}
                 onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
-                style={S.input}
                 title="Period to"
               />
             </div>
@@ -3307,16 +3327,22 @@ function TeamTimesheets({ user }) {
             ))}
           </div>
 
-          <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '20px' }}>
-            <div style={S.rowGap4}>
+          <div className="mte-history-card mte-manager-filter-card">
+            <div className="mte-history-filterbar mte-manager-filterbar">
+              <div className="mte-history-filter-search">
               <ValueHelpSearch
                 value={searchTerm}
                 onChange={setSearchTerm}
                 suggestions={searchSuggestions}
-                placeholder="Search by employee name or email..."
-                style={{ flex: 1, minWidth: '240px' }}
+                placeholder="Search employee or email"
+                style={{ width: '100%' }}
               />
-              <SelectWrap value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              </div>
+              <SelectWrap
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                 <option value="all">All Statuses</option>
                 <option value="pending_lead">Pending Approval</option>
                 <option value="pending_manager">Pending Manager (Legacy)</option>
@@ -3324,24 +3350,28 @@ function TeamTimesheets({ user }) {
                 <option value="rejected_by_lead">Rejected</option>
                 <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
               </SelectWrap>
-              <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <SelectWrap
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                style={{ width: '100%', minWidth: 0 }}
+              >
                 <option value="all">All Types</option>
                 <option value="work">Work</option>
                 <option value="holiday">Holiday</option>
                 <option value="leave">Leave</option>
               </SelectWrap>
               <input
+                className="mte-history-date-input"
                 type="date"
                 value={dateRange.start}
                 onChange={(e) => setDateRange((previous) => ({ ...previous, start: e.target.value }))}
-                style={S.input}
                 title="Period from"
               />
               <input
+                className="mte-history-date-input"
                 type="date"
                 value={dateRange.end}
                 onChange={(e) => setDateRange((previous) => ({ ...previous, end: e.target.value }))}
-                style={S.input}
                 title="Period to"
               />
             </div>
