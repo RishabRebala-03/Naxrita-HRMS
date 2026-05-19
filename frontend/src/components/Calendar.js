@@ -109,6 +109,7 @@ const Calendar = ({ user, setSection, navigationState }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showBirthdays, setShowBirthdays] = useState(true);
+  const [showLeaves, setShowLeaves] = useState(true);
   const [showControls, setShowControls] = useState(true);
   const [hasDirectReports, setHasDirectReports] = useState(false);
 
@@ -234,15 +235,17 @@ const Calendar = ({ user, setSection, navigationState }) => {
   };
 
   const findApprovedLeaves = useCallback(
-    (dateStr) =>
-      approvedLeaves.filter((leave) =>
+    (dateStr) => {
+      if (!showLeaves) return [];
+      return approvedLeaves.filter((leave) =>
         isDateWithinRange(
           dateStr,
           toDateKey(leave.approved_start_date || leave.start_date),
           toDateKey(leave.approved_end_date || leave.end_date)
         )
-      ),
-    [approvedLeaves]
+      );
+    },
+    [approvedLeaves, showLeaves]
   );
 
   const isToday = (year, month, day) => {
@@ -485,7 +488,7 @@ const Calendar = ({ user, setSection, navigationState }) => {
         <div className="fiori-panel-header">
           <div>
             <h3>Calendar Controls</h3>
-            <p>Switch years, refresh data, and show or hide birthdays</p>
+            <p>Switch years, refresh data, and show or hide birthdays and leaves</p>
           </div>
           <button
             type="button"
@@ -529,6 +532,14 @@ const Calendar = ({ user, setSection, navigationState }) => {
                   />
                   <span>Show birthdays</span>
                 </label>
+                <label className="calendar-birthday-toggle">
+                  <input
+                    type="checkbox"
+                    checked={showLeaves}
+                    onChange={(event) => setShowLeaves(event.target.checked)}
+                  />
+                  <span>Show leaves</span>
+                </label>
                 <button className="fiori-button secondary" onClick={fetchData}>
                   <RefreshCw size={16} />
                   <span>Refresh</span>
@@ -542,7 +553,7 @@ const Calendar = ({ user, setSection, navigationState }) => {
               <span><i className="is-public" /> Public holiday</span>
               <span><i className="is-optional" /> Optional holiday</span>
               <span><i className="is-company" /> Company holiday</span>
-              <span><i className="is-approved-leave" /> Approved leave</span>
+              {showLeaves ? <span><i className="is-approved-leave" /> Approved leave</span> : null}
               <span><i className="is-today" /> Today</span>
               <span><i className="is-birthday" /> Birthday</span>
             </div>
@@ -555,51 +566,53 @@ const Calendar = ({ user, setSection, navigationState }) => {
       </div>
 
       <section className="enterprise-calendar-details-grid">
-        <section className="fiori-panel" id="calendar-approved-leaves">
-          <div className="fiori-panel-header">
-            <div>
-              <h3>Approved leave list</h3>
-              <p>Click any approved leave to open the filtered leave page for that date.</p>
-            </div>
-          </div>
-
-          {approvedLeaveList.length === 0 ? (
-            <div className="admin-empty-state">
-              <CalendarDays size={24} />
+        {showLeaves && (
+          <section className="fiori-panel" id="calendar-approved-leaves">
+            <div className="fiori-panel-header">
               <div>
-                <strong>No approved leaves for {selectedYear}</strong>
-                <p>Your approved leave requests will appear here after approval.</p>
+                <h3>Approved leave list</h3>
+                <p>Click any approved leave to open the filtered leave page for that date.</p>
               </div>
             </div>
-          ) : (
-            <div className="calendar-list">
-              {approvedLeaveList.map((leave) => {
-                const rangeStart = leave.approved_start_date || leave.start_date;
-                const rangeEnd = leave.approved_end_date || leave.end_date;
 
-                return (
-                  <button
-                    key={`${leave._id}-${rangeStart}`}
-                    type="button"
-                    className="calendar-list-card calendar-list-card-button"
-                    onClick={() => openLeaveDay(toDateKey(rangeStart))}
-                  >
-                    <div>
-                      <strong>{leave.leave_type || "Leave"}</strong>
-                      <p>
-                        {formatMonthLabel(rangeStart)} {toDateKey(rangeStart)} to {toDateKey(rangeEnd)}
-                      </p>
-                    </div>
-                    <div className="calendar-list-meta">
-                      <span>{leave.days || leave.approved_days || 1} day(s)</span>
-                      <span className="fiori-status-pill is-rejected">Approved leave</span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </section>
+            {approvedLeaveList.length === 0 ? (
+              <div className="admin-empty-state">
+                <CalendarDays size={24} />
+                <div>
+                  <strong>No approved leaves for {selectedYear}</strong>
+                  <p>Your approved leave requests will appear here after approval.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="calendar-list">
+                {approvedLeaveList.map((leave) => {
+                  const rangeStart = leave.approved_start_date || leave.start_date;
+                  const rangeEnd = leave.approved_end_date || leave.end_date;
+
+                  return (
+                    <button
+                      key={`${leave._id}-${rangeStart}`}
+                      type="button"
+                      className="calendar-list-card calendar-list-card-button"
+                      onClick={() => openLeaveDay(toDateKey(rangeStart))}
+                    >
+                      <div>
+                        <strong>{leave.leave_type || "Leave"}</strong>
+                        <p>
+                          {formatMonthLabel(rangeStart)} {toDateKey(rangeStart)} to {toDateKey(rangeEnd)}
+                        </p>
+                      </div>
+                      <div className="calendar-list-meta">
+                        <span>{leave.days || leave.approved_days || 1} day(s)</span>
+                        <span className="fiori-status-pill is-rejected">Approved leave</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
 
         <section className="fiori-panel" id="calendar-holiday-list">
           <div className="fiori-panel-header">

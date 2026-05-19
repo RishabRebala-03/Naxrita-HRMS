@@ -1,5 +1,5 @@
 // Timesheets.js — Production-grade, matches the existing codebase architecture
-import { Children, useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { Children, createContext, useContext, useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   parseISO, subMonths,
@@ -165,6 +165,228 @@ const S = {
   tableScroll: { overflowX: 'auto', WebkitOverflowScrolling: 'touch' },
 };
 
+const TimesheetUiContext = createContext({
+  notify: () => {},
+  confirmAction: async () => false,
+  promptAction: async () => null,
+});
+
+function useTimesheetUi() {
+  return useContext(TimesheetUiContext);
+}
+
+function TimesheetUiProvider({ children }) {
+  const [toast, setToast] = useState(null);
+  const [dialog, setDialog] = useState(null);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = setTimeout(() => setToast(null), 3200);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const notify = useCallback((message, tone = 'info') => {
+    setToast({ message, tone });
+  }, []);
+
+  const confirmAction = useCallback(({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', tone = 'primary' }) => (
+    new Promise((resolve) => {
+      setDialog({
+        type: 'confirm',
+        title,
+        message,
+        confirmLabel,
+        cancelLabel,
+        tone,
+        onConfirm: () => {
+          setDialog(null);
+          resolve(true);
+        },
+        onCancel: () => {
+          setDialog(null);
+          resolve(false);
+        },
+      });
+    })
+  ), []);
+
+  const promptAction = useCallback(({
+    title,
+    message,
+    confirmLabel = 'Submit',
+    cancelLabel = 'Cancel',
+    tone = 'danger',
+    placeholder = '',
+    initialValue = '',
+    multiline = false,
+    required = false,
+  }) => (
+    new Promise((resolve) => {
+      setDialog({
+        type: 'prompt',
+        title,
+        message,
+        confirmLabel,
+        cancelLabel,
+        tone,
+        placeholder,
+        initialValue,
+        multiline,
+        required,
+        onConfirm: (value) => {
+          setDialog(null);
+          resolve(value);
+        },
+        onCancel: () => {
+          setDialog(null);
+          resolve(null);
+        },
+      });
+    })
+  ), []);
+
+  return (
+    <TimesheetUiContext.Provider value={{ notify, confirmAction, promptAction }}>
+      {children}
+      {toast ? <TimesheetToast toast={toast} onClose={() => setToast(null)} /> : null}
+      {dialog ? <TimesheetDialog dialog={dialog} onDismiss={dialog.onCancel} /> : null}
+    </TimesheetUiContext.Provider>
+  );
+}
+
+function TimesheetToast({ toast, onClose }) {
+  const tones = {
+    success: { bg: C.greenLight, border: C.greenBorder, color: C.green },
+    error: { bg: C.redLight, border: C.redBorder, color: C.red },
+    warning: { bg: C.amberLight, border: C.amberBorder, color: C.amber },
+    info: { bg: C.purpleLight, border: C.purpleBorder, color: C.purple },
+  };
+  const tone = tones[toast.tone] || tones.info;
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: '24px',
+      right: '24px',
+      zIndex: 11000,
+      maxWidth: '380px',
+      width: 'calc(100vw - 32px)',
+    }}>
+      <div style={{
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+        color: tone.color,
+        borderRadius: '14px',
+        boxShadow: '0 18px 40px rgba(15, 23, 42, 0.14)',
+        padding: '14px 16px',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: '12px',
+      }}>
+        <div style={{ flex: 1, fontSize: '14px', lineHeight: 1.5, color: C.text }}>{toast.message}</div>
+        <button type="button" onClick={onClose} style={{ ...S.btnIcon, color: tone.color }}>
+          <XCircle size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function TimesheetDialog({ dialog, onDismiss }) {
+  const [value, setValue] = useState(dialog.initialValue || '');
+  const [touched, setTouched] = useState(false);
+
+  const toneStyles = {
+    primary: { buttonBg: C.purple, buttonColor: C.white, buttonBorder: C.purple },
+    danger: { buttonBg: C.red, buttonColor: C.white, buttonBorder: C.red },
+  };
+  const tone = toneStyles[dialog.tone] || toneStyles.primary;
+  const isInvalid = dialog.type === 'prompt' && dialog.required && !String(value || '').trim();
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 12000,
+        background: 'rgba(15, 23, 42, 0.45)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '20px',
+      }}
+      onClick={onDismiss}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          width: 'min(560px, 100%)',
+          background: C.white,
+          borderRadius: '22px',
+          border: `1px solid ${C.border}`,
+          boxShadow: '0 28px 70px rgba(15, 23, 42, 0.24)',
+          padding: '24px',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div style={{ marginBottom: '16px' }}>
+          <h3 style={{ margin: 0, fontSize: '24px', fontWeight: 600, color: C.text }}>{dialog.title}</h3>
+          <p style={{ margin: '10px 0 0 0', fontSize: '14px', lineHeight: 1.6, color: C.textMid }}>{dialog.message}</p>
+        </div>
+
+        {dialog.type === 'prompt' ? (
+          <div style={{ marginBottom: '18px' }}>
+            {dialog.multiline ? (
+              <textarea
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                onBlur={() => setTouched(true)}
+                placeholder={dialog.placeholder}
+                rows={5}
+                style={{ ...S.input, width: '100%', resize: 'vertical', minHeight: '120px' }}
+              />
+            ) : (
+              <input
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                onBlur={() => setTouched(true)}
+                placeholder={dialog.placeholder}
+                style={{ ...S.input, width: '100%' }}
+              />
+            )}
+            {touched && isInvalid ? (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: C.red }}>This field is required.</div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', flexWrap: 'wrap' }}>
+          <button type="button" onClick={dialog.onCancel} style={S.btnSecondary}>
+            {dialog.cancelLabel}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTouched(true);
+              if (isInvalid) return;
+              dialog.onConfirm(dialog.type === 'prompt' ? String(value || '').trim() : true);
+            }}
+            style={{
+              ...S.btnPrimary,
+              background: tone.buttonBg,
+              color: tone.buttonColor,
+              border: `1px solid ${tone.buttonBorder}`,
+            }}
+          >
+            {dialog.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── fetchAPI ────────────────────────────────────────────────────────────────
 const fetchAPI = async (endpoint, options = {}) => {
   const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -193,6 +415,10 @@ const uploadAPI = async (endpoint, formData) => {
 };
 
 const getUserId = (user) => user?._id || user?.id || user?.user_id || '';
+const getRoleKey = (user) => String(user?.role || '').trim().toLowerCase();
+const isLeadUser = (user) => getRoleKey(user) === 'lead';
+const isManagerUser = (user) => getRoleKey(user) === 'manager';
+const isAdminUser = (user) => getRoleKey(user) === 'admin';
 
 // ─── Status config ───────────────────────────────────────────────────────────
 const STATUS_STYLES = {
@@ -257,7 +483,6 @@ function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled, selec
           .map((cc) => ({
             value: cc.charge_code_id,
             label: `${cc.charge_code} - ${cc.charge_code_name}`,
-            description: cc.charge_code_id,
           })),
       ]}
     />
@@ -1262,6 +1487,7 @@ function TimesheetPage({
   onSheetSnapshotChange,
   embedded = false,
 }) {
+  const { notify, confirmAction } = useTimesheetUi();
   const availablePeriods = useMemo(() => getAvailablePeriods(), []);
   const [internalSelectedPeriod, setInternalSelectedPeriod] = useState(availablePeriods[0]?.value || '');
   const [timesheetStatus, setTimesheetStatus]   = useState('draft');
@@ -1725,7 +1951,10 @@ function TimesheetPage({
 
   const handleSubmit = async () => {
     const errors = validate();
-    if (errors.length) { alert('Please fix:\n\n' + errors.join('\n')); return; }
+    if (errors.length) {
+      notify(`Please fix these items before submitting: ${errors.join(' • ')}`, 'error');
+      return;
+    }
     setLoading(true);
     try {
       const entries = buildWorkEntries();
@@ -1756,9 +1985,9 @@ function TimesheetPage({
       // FIX 2: reload after submit so lead sees fresh data and employee sees correct state
       hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
-      alert('Timesheet submitted successfully!');
+      notify('Timesheet submitted successfully.', 'success');
     } catch (err) {
-      alert(`Submission failed: ${err.message}`);
+      notify(`Submission failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1781,9 +2010,9 @@ function TimesheetPage({
       setTimesheetStatus('draft');
       hasLocalTimesheetEditsRef.current = false;
       setReloadTrigger((t) => t + 1);
-      alert('Draft saved successfully');
+      notify('Draft saved successfully.', 'success');
     } catch (err) {
-      alert(`Save failed: ${err.message}`);
+      notify(`Save failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -1791,7 +2020,13 @@ function TimesheetPage({
 
   const handleDeleteTimesheet = async () => {
     if (isReadOnly) return;
-    if (!window.confirm('Delete this draft timesheet for the selected period?')) return;
+    const shouldDelete = await confirmAction({
+      title: 'Delete Draft Timesheet',
+      message: 'Delete this draft timesheet for the selected period? This cannot be undone.',
+      confirmLabel: 'Delete Draft',
+      tone: 'danger',
+    });
+    if (!shouldDelete) return;
     setLoading(true);
     try {
       const match = await findCurrentTimesheet();
@@ -1802,9 +2037,9 @@ function TimesheetPage({
       hasLocalTimesheetEditsRef.current = false;
       setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
       setReloadTrigger((t) => t + 1);
-      alert('Timesheet deleted successfully');
+      notify('Timesheet deleted successfully.', 'success');
     } catch (err) {
-      alert(`Delete failed: ${err.message}`);
+      notify(`Delete failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -2598,6 +2833,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
 
 // ─── Approvals ────────────────────────────────────────────────────────────────
 function Approvals({ user }) {
+  const { notify, confirmAction, promptAction } = useTimesheetUi();
   const [searchTerm,          setSearchTerm]          = useState('');
   const [statusFilter,        setStatusFilter]        = useState('pending_lead');
   const [typeFilter,          setTypeFilter]          = useState('all');
@@ -2638,9 +2874,9 @@ function Approvals({ user }) {
         });
         setApprovals(deduped);
       })
-      .catch((err) => alert(`Failed to load approvals: ${err.message}`))
+      .catch((err) => notify(`Failed to load approvals: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [userId, role]);
+  }, [notify, userId, role]);
 
   useEffect(() => { loadApprovals(); }, [loadApprovals]);
 
@@ -2672,7 +2908,12 @@ function Approvals({ user }) {
   );
 
   const handleApprove = async (id, status) => {
-    if (!window.confirm('Approve this timesheet?')) return;
+    const shouldApprove = await confirmAction({
+      title: 'Approve Timesheet',
+      message: 'Approve this timesheet and lock it for the employee?',
+      confirmLabel: 'Approve',
+    });
+    if (!shouldApprove) return;
     setLoading(true);
     const ep = status === 'pending_manager'
       ? `/timesheets/approve/manager/${id}`
@@ -2684,16 +2925,24 @@ function Approvals({ user }) {
       });
       setApprovals((p) => p.filter((a) => (a._id || a.id) !== id));
       setSelectedTimesheets((p) => p.filter((x) => x !== id));
-      alert('Timesheet approved successfully');
+      notify('Timesheet approved successfully.', 'success');
     } catch (err) {
-      alert(`Approval failed: ${err.message}`);
+      notify(`Approval failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
   };
 
   const handleReject = async (id, status) => {
-    const reason = window.prompt('Please provide a reason for rejection:');
+    const reason = await promptAction({
+      title: 'Reject Timesheet',
+      message: 'Provide a reason for rejecting this timesheet. The employee will see this message.',
+      confirmLabel: 'Reject Timesheet',
+      tone: 'danger',
+      placeholder: 'Enter rejection reason',
+      multiline: true,
+      required: true,
+    });
     if (!reason?.trim()) return;
     setLoading(true);
     const ep = status === 'pending_manager'
@@ -2709,8 +2958,9 @@ function Approvals({ user }) {
           ? { ...a, status: status === 'pending_manager' ? 'rejected_by_manager' : 'rejected_by_lead' }
           : a
       ));
+      notify('Timesheet rejected.', 'success');
     } catch (err) {
-      alert(`Rejection failed: ${err.message}`);
+      notify(`Rejection failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -2939,7 +3189,12 @@ function Approvals({ user }) {
                 onClose={() => { setViewingTimesheet(null); setFullPageView(false); }}
                 onApprove={async () => {
                   const id = viewingTimesheet._id || viewingTimesheet.id;
-                  if (!window.confirm('Approve this timesheet?')) return;
+                  const shouldApprove = await confirmAction({
+                    title: 'Approve Timesheet',
+                    message: 'Approve this timesheet and close the review screen?',
+                    confirmLabel: 'Approve',
+                  });
+                  if (!shouldApprove) return;
                   try {
                     const ep = viewingTimesheet.status === 'pending_manager'
                       ? `/timesheets/approve/manager/${id}`
@@ -2948,17 +3203,25 @@ function Approvals({ user }) {
                       method: 'PUT',
                       body: JSON.stringify({ approved_by: userId, comments: '' }),
                     });
-                    alert('Timesheet approved successfully');
+                    notify('Timesheet approved successfully.', 'success');
                     setViewingTimesheet(null);
                     setFullPageView(false);
                     loadApprovals();
                   } catch (err) {
-                    alert(`Approval failed: ${err.message}`);
+                    notify(`Approval failed: ${err.message}`, 'error');
                   }
                 }}
                 onReject={async () => {
                   const id = viewingTimesheet._id || viewingTimesheet.id;
-                  const reason = window.prompt('Please provide a reason for rejection:');
+                  const reason = await promptAction({
+                    title: 'Reject Timesheet',
+                    message: 'Provide a reason for rejecting this timesheet.',
+                    confirmLabel: 'Reject Timesheet',
+                    tone: 'danger',
+                    placeholder: 'Enter rejection reason',
+                    multiline: true,
+                    required: true,
+                  });
                   if (!reason?.trim()) return;
                   try {
                     const ep = viewingTimesheet.status === 'pending_manager'
@@ -2968,12 +3231,12 @@ function Approvals({ user }) {
                       method: 'PUT',
                       body: JSON.stringify({ rejected_by: userId, rejection_reason: reason }),
                     });
-                    alert('Timesheet rejected');
+                    notify('Timesheet rejected.', 'success');
                     setViewingTimesheet(null);
                     setFullPageView(false);
                     loadApprovals();
                   } catch (err) {
-                    alert(`Rejection failed: ${err.message}`);
+                    notify(`Rejection failed: ${err.message}`, 'error');
                   }
                 }}
               />
@@ -3006,6 +3269,7 @@ function Approvals({ user }) {
 
 // ─── History ──────────────────────────────────────────────────────────────────
 function History({ user, onNavigate }) {
+  const { notify } = useTimesheetUi();
   const [searchQuery,      setSearchQuery]      = useState('');
   const [statusFilter,     setStatusFilter]     = useState('all');
   const [typeFilter,       setTypeFilter]       = useState('all');
@@ -3022,9 +3286,9 @@ function History({ user, onNavigate }) {
     setLoading(true);
     fetchAPI(`/timesheets/employee/${userId}`)
       .then((d) => setSubmissions(Array.isArray(d) ? d : []))
-      .catch((err) => alert(`Failed to load history: ${err.message}`))
+      .catch((err) => notify(`Failed to load history: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [userId]);
+  }, [notify, userId]);
 
   const approved          = submissions.filter((s) => s.status === 'approved');
   const rejected          = submissions.filter((s) => s.status?.startsWith('rejected'));
@@ -3239,6 +3503,7 @@ const PIE_COLORS = [C.purple, C.purpleMid, '#a89db5', '#c5bfd1', '#e0dae6'];
 
 // eslint-disable-next-line no-unused-vars
 function Reports({ user }) {
+  const { notify } = useTimesheetUi();
   const userId = getUserId(user);
 
   const [dateRange,  setDateRange]  = useState({
@@ -3316,7 +3581,7 @@ function Reports({ user }) {
                 <span style={{ color: C.textMid }}>to</span>
                 <input type="date" value={dateRange.end} onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })} style={S.input} />
               </div>
-              <button onClick={() => alert('Export coming soon')} style={S.btnPrimary}>
+              <button onClick={() => notify('Export is coming soon.', 'info')} style={S.btnPrimary}>
                 <Download size={14} /> Export Report
               </button>
             </div>
@@ -3434,6 +3699,7 @@ function Reports({ user }) {
 
 // ─── TeamTimesheets ───────────────────────────────────────────────────────────
 function TeamTimesheets({ user }) {
+  const { notify, confirmAction, promptAction } = useTimesheetUi();
   const [timesheets,       setTimesheets]       = useState([]);
   const [loading,          setLoading]          = useState(false);
   const [searchTerm,       setSearchTerm]       = useState('');
@@ -3451,9 +3717,13 @@ function TeamTimesheets({ user }) {
     setLoading(true);
     fetchAPI(`/timesheets/team/${userEmail}`)
       .then((d) => setTimesheets(Array.isArray(d) ? d : []))
-      .catch((err) => { console.error(err); setTimesheets([]); })
+      .catch((err) => {
+        console.error(err);
+        setTimesheets([]);
+        notify(`Failed to load team timesheets: ${err.message}`, 'error');
+      })
       .finally(() => setLoading(false));
-  }, [userEmail]);
+  }, [notify, userEmail]);
 
   useEffect(() => {
     loadTeamTimesheets();
@@ -3461,7 +3731,13 @@ function TeamTimesheets({ user }) {
 
   const handleApprove = async (timesheet) => {
     const id = timesheet?._id || timesheet?.id;
-    if (!id || !window.confirm('Approve this timesheet?')) return;
+    if (!id) return;
+    const shouldApprove = await confirmAction({
+      title: 'Approve Timesheet',
+      message: 'Approve this team member’s timesheet and lock it?',
+      confirmLabel: 'Approve',
+    });
+    if (!shouldApprove) return;
     const ep = timesheet.status === 'pending_manager'
       ? `/timesheets/approve/manager/${id}`
       : `/timesheets/approve/lead/${id}`;
@@ -3471,11 +3747,11 @@ function TeamTimesheets({ user }) {
         method: 'PUT',
         body: JSON.stringify({ approved_by: userId, comments: '' }),
       });
-      alert('Timesheet approved successfully');
+      notify('Timesheet approved successfully.', 'success');
       setViewingTimesheet(null);
       loadTeamTimesheets();
     } catch (err) {
-      alert(`Approval failed: ${err.message}`);
+      notify(`Approval failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -3483,7 +3759,15 @@ function TeamTimesheets({ user }) {
 
   const handleReject = async (timesheet) => {
     const id = timesheet?._id || timesheet?.id;
-    const reason = window.prompt('Please provide a reason for rejection:');
+    const reason = await promptAction({
+      title: 'Reject Timesheet',
+      message: 'Provide a reason for rejecting this timesheet.',
+      confirmLabel: 'Reject Timesheet',
+      tone: 'danger',
+      placeholder: 'Enter rejection reason',
+      multiline: true,
+      required: true,
+    });
     if (!id || !reason?.trim()) return;
     const ep = timesheet.status === 'pending_manager'
       ? `/timesheets/reject/manager/${id}`
@@ -3494,11 +3778,11 @@ function TeamTimesheets({ user }) {
         method: 'PUT',
         body: JSON.stringify({ rejected_by: userId, rejection_reason: reason }),
       });
-      alert('Timesheet rejected');
+      notify('Timesheet rejected.', 'success');
       setViewingTimesheet(null);
       loadTeamTimesheets();
     } catch (err) {
-      alert(`Rejection failed: ${err.message}`);
+      notify(`Rejection failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -3717,6 +4001,7 @@ const getReportingLeadLabel = (timesheet) =>
 
 // ─── AdminTimesheets ──────────────────────────────────────────────────────────
 function AdminTimesheets() {
+  const { notify } = useTimesheetUi();
   const [timesheets,       setTimesheets]       = useState([]);
   const [employees,        setEmployees]        = useState([]);
   const [loading,          setLoading]          = useState(false);
@@ -3743,9 +4028,12 @@ function AdminTimesheets() {
         setTimesheets(Array.isArray(ts)   ? ts   : []);
         setEmployees( Array.isArray(emps) ? emps : []);
       })
-      .catch((err) => { console.error('AdminTimesheets error:', err); alert(`Failed: ${err.message}`); })
+      .catch((err) => {
+        console.error('AdminTimesheets error:', err);
+        notify(`Failed to load admin timesheets: ${err.message}`, 'error');
+      })
       .finally(() => setLoading(false));
-  }, []);
+  }, [notify]);
 
   const filtered = timesheets.filter((ts) => {
     const name  = (ts.employee_name  || '').toLowerCase();
@@ -4260,6 +4548,7 @@ function getChargeCodeGridRow(item = {}, index = 0) {
 }
 
 function ChargeCodesWorkspace({ user, adminMode = false }) {
+  const { notify } = useTimesheetUi();
   const userId = getUserId(user);
   const [codes, setCodes] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -4301,9 +4590,9 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
           ...savedDisplayRows,
         });
       })
-      .catch((err) => alert(`Failed to load charge codes: ${err.message}`))
+      .catch((err) => notify(`Failed to load charge codes: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [adminMode, userId]);
+  }, [adminMode, notify, userId]);
 
   useEffect(() => {
     loadCodes();
@@ -4377,15 +4666,15 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
   const handleAddCode = async () => {
     const code = chargeCodeForm.code.trim();
     if (!code) {
-      alert('Enter a charge code');
+      notify('Enter a charge code.', 'warning');
       return;
     }
     if (!adminMode) {
-      alert('Only admins can add charge codes');
+      notify('Only admins can add charge codes.', 'warning');
       return;
     }
     if (!userId) {
-      alert('User not loaded properly');
+      notify('User not loaded properly.', 'error');
       return;
     }
 
@@ -4409,8 +4698,9 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
       });
       setChargeCodeForm(emptyChargeCodeForm);
       loadCodes();
+      notify('Charge code added successfully.', 'success');
     } catch (err) {
-      alert(`Failed to add charge code: ${err.message}`);
+      notify(`Failed to add charge code: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -4419,12 +4709,12 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
   const handleSubmit = async () => {
     if (!adminMode) {
       writeChargeCodeDisplayPreferences(userId, displayRows);
-      alert('Charge code display preferences saved');
+      notify('Charge code display preferences saved.', 'success');
       return;
     }
 
     if (selectedEmployees.length === 0 || selectedRows.length === 0) {
-      alert('Select at least one employee and one charge code');
+      notify('Select at least one employee and one charge code.', 'warning');
       return;
     }
 
@@ -4436,7 +4726,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         .filter(Boolean);
 
       if (selectedCodes.length === 0) {
-        alert('Select at least one assignable charge code');
+        notify('Select at least one assignable charge code.', 'warning');
         setLoading(false);
         return;
       }
@@ -4455,11 +4745,16 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
       );
       const succeeded = results.filter((result) => result.status === 'fulfilled').length;
       const failed = results.length - succeeded;
-      alert(failed ? `Assigned to ${succeeded}, failed for ${failed}` : `Assigned to ${succeeded} employee${succeeded !== 1 ? 's' : ''}`);
+      notify(
+        failed
+          ? `Assigned to ${succeeded} employees, failed for ${failed}.`
+          : `Assigned to ${succeeded} employee${succeeded !== 1 ? 's' : ''}.`,
+        failed ? 'warning' : 'success'
+      );
       setSelectedRows([]);
       setSelectedEmployees([]);
     } catch (err) {
-      alert(`Failed to submit charge code assignment: ${err.message}`);
+      notify(`Failed to submit charge code assignment: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -4734,6 +5029,7 @@ function ChargeCodeAdmin({ user }) {
 
 // eslint-disable-next-line no-unused-vars
 function LegacyChargeCodeAdmin({ user }) {
+  const { notify } = useTimesheetUi();
   const [codes,             setCodes]             = useState([]);
   const [employees,         setEmployees]         = useState([]);
   const [newCode,           setNewCode]           = useState({ charge_code: '', charge_code_name: '' });
@@ -4758,10 +5054,10 @@ function LegacyChargeCodeAdmin({ user }) {
 
   const handleCreate = async () => {
     if (!newCode.charge_code || !newCode.charge_code_name) {
-      alert('Please enter both a code and a name');
+      notify('Please enter both a code and a name.', 'warning');
       return;
     }
-    if (!userId) { alert('User not loaded properly'); return; }
+    if (!userId) { notify('User not loaded properly.', 'error'); return; }
     setLoading(true);
     try {
       await fetchAPI('/charge_codes/create', {
@@ -4775,11 +5071,11 @@ function LegacyChargeCodeAdmin({ user }) {
           created_by:   userId,
         }),
       });
-      alert('Charge code created successfully');
+      notify('Charge code created successfully.', 'success');
       setNewCode({ charge_code: '', charge_code_name: '' });
       loadCodes();
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      notify(`Error: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -4787,10 +5083,10 @@ function LegacyChargeCodeAdmin({ user }) {
 
   const handleAssign = async () => {
     if (selectedEmployees.length === 0 || !selectedCode) {
-      alert('Please select at least one employee and a charge code');
+      notify('Please select at least one employee and a charge code.', 'warning');
       return;
     }
-    if (!userId) { alert('User not loaded properly'); return; }
+    if (!userId) { notify('User not loaded properly.', 'error'); return; }
     setLoading(true);
     try {
       const results = await Promise.allSettled(
@@ -4807,15 +5103,15 @@ function LegacyChargeCodeAdmin({ user }) {
       );
       const succeeded = results.filter((r) => r.status === 'fulfilled').length;
       const failed    = results.length - succeeded;
-      alert(
+      notify(
         failed === 0
           ? `Charge code assigned to ${succeeded} employee${succeeded !== 1 ? 's' : ''} successfully`
           : `Assigned to ${succeeded}, failed for ${failed} employee${failed !== 1 ? 's' : ''}`
-      );
+      , failed === 0 ? 'success' : 'warning');
       setSelectedEmployees([]);
       setSelectedCode('');
     } catch (err) {
-      alert(`Error: ${err.message}`);
+      notify(`Error: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -5002,6 +5298,7 @@ function LegacyChargeCodeAdmin({ user }) {
 }
 
 function AssignmentAdmin({ user }) {
+  const { notify } = useTimesheetUi();
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
   const [savingEmployeeId, setSavingEmployeeId] = useState('');
@@ -5027,10 +5324,10 @@ function AssignmentAdmin({ user }) {
       })
       .catch((err) => {
         console.error(err);
-        alert(`Failed to load employees: ${err.message}`);
+        notify(`Failed to load employees: ${err.message}`, 'error');
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [notify]);
 
   useEffect(() => {
     loadEmployees();
@@ -5113,8 +5410,9 @@ function AssignmentAdmin({ user }) {
             : item
         )
       );
+      notify(`Saved assignment for ${employee.name}.`, 'success');
     } catch (err) {
-      alert(`Failed to save assignment for ${employee.name}: ${err.message}`);
+      notify(`Failed to save assignment for ${employee.name}: ${err.message}`, 'error');
     } finally {
       setSavingEmployeeId('');
     }
@@ -5283,6 +5581,7 @@ function AssignedChargeCodesPanel({ user }) {
 }
 
 function ExpensesPanel({ user }) {
+  const { notify, confirmAction } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
   const userId = getUserId(user);
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -5319,9 +5618,9 @@ function ExpensesPanel({ user }) {
     setLoading(true);
     fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`)
       .then((data) => setExpenses(Array.isArray(data) ? data : []))
-      .catch((err) => alert(`Failed to load expenses: ${err.message}`))
+      .catch((err) => notify(`Failed to load expenses: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [userId, user?.role]);
+  }, [notify, userId, user?.role]);
 
   useEffect(() => {
     loadExpenses();
@@ -5335,11 +5634,11 @@ function ExpensesPanel({ user }) {
 
   const handleSaveExpense = async () => {
     if (!userId) {
-      alert('User not loaded properly');
+      notify('User not loaded properly.', 'error');
       return;
     }
     if (!form.expense_date || !form.category || !form.amount || Number(form.amount) <= 0) {
-      alert('Enter date, category, and an amount greater than zero');
+      notify('Enter date, category, and an amount greater than zero.', 'warning');
       return;
     }
 
@@ -5365,8 +5664,9 @@ function ExpensesPanel({ user }) {
       }
       resetForm();
       loadExpenses();
+      notify(editingId ? 'Expense updated successfully.' : 'Expense saved successfully.', 'success');
     } catch (err) {
-      alert(`Failed to save expense: ${err.message}`);
+      notify(`Failed to save expense: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -5385,14 +5685,21 @@ function ExpensesPanel({ user }) {
   };
 
   const handleDeleteExpense = async (expenseId) => {
-    if (!window.confirm('Delete this expense?')) return;
+    const shouldDelete = await confirmAction({
+      title: 'Delete Expense',
+      message: 'Delete this expense? This action cannot be undone.',
+      confirmLabel: 'Delete Expense',
+      tone: 'danger',
+    });
+    if (!shouldDelete) return;
     setLoading(true);
     try {
       await fetchAPI(`/expenses/${expenseId}`, { method: 'DELETE' });
       if (editingId === expenseId) resetForm();
       loadExpenses();
+      notify('Expense deleted successfully.', 'success');
     } catch (err) {
-      alert(`Failed to delete expense: ${err.message}`);
+      notify(`Failed to delete expense: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -5526,6 +5833,7 @@ function LocationsPanel({
   onNextTimesheet,
   canNextTimesheet,
 }) {
+  const { notify } = useTimesheetUi();
   const userId = getUserId(user);
   const [profile, setProfile] = useState(user || {});
   const [country, setCountry] = useState(user?.countryRegion || user?.country || 'India');
@@ -5586,7 +5894,7 @@ function LocationsPanel({
   const persistLocations = async ({ submit = false } = {}) => {
     if (!userId) return;
     if (!country || !locationOne) {
-      alert('Select country/region and location one');
+      notify('Select country/region and location one.', 'warning');
       return;
     }
 
@@ -5619,9 +5927,9 @@ function LocationsPanel({
         costCenter: locationTwo || locationOne,
       }));
       setDailyLocations(nextDailyLocations);
-      alert(submit ? 'Locations submitted successfully' : 'Locations saved successfully');
+      notify(submit ? 'Locations submitted successfully.' : 'Locations saved successfully.', 'success');
     } catch (err) {
-      alert(`Failed to save locations: ${err.message}`);
+      notify(`Failed to save locations: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -5629,7 +5937,7 @@ function LocationsPanel({
 
   const handleAddLocation = () => {
     if (!country || !locationOne) {
-      alert('Select country/region and location one');
+      notify('Select country/region and location one.', 'warning');
       return;
     }
     const targetDates = selectedDates.length
@@ -5989,22 +6297,61 @@ function PortalTimeWorkspace({
   onSelectedPeriodChange,
   onSheetSnapshotChange,
 }) {
-  const hasTeamScope = Boolean(user?.role === 'Lead' || user?.role === 'Manager' || user?.reportsTo);
-  const isAdmin = user?.role === 'Admin';
+  const isAdmin = isAdminUser(user);
+  const userEmail = String(user?.email || '').trim();
+  const [hasTeamScope, setHasTeamScope] = useState(() => Boolean(isLeadUser(user) || isManagerUser(user)));
   const defaultView = isAdmin ? 'all' : 'entry';
   const [activeView, setActiveView] = useState(defaultView);
+
+  useEffect(() => {
+    if (isAdmin) {
+      setHasTeamScope(false);
+      return;
+    }
+
+    if (!userEmail) {
+      setHasTeamScope(Boolean(isLeadUser(user) || isManagerUser(user)));
+      return;
+    }
+
+    let isMounted = true;
+
+    fetchAPI(`/users/get_employees_by_manager/${encodeURIComponent(userEmail)}`)
+      .then((employees) => {
+        if (!isMounted) return;
+        setHasTeamScope(
+          Boolean(isLeadUser(user) || isManagerUser(user) || (Array.isArray(employees) && employees.length > 0))
+        );
+      })
+      .catch(() => {
+        if (!isMounted) return;
+        setHasTeamScope(Boolean(isLeadUser(user) || isManagerUser(user)));
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isAdmin, user, userEmail]);
 
   useEffect(() => {
     setActiveView(defaultView);
   }, [defaultView]);
 
-  const views = isAdmin
-    ? [{ key: 'all', label: 'All Timesheets' }]
-    : [
-        { key: 'entry', label: 'My Timesheet' },
-        ...(hasTeamScope ? [{ key: 'approvals', label: 'Approvals' }, { key: 'team', label: 'Team History' }] : []),
-        { key: 'history', label: 'Past Timesheets' },
-      ];
+  const views = useMemo(() => (
+    isAdmin
+      ? [{ key: 'all', label: 'All Timesheets' }]
+      : [
+          { key: 'entry', label: 'My Timesheet' },
+          ...(hasTeamScope ? [{ key: 'approvals', label: 'Approvals' }, { key: 'team', label: 'Team History' }] : []),
+          { key: 'history', label: 'Past Timesheets' },
+        ]
+  ), [hasTeamScope, isAdmin]);
+
+  useEffect(() => {
+    if (!views.some((view) => view.key === activeView)) {
+      setActiveView(defaultView);
+    }
+  }, [activeView, defaultView, views]);
 
   return (
     <div className="mte-module-stack">
@@ -6582,7 +6929,7 @@ function PortalSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
-export default function Timesheets({ user }) {
+function TimesheetsContent({ user }) {
   const periods = useMemo(() => getAvailablePeriods(), []);
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
@@ -6702,5 +7049,13 @@ export default function Timesheets({ user }) {
         {renderActiveModule()}
       </div>
     </div>
+  );
+}
+
+export default function Timesheets({ user }) {
+  return (
+    <TimesheetUiProvider>
+      <TimesheetsContent user={user} />
+    </TimesheetUiProvider>
   );
 }

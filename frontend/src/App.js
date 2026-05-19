@@ -1,5 +1,5 @@
 // src/App.js
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 import Login from "./components/Login";
 import Sidebar from "./components/Sidebar";
@@ -61,7 +61,7 @@ const MobileScrollFix = () => (
 
 // Forces scroll fix on mount for mobile
 const ForceScroll = () => {
-  React.useEffect(() => {
+  useEffect(() => {
     if (window.innerWidth <= 480) {
       console.log('🔧 MOBILE DETECTED - Forcing scroll fix...');
 
@@ -116,7 +116,7 @@ function App() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Session recovery on app load
-  React.useEffect(() => {
+  useEffect(() => {
     const savedUser = localStorage.getItem('user');
     if (savedUser && !currentUser) {
       try {
@@ -132,7 +132,7 @@ function App() {
   }, []);
 
   // Save session whenever user changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (currentUser) {
       localStorage.setItem('user', JSON.stringify(currentUser));
       console.log('💾 Session updated in localStorage');
@@ -140,9 +140,53 @@ function App() {
   }, [currentUser]);
 
   // Debug logger to track user state changes
-  React.useEffect(() => {
+  useEffect(() => {
     console.log('🔍 User state changed:', currentUser ? `Logged in as ${currentUser.name}` : 'Logged out');
   }, [currentUser]);
+
+  const [portalAlerts, setPortalAlerts] = useState([]);
+  const alertTimeoutsRef = useRef(new Map());
+
+  useEffect(() => {
+    const alertTimeouts = alertTimeoutsRef.current;
+    const dismissAlert = (id) => {
+      const timeoutId = alertTimeouts.get(id);
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+        alertTimeouts.delete(id);
+      }
+      setPortalAlerts((previous) => previous.filter((alertItem) => alertItem.id !== id));
+    };
+
+    const originalAlert = window.alert;
+
+    window.alert = (message) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const text = typeof message === "string" ? message : String(message ?? "");
+      setPortalAlerts((previous) => [...previous, { id, text }]);
+
+      const timeoutId = window.setTimeout(() => {
+        dismissAlert(id);
+      }, 4000);
+
+      alertTimeouts.set(id, timeoutId);
+    };
+
+    return () => {
+      window.alert = originalAlert;
+      alertTimeouts.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      alertTimeouts.clear();
+    };
+  }, []);
+
+  const dismissPortalAlert = (id) => {
+    const timeoutId = alertTimeoutsRef.current.get(id);
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+      alertTimeoutsRef.current.delete(id);
+    }
+    setPortalAlerts((previous) => previous.filter((alertItem) => alertItem.id !== id));
+  };
 
   const handleLoginSuccess = (user) => {
     setCurrentUser(user);
@@ -446,6 +490,22 @@ function App() {
           />
           <div className="content">{renderSection()}</div>
         </div>
+      </div>
+      <div className="portal-alert-stack" aria-live="polite" aria-atomic="true">
+        {portalAlerts.map((alertItem) => (
+          <div key={alertItem.id} className="portal-alert-toast" role="status">
+            <div className="portal-alert-toast__title">Notification Alert</div>
+            <div className="portal-alert-toast__message">{alertItem.text}</div>
+            <button
+              type="button"
+              className="portal-alert-toast__close"
+              onClick={() => dismissPortalAlert(alertItem.id)}
+              aria-label="Dismiss alert"
+            >
+              OK
+            </button>
+          </div>
+        ))}
       </div>
     </>
   );
