@@ -7,6 +7,86 @@ from config.db import mongo
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
 
+ABSENCE_CHARGE_CODES = {
+    "adoption_leave": {"code": "955X06", "name": "Adoption Leave"},
+    "bereavement_leave": {"code": "955X02", "name": "Bereavement Leave"},
+    "casual_leave": {"code": "955X10", "name": "Casual leave"},
+    "client_specific_holiday": {"code": "970X01", "name": "Client Specific holiday"},
+    "compensatory_off": {"code": "970X01", "name": "Compensatory off"},
+    "contingency_leave": {"code": "955X05", "name": "Contingency Leave"},
+    "earned_leave": {"code": "900X00", "name": "Earned Leave"},
+    "leave_with_loss_of_pay": {"code": "955X18", "name": "Leave with loss of pay"},
+    "maternity_leave": {"code": "955X04", "name": "Maternity Leave"},
+    "optional_holiday": {"code": "970X03", "name": "Optional holiday"},
+    "other_approved_absence": {"code": "955X00", "name": "Other Approved Absence"},
+    "overseas_holiday": {"code": "970X02", "name": "Overseas holiday"},
+    "paternity_leave": {"code": "955X08", "name": "Paternity Leave"},
+    "public_holiday": {"code": "970X00", "name": "Public holiday"},
+    "secondary_caregiver_leave": {"code": "955X19", "name": "Secondary Caregiver Leave"},
+    "sick_wellness_leave": {"code": "950X00", "name": "Sick & Wellness Leave"},
+    "surrogacy_leave": {"code": "955X07", "name": "Surrogacy Leave"},
+}
+
+LEAVE_TYPE_TO_ABSENCE_KEY = {
+    "adoption": "adoption_leave",
+    "adoption leave": "adoption_leave",
+    "bereavement": "bereavement_leave",
+    "bereavement leave": "bereavement_leave",
+    "casual": "casual_leave",
+    "casual leave": "casual_leave",
+    "client specific holiday": "client_specific_holiday",
+    "compensatory off": "compensatory_off",
+    "contingency": "contingency_leave",
+    "contingency leave": "contingency_leave",
+    "planned": "earned_leave",
+    "earned": "earned_leave",
+    "earned leave": "earned_leave",
+    "lwp": "leave_with_loss_of_pay",
+    "lop": "leave_with_loss_of_pay",
+    "leave without pay": "leave_with_loss_of_pay",
+    "leave with loss of pay": "leave_with_loss_of_pay",
+    "maternity": "maternity_leave",
+    "maternity leave": "maternity_leave",
+    "optional": "optional_holiday",
+    "optional holiday": "optional_holiday",
+    "early logout": "other_approved_absence",
+    "other approved absence": "other_approved_absence",
+    "overseas holiday": "overseas_holiday",
+    "paternity": "paternity_leave",
+    "paternity leave": "paternity_leave",
+    "secondary caregiver": "secondary_caregiver_leave",
+    "secondary caregiver leave": "secondary_caregiver_leave",
+    "sick": "sick_wellness_leave",
+    "sick leave": "sick_wellness_leave",
+    "sick wellness": "sick_wellness_leave",
+    "sick and wellness": "sick_wellness_leave",
+    "sick & wellness": "sick_wellness_leave",
+    "sick & wellness leave": "sick_wellness_leave",
+    "surrogacy": "surrogacy_leave",
+    "surrogacy leave": "surrogacy_leave",
+}
+
+LEAVE_TYPE_DISPLAY_CODES = {
+    "casual": "CL",
+    "casual leave": "CL",
+    "planned": "PL",
+    "earned": "PL",
+    "earned leave": "PL",
+    "sick": "SL",
+    "sick leave": "SL",
+    "sick wellness": "SL",
+    "sick and wellness": "SL",
+    "sick & wellness": "SL",
+    "sick & wellness leave": "SL",
+    "optional": "OL",
+    "optional holiday": "OL",
+    "lwp": "LWP",
+    "lop": "LWP",
+    "leave without pay": "LWP",
+    "leave with loss of pay": "LWP",
+    "early logout": "EL",
+}
+
 
 # ========================================
 # SERIALIZATION HELPERS
@@ -148,17 +228,45 @@ def daterange_keys(start_key, end_key):
         current += timedelta(days=1)
 
 
+def normalize_absence_label(value):
+    return " ".join(
+        str(value or "")
+        .replace("&", " and ")
+        .replace("-", " ")
+        .replace("_", " ")
+        .strip()
+        .lower()
+        .split()
+    )
+
+
+def get_absence_charge_code(leave_type):
+    """Return workbook-style absence charge-code metadata for leave/holiday rows."""
+    normalized = normalize_absence_label(leave_type)
+    reference_key = LEAVE_TYPE_TO_ABSENCE_KEY.get(normalized)
+    if reference_key:
+        return ABSENCE_CHARGE_CODES[reference_key]
+
+    for reference in ABSENCE_CHARGE_CODES.values():
+        if normalize_absence_label(reference["name"]) == normalized:
+            return reference
+
+    clean_type = str(leave_type or "").strip()
+    if clean_type:
+        return {
+            "code": clean_type[:3].upper(),
+            "name": clean_type if "leave" in clean_type.lower() else f"{clean_type} Leave",
+        }
+    return ABSENCE_CHARGE_CODES["other_approved_absence"]
+
+
 def get_leave_code(leave_type):
-    """Map leave types to short SAP-style codes for timesheets."""
-    key = (leave_type or "").strip().lower()
-    return {
-        "planned": "PL",
-        "sick": "SL",
-        "optional": "OL",
-        "lwp": "LWP",
-        "lop": "LWP",
-        "early logout": "EL",
-    }.get(key, (leave_type or "LV")[:3].upper())
+    return get_absence_charge_code(leave_type)["code"]
+
+
+def get_leave_display_code(leave_type):
+    normalized = normalize_absence_label(leave_type)
+    return LEAVE_TYPE_DISPLAY_CODES.get(normalized, get_leave_code(leave_type))
 
 
 def build_system_generated_entries(employee_id, period_start, period_end):
@@ -169,6 +277,7 @@ def build_system_generated_entries(employee_id, period_start, period_end):
     }))
     holiday_entries = []
     locked_dates = {}
+    public_holiday = ABSENCE_CHARGE_CODES["public_holiday"]
 
     for holiday in holiday_docs:
         date_key = normalize_date_key(holiday.get("date"))
@@ -177,14 +286,17 @@ def build_system_generated_entries(employee_id, period_start, period_end):
             "date": date_key,
             "entry_type": "holiday",
             "holiday_name": holiday.get("name"),
-            "code": "PH",
+            "code": public_holiday["code"],
+            "display_code": "PH",
+            "charge_code": public_holiday["code"],
+            "charge_code_name": public_holiday["name"],
             "hours": WORKDAY_HOURS,
-            "description": f"Public Holiday: {holiday.get('name')}",
+            "description": public_holiday["name"],
         })
         locked_dates[date_key] = {
             "kind": "holiday",
-            "label": holiday.get("name") or "Holiday",
-            "code": "PH",
+            "label": public_holiday["name"],
+            "code": public_holiday["code"],
         }
 
     leave_docs = list(mongo.db.leaves.find({
@@ -204,7 +316,10 @@ def build_system_generated_entries(employee_id, period_start, period_end):
             continue
 
         leave_type = leave.get("leave_type", "Leave")
-        leave_code = get_leave_code(leave_type)
+        leave_reference = get_absence_charge_code(leave_type)
+        leave_code = leave_reference["code"]
+        leave_display_code = get_leave_display_code(leave_type)
+        leave_name = leave_reference["name"]
         is_half_day = bool(leave.get("is_half_day"))
         leave_hours = WORKDAY_HOURS / 2 if is_half_day else WORKDAY_HOURS
         half_day_period = leave.get("half_day_period", "")
@@ -223,11 +338,12 @@ def build_system_generated_entries(employee_id, period_start, period_end):
                 "entry_type": "leave",
                 "leave_type": leave_type,
                 "leave_code": leave_code,
+                "display_code": leave_display_code,
                 "charge_code": leave_code,
-                "charge_code_name": f"{leave_type} Leave",
+                "charge_code_name": leave_name,
                 "hours": leave_hours,
                 "description": (
-                    f"{leave_type} leave"
+                    leave_name
                     + (f" ({half_day_period})" if is_half_day and half_day_period else "")
                 ),
                 "leave_id": leave["_id"],
@@ -237,7 +353,7 @@ def build_system_generated_entries(employee_id, period_start, period_end):
             if not is_half_day:
                 locked_dates[date_key] = {
                     "kind": "leave",
-                    "label": leave_type,
+                    "label": leave_name,
                     "code": leave_code,
                 }
 
@@ -1178,14 +1294,18 @@ def populate_holidays():
             "type": {"$in": ["public", "company"]},
         }))
 
+        public_holiday = ABSENCE_CHARGE_CODES["public_holiday"]
         holiday_entries = [
             {
                 "date":         h["date"],
                 "entry_type":   "holiday",
                 "holiday_name": h.get("name"),
                 "hours":        WORKDAY_HOURS,
-                "code":         "PH",
-                "description":  f"Public Holiday: {h.get('name')}",
+                "code":         public_holiday["code"],
+                "display_code": "PH",
+                "charge_code":  public_holiday["code"],
+                "charge_code_name": public_holiday["name"],
+                "description":  public_holiday["name"],
             }
             for h in holidays
         ]

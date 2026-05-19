@@ -352,13 +352,148 @@ const getTimesheetAssignmentMeta = (source = {}) => {
   };
 };
 
-const LEAVE_CODE_MAP = {
+const SYSTEM_ABSENCE_CHARGE_CODES = [
+  { key: 'adoption_leave', code: '955X06', name: 'Adoption Leave' },
+  { key: 'bereavement_leave', code: '955X02', name: 'Bereavement Leave' },
+  { key: 'casual_leave', code: '955X10', name: 'Casual leave' },
+  { key: 'client_specific_holiday', code: '970X01', name: 'Client Specific holiday' },
+  { key: 'compensatory_off', code: '970X01', name: 'Compensatory off' },
+  { key: 'contingency_leave', code: '955X05', name: 'Contingency Leave' },
+  { key: 'earned_leave', code: '900X00', name: 'Earned Leave' },
+  { key: 'leave_with_loss_of_pay', code: '955X18', name: 'Leave with loss of pay' },
+  { key: 'maternity_leave', code: '955X04', name: 'Maternity Leave' },
+  { key: 'optional_holiday', code: '970X03', name: 'Optional holiday' },
+  { key: 'other_approved_absence', code: '955X00', name: 'Other Approved Absence' },
+  { key: 'overseas_holiday', code: '970X02', name: 'Overseas holiday' },
+  { key: 'paternity_leave', code: '955X08', name: 'Paternity Leave' },
+  { key: 'public_holiday', code: '970X00', name: 'Public holiday' },
+  { key: 'secondary_caregiver_leave', code: '955X19', name: 'Secondary Caregiver Leave' },
+  { key: 'sick_wellness_leave', code: '950X00', name: 'Sick & Wellness Leave' },
+  { key: 'surrogacy_leave', code: '955X07', name: 'Surrogacy Leave' },
+].map((item) => ({
+  ...item,
+  _id: `system-${item.key}`,
+  charge_code_id: `system-${item.key}`,
+  charge_code: item.code,
+  charge_code_name: item.name,
+  description: item.name,
+  type: 'Training/Recruiting/At',
+  sub_type: 'Absence',
+  client: '',
+  country: '',
+  owner_name: 'System',
+  is_active: true,
+  is_system: true,
+}));
+
+const SYSTEM_ABSENCE_BY_KEY = Object.fromEntries(
+  SYSTEM_ABSENCE_CHARGE_CODES.map((item) => [item.key, item])
+);
+
+const LEAVE_TYPE_TO_ABSENCE_KEY = {
+  adoption: 'adoption_leave',
+  'adoption leave': 'adoption_leave',
+  bereavement: 'bereavement_leave',
+  'bereavement leave': 'bereavement_leave',
+  casual: 'casual_leave',
+  'casual leave': 'casual_leave',
+  'client specific holiday': 'client_specific_holiday',
+  'compensatory off': 'compensatory_off',
+  contingency: 'contingency_leave',
+  'contingency leave': 'contingency_leave',
+  planned: 'earned_leave',
+  earned: 'earned_leave',
+  'earned leave': 'earned_leave',
+  lwp: 'leave_with_loss_of_pay',
+  lop: 'leave_with_loss_of_pay',
+  'leave without pay': 'leave_with_loss_of_pay',
+  'leave with loss of pay': 'leave_with_loss_of_pay',
+  maternity: 'maternity_leave',
+  'maternity leave': 'maternity_leave',
+  optional: 'optional_holiday',
+  'optional holiday': 'optional_holiday',
+  'early logout': 'other_approved_absence',
+  'other approved absence': 'other_approved_absence',
+  'overseas holiday': 'overseas_holiday',
+  paternity: 'paternity_leave',
+  'paternity leave': 'paternity_leave',
+  'secondary caregiver': 'secondary_caregiver_leave',
+  'secondary caregiver leave': 'secondary_caregiver_leave',
+  sick: 'sick_wellness_leave',
+  'sick leave': 'sick_wellness_leave',
+  'sick wellness': 'sick_wellness_leave',
+  'sick and wellness': 'sick_wellness_leave',
+  'sick & wellness': 'sick_wellness_leave',
+  'sick & wellness leave': 'sick_wellness_leave',
+  surrogacy: 'surrogacy_leave',
+  'surrogacy leave': 'surrogacy_leave',
+};
+
+const normalizeAbsenceLabel = (value) =>
+  String(value || '')
+    .replace(/&/g, ' and ')
+    .replace(/[-_]/g, ' ')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .join(' ');
+
+const getAbsenceChargeCode = (leaveType) => {
+  const normalized = normalizeAbsenceLabel(leaveType);
+  const referenceKey = LEAVE_TYPE_TO_ABSENCE_KEY[normalized];
+  if (referenceKey && SYSTEM_ABSENCE_BY_KEY[referenceKey]) return SYSTEM_ABSENCE_BY_KEY[referenceKey];
+
+  const exactReference = SYSTEM_ABSENCE_CHARGE_CODES.find(
+    (item) => normalizeAbsenceLabel(item.name) === normalized
+  );
+  if (exactReference) return exactReference;
+
+  const cleanType = String(leaveType || '').trim();
+  if (cleanType) {
+    return {
+      key: `custom-${normalized || 'leave'}`,
+      code: cleanType.slice(0, 3).toUpperCase(),
+      name: cleanType.toLowerCase().includes('leave') ? cleanType : `${cleanType} Leave`,
+    };
+  }
+  return SYSTEM_ABSENCE_BY_KEY.other_approved_absence;
+};
+
+const PUBLIC_HOLIDAY_CHARGE_CODE = SYSTEM_ABSENCE_BY_KEY.public_holiday;
+
+const LEAVE_TYPE_DISPLAY_CODE_MAP = {
+  casual: 'CL',
+  'casual leave': 'CL',
   planned: 'PL',
+  earned: 'PL',
+  'earned leave': 'PL',
   sick: 'SL',
+  'sick leave': 'SL',
+  'sick wellness': 'SL',
+  'sick and wellness': 'SL',
+  'sick & wellness': 'SL',
+  'sick & wellness leave': 'SL',
   optional: 'OL',
+  'optional holiday': 'OL',
   lwp: 'LWP',
   lop: 'LWP',
+  'leave without pay': 'LWP',
+  'leave with loss of pay': 'LWP',
   'early logout': 'EL',
+};
+
+const getLeaveTypeDisplayCode = (leaveType) => {
+  const normalized = normalizeAbsenceLabel(leaveType);
+  return LEAVE_TYPE_DISPLAY_CODE_MAP[normalized] || getAbsenceChargeCode(leaveType).code;
+};
+
+const getTimesheetEntryDisplayCode = (entry = {}) => {
+  if (entry.entry_type === 'holiday') return 'PH';
+  if (entry.entry_type === 'leave') {
+    return entry.display_code || getLeaveTypeDisplayCode(entry.leave_type || entry.charge_code_name || entry.description);
+  }
+  return '';
 };
 
 const normalizeDateKey = (value) => {
@@ -367,13 +502,11 @@ const normalizeDateKey = (value) => {
 };
 
 const getLeaveCode = (leaveType) => {
-  const key = String(leaveType || '').trim().toLowerCase();
-  return LEAVE_CODE_MAP[key] || String(leaveType || 'LV').slice(0, 3).toUpperCase();
+  return getAbsenceChargeCode(leaveType).code;
 };
 
 const getLeaveDisplayLabel = (leaveType) => {
-  const label = String(leaveType || 'Leave').trim();
-  return label ? `${label} Leave` : 'Leave';
+  return getAbsenceChargeCode(leaveType).name;
 };
 
 const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
@@ -393,12 +526,14 @@ const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
       if (!dateSet.has(dateKey) || dayOfWeek === 0 || dayOfWeek === 6 || leaveByDate.has(dateKey)) return;
 
       const code = getLeaveCode(leave.leave_type);
+      const displayCode = getLeaveTypeDisplayCode(leave.leave_type);
       const isHalfDay = Boolean(leave.is_half_day);
       const hours = isHalfDay ? DAILY_WORK_HOUR_LIMIT / 2 : DAILY_WORK_HOUR_LIMIT;
 
       leaveByDate.set(dateKey, {
         date: dateKey,
         code,
+        displayCode,
         hours,
         leaveType: leave.leave_type || 'Leave',
         label: getLeaveDisplayLabel(leave.leave_type),
@@ -491,6 +626,7 @@ const buildGroupedLeaveRows = (approvedLeaveEntries = []) => {
       grouped.set(key, {
         key,
         code: leave.code,
+        displayCode: leave.displayCode,
         label: leave.label,
         hoursByDate: {},
         totalHours: 0,
@@ -504,6 +640,33 @@ const buildGroupedLeaveRows = (approvedLeaveEntries = []) => {
   });
 
   return Array.from(grouped.values());
+};
+
+const getTimesheetEntryChargeCodeMeta = (entry = {}, ccLookup = {}) => {
+  if (entry.entry_type === 'holiday') {
+    const storedCode = entry.charge_code || entry.code || '';
+    return {
+      code: storedCode && storedCode !== 'PH' ? storedCode : PUBLIC_HOLIDAY_CHARGE_CODE.code,
+      name: entry.charge_code_name || PUBLIC_HOLIDAY_CHARGE_CODE.name,
+    };
+  }
+
+  if (entry.entry_type === 'leave') {
+    const reference = getAbsenceChargeCode(entry.leave_type || entry.charge_code_name || entry.description);
+    const storedCode = entry.charge_code || entry.leave_code || '';
+    const legacyCode = ['PL', 'SL', 'OL', 'LWP', 'EL'].includes(storedCode);
+    return {
+      code: storedCode && !legacyCode ? storedCode : reference.code,
+      name: entry.charge_code_name && !legacyCode ? entry.charge_code_name : reference.name,
+    };
+  }
+
+  const lookupKey = entry.charge_code_id || entry.charge_code || entry.code || '';
+  const looked = ccLookup[lookupKey] || ccLookup[entry.charge_code_id] || ccLookup[entry.charge_code] || {};
+  return {
+    code: entry.charge_code || entry.code || looked.code || '',
+    name: entry.charge_code_name || looked.name || entry.description || '',
+  };
 };
 
 const buildLiveSummaryEntries = ({
@@ -543,6 +706,7 @@ const buildLiveSummaryEntries = ({
       entry_type: 'leave',
       leave_type: leave.leaveType,
       leave_code: leave.code,
+      display_code: leave.displayCode,
       charge_code: leave.code,
       charge_code_name: leave.label,
       hours: Number(leave.hours || 0),
@@ -552,14 +716,20 @@ const buildLiveSummaryEntries = ({
       half_day_period: leave.halfDayPeriod,
     }));
 
-  const holidayEntries = holidays.map((holiday) => ({
-    date: holiday.date,
-    entry_type: 'holiday',
-    holiday_name: holiday.holiday_name || holiday.name || '',
-    code: holiday.code || 'PH',
-    hours: Number(holiday.hours || DAILY_WORK_HOUR_LIMIT),
-    description: holiday.description || `Public Holiday: ${holiday.holiday_name || holiday.name || 'Holiday'}`,
-  }));
+  const holidayEntries = holidays.map((holiday) => {
+    const reference = getTimesheetEntryChargeCodeMeta({ ...holiday, entry_type: 'holiday' });
+    return {
+      date: holiday.date,
+      entry_type: 'holiday',
+      holiday_name: holiday.holiday_name || holiday.name || '',
+      code: reference.code,
+      display_code: 'PH',
+      charge_code: reference.code,
+      charge_code_name: reference.name,
+      hours: Number(holiday.hours || DAILY_WORK_HOUR_LIMIT),
+      description: holiday.description || reference.name,
+    };
+  });
 
   return [...workEntries, ...leaveEntries, ...holidayEntries];
 };
@@ -589,6 +759,8 @@ function TimesheetGrid({
     row.entries.reduce((s, e) => s + numericVal(e), 0);
 
   const holidayByDate = Object.fromEntries((holidays || []).map((holiday) => [holiday.date, holiday]));
+  const holidayChargeCodeForDate = (dateStr) =>
+    getTimesheetEntryChargeCodeMeta({ ...(holidayByDate[dateStr] || {}), entry_type: 'holiday' });
   const approvedLeaveEntries = useMemo(
     () => buildApprovedLeaveEntries(approvedLeaves, dates)
       .filter((leave) => !holidayByDate[leave.date]),
@@ -824,10 +996,10 @@ function TimesheetGrid({
                               color: isHol ? C.holidayText : C.purple,
                             }}
                             title={isHol
-                              ? holidayByDate[d]?.holiday_name || 'Public holiday'
+                              ? `${holidayChargeCodeForDate(d).name} (${holidayChargeCodeForDate(d).code})`
                               : `${leaveEntry.label}${leaveEntry.isHalfDay && leaveEntry.halfDayPeriod ? ` (${leaveEntry.halfDayPeriod})` : ''}`}
                           >
-                            {isHol ? 'PH' : leaveEntry.code}
+                            {isHol ? 'PH' : leaveEntry.displayCode}
                           </span>
                         ) : (
                           <input
@@ -931,7 +1103,9 @@ function TimesheetGrid({
                   borderRight: `1px solid ${C.borderLight}`,
                   boxShadow: '2px 0 4px rgba(0,0,0,0.04)',
                 }}>
-                  <span className="mte-sheet-static-row-title">{`${holidayByDate[dateStr].holiday_name || 'Public holiday'} (PH)`}</span>
+                  <span className="mte-sheet-static-row-title">
+                    {`${holidayChargeCodeForDate(dateStr).name} (${holidayChargeCodeForDate(dateStr).code})`}
+                  </span>
                 </td>
                 {dates.map((d) => (
                   <td key={`holiday-cell-${dateStr}-${d}`} className="mte-sheet-static-value-cell">
@@ -1783,6 +1957,11 @@ function useCcLookup() {
       .then((codes) => {
         if (!Array.isArray(codes)) return;
         const lookup = {};
+        SYSTEM_ABSENCE_CHARGE_CODES.forEach((c) => {
+          lookup[c._id] = { code: c.code, name: c.name };
+          lookup[c.charge_code_id] = { code: c.code, name: c.name };
+          lookup[c.code] = { code: c.code, name: c.name };
+        });
         codes.forEach((c) => {
           if (c._id)  lookup[c._id]  = { code: c.code, name: c.name };
           if (c.code) lookup[c.code] = { code: c.code, name: c.name };
@@ -1814,15 +1993,11 @@ function buildChargeCodeMap(entries, ccLookup = {}) {
   (entries || []).forEach((e) => {
     if (e.entry_type === 'holiday') {
       holidaysByDate[e.date] = e;
-      return;
     }
-    const key = e.charge_code_id || e.charge_code || 'unknown';
+    const meta = getTimesheetEntryChargeCodeMeta(e, ccLookup);
+    const key = e.charge_code_id || meta.code || e.charge_code || e.code || 'unknown';
 
-    // Prefer fields stored on the entry; fall back to ccLookup for old records
-    const looked = ccLookup[key] || ccLookup[e.charge_code_id] || ccLookup[e.charge_code] || {};
-    const code  = e.charge_code      || looked.code || '';
-    const cname = e.charge_code_name || looked.name || '';
-    const label = [code, cname].filter((v) => v && v.trim() !== '').join(' – ') || 'Unknown';
+    const label = [meta.code, meta.name].filter((v) => v && v.trim() !== '').join(' - ') || 'Unknown';
 
     if (!chargeCodeMap[key]) {
       chargeCodeMap[key] = { label, byDate: {} };
@@ -1951,7 +2126,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px' }}>
                           <span style={{ fontSize: '10px', color: isHol ? C.holidayText : isWkd ? C.textMid : C.textMid, fontWeight: '400' }}>{dow}</span>
                           <span>{format(parseISO(date), 'MMM d')}</span>
-                          {isHol && <span style={{ fontSize: '9px' }}>PH</span>}
+                          {isHol && <span style={{ fontSize: '9px' }}>{getTimesheetEntryDisplayCode(holidaysByDate[date])}</span>}
                         </div>
                       </th>
                     );
@@ -2241,7 +2416,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px' }}>
                             <span style={{ fontSize: '10px', fontWeight: '400', color: isHol ? C.holidayText : C.textMid }}>{dow}</span>
                             <span>{format(parseISO(date), 'MMM d')}</span>
-                            {isHol && <span style={{ fontSize: '9px' }}>PH</span>}
+                            {isHol && <span style={{ fontSize: '9px' }}>{getTimesheetEntryDisplayCode(holidaysByDate[date])}</span>}
                           </div>
                         </th>
                       );
@@ -2958,9 +3133,7 @@ function History({ user, onNavigate }) {
                             <button
                               onClick={() => {
                                 const rows = (s.entries || []).map((e) => {
-                                  const looked = ccLookup[e.charge_code_id] || ccLookup[e.charge_code] || {};
-                                  const code  = e.charge_code      || looked.code || '';
-                                  const cname = e.charge_code_name || looked.name || '';
+                                  const meta = getTimesheetEntryChargeCodeMeta(e, ccLookup);
                                   return buildCsvRow([
                                     s.employee_name  || user?.name  || '',
                                     s.employee_email || user?.email || '',
@@ -2968,8 +3141,8 @@ function History({ user, onNavigate }) {
                                     s.period_end,
                                     e.date,
                                     e.entry_type,
-                                    code,
-                                    cname,
+                                    meta.code,
+                                    meta.name,
                                     e.hours || 0,
                                     e.description || '',
                                   ]);
@@ -3706,9 +3879,7 @@ function AdminTimesheets() {
                       <button
                         onClick={() => {
                           const rows = (ts.entries || []).map(e => {
-                            const looked = ccLookup[e.charge_code_id] || ccLookup[e.charge_code] || {};
-                            const code  = e.charge_code      || looked.code || '';
-                            const cname = e.charge_code_name || looked.name || '';
+                            const meta = getTimesheetEntryChargeCodeMeta(e, ccLookup);
                             return buildCsvRow([
                               ts.employee_name  || '',
                               ts.employee_email || '',
@@ -3720,8 +3891,8 @@ function AdminTimesheets() {
                               ts.period_end,
                               e.date,
                               e.entry_type,
-                              code,
-                              cname,
+                              meta.code,
+                              meta.name,
                               e.hours || 0,
                               e.description || '',
                             ]);
@@ -3771,9 +3942,7 @@ function AdminTimesheets() {
     const rows = filtered.flatMap((timesheet) => {
       const leadApproval = getLeadApprovalMeta(timesheet);
       return (timesheet.entries || []).map((entry) => {
-        const looked = ccLookup[entry.charge_code_id] || ccLookup[entry.charge_code] || {};
-        const code = entry.charge_code || looked.code || '';
-        const chargeCodeName = entry.charge_code_name || looked.name || '';
+        const meta = getTimesheetEntryChargeCodeMeta(entry, ccLookup);
         return buildCsvRow([
           timesheet.employee_name || '',
           timesheet.employee_email || '',
@@ -3785,8 +3954,8 @@ function AdminTimesheets() {
           timesheet.period_end,
           entry.date,
           entry.entry_type,
-          code,
-          chargeCodeName,
+          meta.code,
+          meta.name,
           entry.hours || 0,
           entry.description || '',
         ]);
@@ -4140,7 +4309,8 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         { label: 'Active', value: chargeCodeStats.active, sub: 'Currently enabled', Icon: UserCheck },
       ];
 
-  const toggleSelectedRow = (rowId) => {
+  const toggleSelectedRow = (row) => {
+    const rowId = row.id;
     setSelectedRows((previous) =>
       previous.includes(rowId)
         ? previous.filter((id) => id !== rowId)
@@ -4220,6 +4390,12 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         .filter((row) => selectedRows.includes(row.id))
         .map((row) => row.raw._id || row.raw.charge_code_id)
         .filter(Boolean);
+
+      if (selectedCodes.length === 0) {
+        alert('Select at least one assignable charge code');
+        setLoading(false);
+        return;
+      }
 
       const results = await Promise.allSettled(
         selectedEmployees.map((employeeId) =>
@@ -4472,7 +4648,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                     <input
                       type="checkbox"
                       checked={selected}
-                      onChange={() => toggleSelectedRow(row.id)}
+                      onChange={() => toggleSelectedRow(row)}
                     />
                   </td>
                   <td>
@@ -5297,7 +5473,7 @@ function ExpensesPanel({ user }) {
   );
 }
 
-function LocationsPanel({ selectedPeriod, periods, user }) {
+function LocationsPanel({ selectedPeriod, periods, user, onBack }) {
   const userId = getUserId(user);
   const [profile, setProfile] = useState(user || {});
   const [country, setCountry] = useState(user?.countryRegion || user?.country || 'India');
@@ -5453,6 +5629,13 @@ function LocationsPanel({ selectedPeriod, periods, user }) {
             Submit
           </button>
         </div>
+      </div>
+
+      <div className="mte-locations-back-row">
+        <button type="button" onClick={onBack}>
+          <ChevronLeft size={16} />
+          <span>Back to Time</span>
+        </button>
       </div>
 
       <div className="mte-locations-date-strip">
@@ -5818,27 +6001,25 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 
   const chargeRows = useMemo(() => {
     const grouped = {};
-    workEntries.forEach((entry) => {
-      const key = entry.charge_code || entry.charge_code_id || 'Unassigned';
+    entries.forEach((entry) => {
+      const meta = getTimesheetEntryChargeCodeMeta(entry);
+      const key = meta.code || entry.charge_code_id || entry.charge_code || 'Unassigned';
       if (!grouped[key]) {
         grouped[key] = {
-          label: `${entry.charge_code_name || entry.description || 'Charge Code'} (${entry.charge_code || key})`,
+          label: meta.code ? `${meta.name || 'Charge Code'} (${meta.code})` : (meta.name || 'Charge Code'),
           hours: 0,
           expenses: 0,
+          absence: 0,
         };
       }
-      grouped[key].hours += Number(entry.hours || 0);
+      if ((entry.entry_type || 'work') === 'work') {
+        grouped[key].hours += Number(entry.hours || 0);
+      } else if (['leave', 'holiday'].includes(entry.entry_type)) {
+        grouped[key].absence += Number(entry.hours || 0);
+      }
     });
-    if (absenceHours > 0) {
-      grouped.absence = {
-        label: 'Public holiday / Absence',
-        hours: 0,
-        expenses: 0,
-        absence: absenceHours,
-      };
-    }
     return Object.values(grouped);
-  }, [absenceHours, workEntries]);
+  }, [entries]);
 
   const summaryRows = useMemo(() => [
     ...chargeRows,
@@ -6261,7 +6442,14 @@ export default function Timesheets({ user }) {
       case 'expenses':
         return <ExpensesPanel user={user} />;
       case 'locations':
-        return <LocationsPanel selectedPeriod={selectedPeriod} periods={periods} user={user} />;
+        return (
+          <LocationsPanel
+            selectedPeriod={selectedPeriod}
+            periods={periods}
+            user={user}
+            onBack={() => setActiveModule('time')}
+          />
+        );
       case 'charge_codes':
         return user?.role === 'Admin' ? <ChargeCodeAdmin user={user} /> : <AssignedChargeCodesPanel user={user} />;
       case 'assignments':

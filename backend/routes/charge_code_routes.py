@@ -42,6 +42,74 @@ def first_non_empty(*values):
     return ""
 
 
+REFERENCE_CHARGE_CODES = [
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "B5IT4009"},
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "BXS12006"},
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "BXS12003"},
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "CDSVM003"},
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "CCGLS003"},
+    {"type": "Chargeable", "sub_type": "", "client": "", "country": "", "description": "", "code": "CGCK4001"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "", "code": "A302005"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "Job Search / Outplacement", "code": "A304005"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "New Hire Orientation", "code": "A302505"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "Testing & Vaccinations", "code": "TESTVAC"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "Unassigned Time", "code": "A991005"},
+    {"type": "Other", "sub_type": "", "client": "", "country": "", "description": "Internet Exps Max INR1000 DontChangeTime", "code": "AMKC004V"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Adoption Leave", "code": "955X06"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Bereavement Leave", "code": "955X02"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Casual leave", "code": "955X10"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Client Specific holiday", "code": "970X01"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Compensatory off", "code": "970X01"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Contingency Leave", "code": "955X05"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Earned Leave", "code": "900X00"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Leave with loss of pay", "code": "955X18"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Maternity Leave", "code": "955X04"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Optional holiday", "code": "970X03"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Other Approved Absence", "code": "955X00"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Overseas holiday", "code": "970X02"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Paternity Leave", "code": "955X08"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Public holiday", "code": "970X00"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Secondary Caregiver Leave", "code": "955X19"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Sick & Wellness Leave", "code": "950X00"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Surrogacy Leave", "code": "955X07"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Central Training - Faculty", "code": "A301020"},
+    {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Central Training - Participant", "code": "A301015"},
+]
+
+
+def ensure_reference_charge_codes():
+    """Seed the workbook reference codes so admins can assign them by real DB id."""
+    now = datetime.utcnow()
+    for index, item in enumerate(REFERENCE_CHARGE_CODES):
+        reference_key = f"sheet2-{index + 2}-{item['code']}"
+        description = item["description"]
+        mongo.db.charge_codes.update_one(
+            {"reference_key": reference_key},
+            {
+                "$set": {
+                    "code": item["code"],
+                    "name": description or item["code"],
+                    "description": description,
+                    "project_name": "",
+                    "type": item["type"],
+                    "sub_type": item["sub_type"],
+                    "client": item["client"],
+                    "country": item["country"],
+                    "is_active": True,
+                    "is_reference": True,
+                    "reference_key": reference_key,
+                    "owner_name": "System",
+                    "owner_email": "",
+                    "updated_at": now,
+                },
+                "$setOnInsert": {
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+
+
 # ========================================
 # CREATE CHARGE CODE (ADMIN)
 # ========================================
@@ -144,6 +212,7 @@ def create_charge_code():
 def get_all_charge_codes():
     """Get all charge codes. Optional: ?active_only=true"""
     try:
+        ensure_reference_charge_codes()
         active_only = request.args.get("active_only", "false").lower() == "true"
         query = {"is_active": True} if active_only else {}
         codes = list(mongo.db.charge_codes.find(query).sort("code", 1))
@@ -439,6 +508,7 @@ def get_employee_charge_codes(employee_id):
     Optional: ?active_only=true (default true)
     """
     try:
+        ensure_reference_charge_codes()
         if not employee_id or len(employee_id) != 24:
             return jsonify({"error": "Invalid employee_id format"}), 400
 
