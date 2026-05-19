@@ -628,6 +628,7 @@ function TimesheetGrid({
   };
   const totalHoursForDate = (dateStr) => getColTotal(dateStr) + holidayHoursForDate(dateStr) + leaveHoursForDate(dateStr);
   const workScheduleForDate = (dateStr) => (isWeekday(dateStr) ? WORKDAY_HOURS : 0);
+  const dailyOvertimeHoursForDate = (dateStr) => Math.max(getColTotal(dateStr) - workScheduleForDate(dateStr), 0);
   const holidayPayoutHoursForDate = (dateStr) => (isWeekendDate(dateStr) ? getColTotal(dateStr) : 0);
   const supportCheckboxRows = [
     'Shift Allowance – Shift Type B',
@@ -994,9 +995,13 @@ function TimesheetGrid({
                 Daily Overtime
               </td>
               {dates.map((d) => (
-                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell" />
+                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell">
+                  {displayHours(dailyOvertimeHoursForDate(d), isWeekendDate(d))}
+                </td>
               ))}
-              <td className="mte-sheet-static-total-cell">0</td>
+              <td className="mte-sheet-static-total-cell">
+                {displayHours(dates.reduce((sum, dateStr) => sum + dailyOvertimeHoursForDate(dateStr), 0), true)}
+              </td>
               {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
@@ -5787,14 +5792,25 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
   const absenceEntries = entries.filter((entry) => ['leave', 'holiday'].includes(entry.entry_type));
   const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const workHours = workEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+  const weekendWorkHours = workEntries.reduce((sum, entry) => (
+    entry.date && isWeekendDate(entry.date)
+      ? sum + Number(entry.hours || 0)
+      : sum
+  ), 0);
+  const weekdayWorkHours = Math.max(workHours - weekendWorkHours, 0);
   const absenceHours = absenceEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
+  const weekdayAbsenceHours = absenceEntries.reduce((sum, entry) => (
+    entry.date && !isWeekendDate(entry.date)
+      ? sum + Number(entry.hours || 0)
+      : sum
+  ), 0);
   const weekdayCount = dates.filter((date) => {
     const day = date.getDay();
     return day >= 1 && day <= 5;
   }).length;
   const workSchedule = weekdayCount * DAILY_WORK_HOUR_LIMIT;
-  const standardAvailable = Math.max(workSchedule - absenceHours, 0);
-  const overtime = Math.max(workHours - standardAvailable, 0);
+  const standardAvailable = Math.max(workSchedule - weekdayAbsenceHours, 0);
+  const overtime = weekendWorkHours + Math.max(weekdayWorkHours - standardAvailable, 0);
   const availablePercent = standardAvailable ? Math.round((workHours / standardAvailable) * 100) : 0;
   const assignmentMeta = getTimesheetAssignmentMeta({ ...profile, ...summaryTimesheet });
   const country = profile.countryRegion || profile.country || 'India';

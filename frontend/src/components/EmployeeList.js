@@ -5,6 +5,7 @@ import {
   Download,
   Filter,
   Mail,
+  RotateCcw,
   UserCheck,
   UserRound,
   Users,
@@ -276,6 +277,14 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
     [directoryMeta.available_filters]
   );
   const searchSuggestions = useMemo(() => buildSearchSuggestions(employees), [employees]);
+  const activeFilterCount = useMemo(
+    () =>
+      Object.entries(filters).filter(([field, value]) => {
+        const defaultValue = initialFilters[field];
+        return String(value ?? "").trim() !== String(defaultValue ?? "").trim();
+      }).length,
+    [filters]
+  );
 
   if (loading) {
     return (
@@ -353,11 +362,26 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
         </article>
       </div>
 
-      <section className="fiori-panel">
-        <div className="fiori-panel-header">
+      <section className="fiori-panel employee-filter-panel">
+        <div className="fiori-panel-header employee-filter-panel-header">
           <div>
             <h3>Filters</h3>
-            <p>All filters are sent to the backend so the table reflects the exact API response.</p>
+            <p>
+              {activeFilterCount
+                ? `${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
+                : "Default view"}
+            </p>
+          </div>
+          <div className="employee-filter-panel-actions">
+            <button
+              type="button"
+              className="fiori-button secondary compact"
+              onClick={() => setFilters(initialFilters)}
+              disabled={!activeFilterCount}
+            >
+              <RotateCcw size={14} />
+              Reset
+            </button>
           </div>
         </div>
 

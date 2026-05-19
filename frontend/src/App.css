@@ -1932,6 +1932,224 @@ button:hover:not(:disabled) {
   font-size: 13px;
 }
 
+.manager-hero {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.manager-hero .admin-hero-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.manager-hero .admin-section-overline {
+  margin-bottom: 3px;
+}
+
+.manager-hero h1 {
+  font-size: 1.35rem;
+}
+
+.manager-hero .admin-hero-actions {
+  margin-top: 0;
+}
+
+.manager-hero .admin-hero-meta {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manager-hero .admin-hero-meta-item {
+  padding: 8px 10px;
+}
+
+.manager-summary-grid .fiori-stat-card {
+  padding: 12px;
+}
+
+.manager-summary-grid .fiori-stat-value {
+  font-size: 1.35rem;
+}
+
+.manager-summary-grid .fiori-stat-note,
+.manager-summary-grid .fiori-inline-link {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.manager-analytics-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.manager-analytics-grid .fiori-chart-card {
+  min-height: 244px;
+  padding: 12px 14px;
+}
+
+.manager-analytics-grid .fiori-panel-header {
+  margin-bottom: 8px;
+}
+
+.manager-analytics-grid .fiori-panel-header p {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.manager-analytics-grid .fiori-chart-shell {
+  height: 158px;
+}
+
+.manager-chart-empty {
+  min-height: 158px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed #cfd9e3;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--muted);
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-modal-summary-grid {
+  margin-bottom: 16px;
+}
+
+.manager-planning-panel {
+  overflow: hidden;
+}
+
+.manager-planning-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.manager-planning-column {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.manager-planning-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.manager-planning-card {
+  width: 100%;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e5ebf1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.manager-planning-card:hover,
+.manager-planning-card:focus-visible {
+  border-color: #99c5ef;
+  background: #fff;
+  box-shadow: 0 0.5rem 1.5rem rgba(31, 50, 69, 0.1);
+}
+
+.manager-planning-card:focus-visible {
+  outline: 2px solid #0a6ed1;
+  outline-offset: 2px;
+}
+
+.manager-planning-card div {
+  min-width: 0;
+}
+
+.manager-planning-card strong,
+.manager-planning-card span:not(.fiori-status-pill) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-planning-card strong {
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.manager-planning-card span:not(.fiori-status-pill) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.manager-planning-card .fiori-status-pill {
+  flex-shrink: 0;
+}
+
+.manager-planning-empty {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px dashed #cfd9e3;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1100px) {
+  .manager-hero .admin-hero-meta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 700px) {
+  .manager-hero .admin-hero-copy,
+  .manager-hero .admin-hero-actions {
+    align-items: stretch;
+  }
+
+  .manager-hero .admin-hero-copy {
+    flex-direction: column;
+  }
+
+  .manager-hero .admin-hero-meta,
+  .manager-planning-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .manager-analytics-grid .fiori-chart-card {
+    min-height: 226px;
+  }
+}
+
 .admin-modal-overlay {
   position: fixed;
   inset: 0;
@@ -2083,6 +2301,86 @@ button:hover:not(:disabled) {
 
 .employee-directory-filters-extended .employee-filter-search {
   grid-column: span 2;
+}
+
+.employee-filter-panel {
+  padding: 12px 14px;
+}
+
+.employee-filter-panel-header {
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.employee-filter-panel-header h3 {
+  margin-bottom: 2px;
+}
+
+.employee-filter-panel-header p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.employee-filter-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.employee-filter-panel .fiori-button.compact {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.employee-filter-panel .employee-directory-filters-extended {
+  grid-template-columns: minmax(220px, 1.5fr) repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.employee-filter-panel .employee-filter-field {
+  gap: 4px;
+}
+
+.employee-filter-panel .employee-filter-field span {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.employee-filter-panel .input,
+.employee-filter-panel .value-help-trigger {
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.employee-filter-panel .value-help-trigger {
+  gap: 8px;
+}
+
+.employee-filter-panel input[type="date"].input {
+  line-height: 1.2;
+}
+
+@media (max-width: 700px) {
+  .employee-filter-panel .employee-directory-filters-extended {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-filter-panel .employee-directory-filters-extended .employee-filter-search {
+    grid-column: span 1;
+  }
+
+  .employee-filter-panel-header {
+    align-items: stretch;
+  }
+
+  .employee-filter-panel-actions {
+    justify-content: flex-start;
+  }
 }
 
 .employee-filter-field {
