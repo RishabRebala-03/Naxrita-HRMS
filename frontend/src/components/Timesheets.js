@@ -266,6 +266,23 @@ function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled, selec
 
 const blankDateRange = { start: '', end: '' };
 
+const splitPreferenceEntries = (value = '') => String(value)
+  .split(/[,\n;]+/)
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const mergePreferenceEntries = (current = '', additions = []) => {
+  const next = [];
+  const seen = new Set();
+  [...splitPreferenceEntries(current), ...additions].forEach((item) => {
+    const key = item.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    next.push(item);
+  });
+  return next.join('\n');
+};
+
 const getAvailablePeriods = (referenceDate = new Date()) => {
   const periods = [];
   const currentYear = referenceDate.getFullYear();
@@ -381,7 +398,7 @@ const SYSTEM_ABSENCE_CHARGE_CODES = [
   sub_type: 'Absence',
   client: '',
   country: '',
-  owner_name: 'System',
+  owner_name: 'naxrita',
   is_active: true,
   is_system: true,
 }));
@@ -1269,6 +1286,21 @@ function TimesheetPage({
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
   const selectedPeriodOption = availablePeriods.find((period) => period.value === activePeriod) || availablePeriods[0];
+  const activePeriodIndex = Math.max(0, availablePeriods.findIndex((period) => period.value === activePeriod));
+  const canGoToPreviousPeriod = activePeriodIndex < availablePeriods.length - 1;
+  const canGoToNextPeriod = activePeriodIndex > 0;
+  const movePeriod = (direction) => {
+    if (!availablePeriods.length) return;
+    const nextIndex = Math.min(
+      Math.max(activePeriodIndex + direction, 0),
+      availablePeriods.length - 1
+    );
+    const nextPeriod = availablePeriods[nextIndex];
+    if (!nextPeriod || nextPeriod.value === activePeriod) return;
+    saveDraftSilentlyRef.current?.();
+    setActivePeriod(nextPeriod.value);
+    setTimesheetStatus('draft');
+  };
   const assignmentMeta = useMemo(() => getTimesheetAssignmentMeta(profile), [profile]);
 
   const dates = useMemo(() => {
@@ -1808,7 +1840,13 @@ function TimesheetPage({
     <div className={`mte-embedded-shell ${embedded ? 'is-embedded' : ''}`}>
       <div className="mte-date-toolbar">
         <div className="mte-date-picker-group">
-          <button type="button" className="mte-ghost-icon" aria-label="Previous period">
+          <button
+            type="button"
+            className="mte-ghost-icon"
+            aria-label="Previous period"
+            onClick={() => movePeriod(1)}
+            disabled={!canGoToPreviousPeriod}
+          >
             <ChevronLeft size={16} />
           </button>
           <div className="mte-date-select-shell">
@@ -1829,7 +1867,13 @@ function TimesheetPage({
               ))}
             </select>
           </div>
-          <button type="button" className="mte-ghost-icon" aria-label="Next period">
+          <button
+            type="button"
+            className="mte-ghost-icon"
+            aria-label="Next period"
+            onClick={() => movePeriod(-1)}
+            disabled={!canGoToNextPeriod}
+          >
             <ChevronRight size={16} />
           </button>
         </div>
@@ -4197,7 +4241,7 @@ function getChargeCodeGridRow(item = {}, index = 0) {
   const country = item.country || item.countryRegion || item.country_region || '-';
   const type = item.type || item.charge_type || '-';
   const subType = item.subType || item.sub_type || item.subtype || '-';
-  const owner = item.owner_name || item.owner || item.created_by_name || item.assigned_by_name || '-';
+  const owner = item.owner_name || (item.is_reference || item.is_system ? 'naxrita' : '') || item.owner || item.created_by_name || item.assigned_by_name || '-';
   const ownerEmail = item.owner_email || '';
 
   return {
@@ -5473,7 +5517,15 @@ function ExpensesPanel({ user }) {
   );
 }
 
-function LocationsPanel({ selectedPeriod, periods, user, onBack }) {
+function LocationsPanel({
+  selectedPeriod,
+  periods,
+  user,
+  onPreviousTimesheet,
+  canPreviousTimesheet,
+  onNextTimesheet,
+  canNextTimesheet,
+}) {
   const userId = getUserId(user);
   const [profile, setProfile] = useState(user || {});
   const [country, setCountry] = useState(user?.countryRegion || user?.country || 'India');
@@ -5631,15 +5683,29 @@ function LocationsPanel({ selectedPeriod, periods, user, onBack }) {
         </div>
       </div>
 
-      <div className="mte-locations-back-row">
-        <button type="button" onClick={onBack}>
-          <ChevronLeft size={16} />
-          <span>Back to Time</span>
-        </button>
-      </div>
-
       <div className="mte-locations-date-strip">
-        <div />
+        <div className="mte-locations-date-strip-back">
+          <div className="mte-locations-date-strip-back-controls">
+            <button
+              type="button"
+              className="mte-locations-prev-timesheet"
+              onClick={onPreviousTimesheet}
+              disabled={!canPreviousTimesheet}
+            >
+              Previous Timesheet
+            </button>
+            <button
+              type="button"
+              className="mte-locations-next-timesheet"
+              aria-label="Next timesheet"
+              title="Next timesheet"
+              onClick={onNextTimesheet}
+              disabled={!canNextTimesheet}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </div>
         {dates.map((day) => (
           <div key={day.toISOString()} className={format(day, 'EEE') === 'Sat' || format(day, 'EEE') === 'Sun' ? 'is-weekend' : ''}>
             <span>{format(day, 'EEE')}</span>
@@ -5748,18 +5814,75 @@ function AdjustmentsPanel({ user }) {
 function PreferencesPanel({ user }) {
   const reviewer = user?.reportsToEmail || user?.reportsTo || user?.managerEmail || '';
   const email = user?.email || '';
+  const [drafts, setDrafts] = useState({
+    reviewer: '',
+    notification: '',
+    delegate: '',
+    approver: '',
+  });
+  const [selected, setSelected] = useState({
+    reviewers: reviewer,
+    notifications: email,
+    delegates: '',
+    approvers: reviewer,
+  });
+
+  useEffect(() => {
+    setSelected((previous) => ({
+      ...previous,
+      reviewers: previous.reviewers || reviewer,
+      notifications: previous.notifications || email,
+      approvers: previous.approvers || reviewer,
+    }));
+  }, [email, reviewer]);
+
+  const updateDraft = (key, value) => {
+    setDrafts((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const updateSelected = (key, value) => {
+    setSelected((previous) => ({ ...previous, [key]: value }));
+  };
+
+  const addPreference = (draftKey, selectedKey) => {
+    const additions = splitPreferenceEntries(drafts[draftKey]);
+    if (!additions.length) return;
+    setSelected((previous) => ({
+      ...previous,
+      [selectedKey]: mergePreferenceEntries(previous[selectedKey], additions),
+    }));
+    setDrafts((previous) => ({ ...previous, [draftKey]: '' }));
+  };
 
   return (
     <div className="mte-module-card mte-preferences-shell">
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
           <label>Time Report Reviewer(s):</label>
-          <input className="input" defaultValue="" placeholder="e.g. john.a.smith" />
+          <input
+            className="input"
+            value={drafts.reviewer}
+            onChange={(event) => updateDraft('reviewer', event.target.value)}
+            placeholder="e.g. john.a.smith"
+          />
         </div>
-        <div className="mte-pref-arrow">›</div>
+        <button
+          type="button"
+          className="mte-pref-arrow"
+          aria-label="Add reviewer"
+          onClick={() => addPreference('reviewer', 'reviewers')}
+          disabled={!drafts.reviewer.trim()}
+        >
+          <ChevronRight size={15} />
+        </button>
         <div className="mte-pref-field">
           <label>Selected Reviewers:</label>
-          <textarea className="input" defaultValue={reviewer} rows={3} />
+          <textarea
+            className="input"
+            value={selected.reviewers}
+            onChange={(event) => updateSelected('reviewers', event.target.value)}
+            rows={3}
+          />
         </div>
         <div className="mte-pref-field">
           <label>Theme:</label>
@@ -5771,34 +5894,88 @@ function PreferencesPanel({ user }) {
 
         <div className="mte-pref-field">
           <label>Notify of Submission:</label>
-          <input className="input" defaultValue="" placeholder="e.g. john.a.smith@company.com" />
+          <input
+            className="input"
+            value={drafts.notification}
+            onChange={(event) => updateDraft('notification', event.target.value)}
+            placeholder="e.g. john.a.smith@company.com"
+          />
         </div>
-        <div className="mte-pref-arrow">›</div>
+        <button
+          type="button"
+          className="mte-pref-arrow"
+          aria-label="Add notification"
+          onClick={() => addPreference('notification', 'notifications')}
+          disabled={!drafts.notification.trim()}
+        >
+          <ChevronRight size={15} />
+        </button>
         <div className="mte-pref-field">
           <label>Selected Notifications:</label>
-          <textarea className="input" defaultValue={email} rows={3} />
+          <textarea
+            className="input"
+            value={selected.notifications}
+            onChange={(event) => updateSelected('notifications', event.target.value)}
+            rows={3}
+          />
         </div>
         <div />
 
         <div className="mte-pref-field">
           <label>Delegate(s):</label>
-          <input className="input" defaultValue="" placeholder="e.g. john.a.smith" />
+          <input
+            className="input"
+            value={drafts.delegate}
+            onChange={(event) => updateDraft('delegate', event.target.value)}
+            placeholder="e.g. john.a.smith"
+          />
         </div>
-        <div className="mte-pref-arrow">›</div>
+        <button
+          type="button"
+          className="mte-pref-arrow"
+          aria-label="Add delegate"
+          onClick={() => addPreference('delegate', 'delegates')}
+          disabled={!drafts.delegate.trim()}
+        >
+          <ChevronRight size={15} />
+        </button>
         <div className="mte-pref-field">
           <label>Selected Delegates:</label>
-          <textarea className="input" defaultValue="" rows={3} />
+          <textarea
+            className="input"
+            value={selected.delegates}
+            onChange={(event) => updateSelected('delegates', event.target.value)}
+            rows={3}
+          />
         </div>
         <div />
 
         <div className="mte-pref-field">
           <label>Approver(s):</label>
-          <input className="input" defaultValue="" placeholder="e.g. john.a.smith" />
+          <input
+            className="input"
+            value={drafts.approver}
+            onChange={(event) => updateDraft('approver', event.target.value)}
+            placeholder="e.g. john.a.smith"
+          />
         </div>
-        <div className="mte-pref-arrow">›</div>
+        <button
+          type="button"
+          className="mte-pref-arrow"
+          aria-label="Add approver"
+          onClick={() => addPreference('approver', 'approvers')}
+          disabled={!drafts.approver.trim()}
+        >
+          <ChevronRight size={15} />
+        </button>
         <div className="mte-pref-field">
           <label>Selected Approvers:</label>
-          <textarea className="input" defaultValue={reviewer} rows={3} />
+          <textarea
+            className="input"
+            value={selected.approvers}
+            onChange={(event) => updateSelected('approvers', event.target.value)}
+            rows={3}
+          />
         </div>
         <div />
       </div>
@@ -6410,6 +6587,21 @@ export default function Timesheets({ user }) {
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
   const [liveTimesheetSnapshots, setLiveTimesheetSnapshots] = useState({});
+  const selectedPeriodIndex = Math.max(0, periods.findIndex((period) => period.value === selectedPeriod));
+  const canGoToPreviousTimesheet = selectedPeriodIndex < periods.length - 1;
+  const canGoToNextTimesheet = selectedPeriodIndex > 0;
+  const goToPreviousTimesheet = useCallback(() => {
+    if (!periods.length) return;
+    const previousPeriod = periods[Math.min(selectedPeriodIndex + 1, periods.length - 1)];
+    if (!previousPeriod || previousPeriod.value === selectedPeriod) return;
+    setSelectedPeriod(previousPeriod.value);
+  }, [periods, selectedPeriod, selectedPeriodIndex]);
+  const goToNextTimesheet = useCallback(() => {
+    if (!periods.length) return;
+    const nextPeriod = periods[Math.max(selectedPeriodIndex - 1, 0)];
+    if (!nextPeriod || nextPeriod.value === selectedPeriod) return;
+    setSelectedPeriod(nextPeriod.value);
+  }, [periods, selectedPeriod, selectedPeriodIndex]);
   const handleSheetSnapshotChange = useCallback((periodValue, snapshot) => {
     setLiveTimesheetSnapshots((previous) => ({
       ...previous,
@@ -6447,7 +6639,10 @@ export default function Timesheets({ user }) {
             selectedPeriod={selectedPeriod}
             periods={periods}
             user={user}
-            onBack={() => setActiveModule('time')}
+            onPreviousTimesheet={goToPreviousTimesheet}
+            canPreviousTimesheet={canGoToPreviousTimesheet}
+            onNextTimesheet={goToNextTimesheet}
+            canNextTimesheet={canGoToNextTimesheet}
           />
         );
       case 'charge_codes':

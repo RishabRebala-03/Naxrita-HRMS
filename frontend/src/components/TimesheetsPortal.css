@@ -18,6 +18,11 @@
   cursor: pointer;
 }
 
+.mte-ghost-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 .mte-portal-tabs {
   display: flex;
   align-items: center;
@@ -588,10 +593,26 @@
 
 .mte-pref-arrow {
   align-self: end;
+  min-width: 28px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #d8dde6;
+  border-radius: 5px;
+  background: #fff;
   color: #6a6d70;
-  font-size: 21px;
-  line-height: 34px;
-  text-align: center;
+  cursor: pointer;
+}
+
+.mte-pref-arrow:hover:not(:disabled) {
+  border-color: #6b5b7a;
+  color: #6b5b7a;
+}
+
+.mte-pref-arrow:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .mte-admin-review-filters {
@@ -1366,31 +1387,6 @@
   min-width: 96px;
 }
 
-.mte-locations-back-row {
-  display: flex;
-  justify-content: flex-start;
-}
-
-.mte-locations-back-row button {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid #c9ced8;
-  border-radius: 5px;
-  background: #fff;
-  color: #32363a;
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.mte-locations-back-row button:hover {
-  border-color: #6b5b7a;
-  color: #6b5b7a;
-}
-
 .mte-locations-date-strip {
   display: grid;
   grid-template-columns: minmax(160px, 1.3fr) repeat(15, minmax(0, 1fr));
@@ -1412,9 +1408,57 @@
 }
 
 .mte-locations-date-strip > div:first-child {
-  align-items: flex-start;
-  padding-left: 12px;
   background: #f7f9fb;
+}
+
+.mte-locations-date-strip > div.mte-locations-date-strip-back {
+  align-items: center;
+  padding: 0 10px;
+}
+
+.mte-locations-date-strip-back-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.mte-locations-date-strip-back button {
+  min-height: 34px;
+  border: 1px solid #c9ced8;
+  border-radius: 5px;
+  background: #fff;
+  color: #32363a;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.15;
+  cursor: pointer;
+}
+
+.mte-locations-prev-timesheet {
+  flex: 1;
+  max-width: 136px;
+}
+
+.mte-locations-next-timesheet {
+  width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex: 0 0 34px;
+}
+
+.mte-locations-date-strip-back button:hover {
+  border-color: #6b5b7a;
+  color: #6b5b7a;
+}
+
+.mte-locations-date-strip-back button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .mte-locations-date-strip > div.is-weekend {
@@ -1996,7 +2040,7 @@
   }
 
   .mte-pref-arrow {
-    display: none;
+    align-self: flex-start;
   }
 
   .mte-admin-review-filters-head {

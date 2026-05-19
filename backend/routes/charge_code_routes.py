@@ -76,9 +76,82 @@ REFERENCE_CHARGE_CODES = [
     {"type": "Training/Recruiting/At", "sub_type": "Absence", "client": "", "country": "", "description": "Central Training - Participant", "code": "A301015"},
 ]
 
+REFERENCE_OWNER_NAME = "naxrita"
+
+DEPRECATED_CHARGE_CODE_CODES = {
+    "123",
+    "1233",
+    "12345",
+    "12345555",
+    "NAX100",
+    "1000",
+}
+DEPRECATED_CHARGE_CODE_VALUES = sorted(
+    DEPRECATED_CHARGE_CODE_CODES | {code.lower() for code in DEPRECATED_CHARGE_CODE_CODES}
+)
+
+
+def is_deprecated_charge_code_code(value):
+    return clean_text(value).upper() in DEPRECATED_CHARGE_CODE_CODES
+
+
+def is_deprecated_charge_code(charge_code):
+    if not charge_code:
+        return False
+    return is_deprecated_charge_code_code(charge_code.get("code"))
+
+
+def cleanup_deprecated_charge_codes():
+    """Hide old test charge codes from admin lists and employee assignments."""
+    now = datetime.utcnow()
+    deprecated_codes = list(
+        mongo.db.charge_codes.find(
+            {"code": {"$in": DEPRECATED_CHARGE_CODE_VALUES}},
+            {"_id": 1},
+        )
+    )
+    deprecated_ids = [item["_id"] for item in deprecated_codes]
+
+    mongo.db.charge_codes.update_many(
+        {
+            "code": {"$in": DEPRECATED_CHARGE_CODE_VALUES},
+            "$or": [
+                {"is_active": {"$ne": False}},
+                {"removed_from_portal": {"$ne": True}},
+            ],
+        },
+        {
+            "$set": {
+                "is_active": False,
+                "removed_from_portal": True,
+                "removed_reason": "Deprecated test charge code",
+                "updated_at": now,
+            }
+        },
+    )
+
+    assignment_filters = [{"charge_code": {"$in": DEPRECATED_CHARGE_CODE_VALUES}}]
+    if deprecated_ids:
+        assignment_filters.append({"charge_code_id": {"$in": deprecated_ids}})
+
+    mongo.db.charge_code_assignments.update_many(
+        {
+            "$or": assignment_filters,
+            "is_active": {"$ne": False},
+        },
+        {
+            "$set": {
+                "is_active": False,
+                "removed_at": now,
+                "removed_reason": "Deprecated test charge code",
+            }
+        },
+    )
+
 
 def ensure_reference_charge_codes():
     """Seed the workbook reference codes so admins can assign them by real DB id."""
+    cleanup_deprecated_charge_codes()
     now = datetime.utcnow()
     for index, item in enumerate(REFERENCE_CHARGE_CODES):
         reference_key = f"sheet2-{index + 2}-{item['code']}"
@@ -98,7 +171,7 @@ def ensure_reference_charge_codes():
                     "is_active": True,
                     "is_reference": True,
                     "reference_key": reference_key,
-                    "owner_name": "System",
+                    "owner_name": REFERENCE_OWNER_NAME,
                     "owner_email": "",
                     "updated_at": now,
                 },
@@ -143,6 +216,8 @@ def create_charge_code():
 
         if not all([code, name, created_by]):
             return jsonify({"error": "code, name, and created_by are required"}), 400
+        if is_deprecated_charge_code_code(code):
+            return jsonify({"error": "This test charge code has been removed from the portal"}), 400
 
         try:
             creator_id = ObjectId(created_by)
@@ -214,7 +289,9 @@ def get_all_charge_codes():
     try:
         ensure_reference_charge_codes()
         active_only = request.args.get("active_only", "false").lower() == "true"
-        query = {"is_active": True} if active_only else {}
+        query = {"code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES}}
+        if active_only:
+            query["is_active"] = True
         codes = list(mongo.db.charge_codes.find(query).sort("code", 1))
         for code in codes:
             owner_id = first_non_empty(code.get("owner_id"), code.get("created_by"))
@@ -363,6 +440,7 @@ def assign_charge_code():
     }
     """
     try:
+        cleanup_deprecated_charge_codes()
         data            = request.get_json() or {}
         employee_id     = data.get("employee_id")
         charge_code_ids = data.get("charge_code_ids", [])
@@ -410,6 +488,9 @@ def assign_charge_code():
             if not charge_code:
                 print(f"⚠️ Charge code not found: {cc_id}")
                 continue
+            if is_deprecated_charge_code(charge_code):
+                print(f"⚠️ Skipping removed test charge code: {charge_code.get('code')}")
+                continue
 
             # Skip if already assigned
             existing = mongo.db.charge_code_assignments.find_one({
@@ -444,6 +525,8 @@ def assign_charge_code():
                         "sub_type": charge_code.get("sub_type", ""),
                         "client": charge_code.get("client", ""),
                         "country": charge_code.get("country", ""),
+                        "owner_name": charge_code.get("owner_name", ""),
+                        "owner_email": charge_code.get("owner_email", ""),
                         "assigned_by": assigner_obj_id,
                         "assigned_at": datetime.utcnow(),
                         "is_active": True,
@@ -468,6 +551,8 @@ def assign_charge_code():
                 "sub_type":         charge_code.get("sub_type", ""),
                 "client":           charge_code.get("client", ""),
                 "country":          charge_code.get("country", ""),
+                "owner_name":       charge_code.get("owner_name", ""),
+                "owner_email":      charge_code.get("owner_email", ""),
                 "assigned_by":      assigner_obj_id,
                 "assigned_at":      datetime.utcnow(),
                 "is_active":        True,
@@ -526,6 +611,8 @@ def get_employee_charge_codes(employee_id):
                 "_id":       assignment["charge_code_id"],
                 "is_active": True,
             })
+            if is_deprecated_charge_code(charge_code):
+                continue
             if charge_code:
                 result.append({
                     "_id":              str(assignment["_id"]),
@@ -538,6 +625,8 @@ def get_employee_charge_codes(employee_id):
                     "sub_type":         first_non_empty(assignment.get("sub_type"), charge_code.get("sub_type")),
                     "client":           first_non_empty(assignment.get("client"), charge_code.get("client")),
                     "country":          first_non_empty(assignment.get("country"), charge_code.get("country")),
+                    "owner_name":       first_non_empty(assignment.get("owner_name"), charge_code.get("owner_name")),
+                    "owner_email":      first_non_empty(assignment.get("owner_email"), charge_code.get("owner_email")),
                 })
 
         print(f"✅ Found {len(result)} assigned charge codes for employee {employee_id}")
@@ -556,8 +645,11 @@ def get_employee_charge_codes(employee_id):
 def get_all_assignments():
     """Get all charge code assignments (admin view)."""
     try:
+        cleanup_deprecated_charge_codes()
         assignments = list(
-            mongo.db.charge_code_assignments.find().sort("assigned_at", -1)
+            mongo.db.charge_code_assignments.find({
+                "charge_code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES},
+            }).sort("assigned_at", -1)
         )
         return jsonify(serialize_all(assignments)), 200
 
@@ -611,6 +703,7 @@ def bulk_assign_charge_codes():
     }
     """
     try:
+        cleanup_deprecated_charge_codes()
         data            = request.get_json() or {}
         employee_ids    = data.get("employee_ids", [])
         charge_code_ids = data.get("charge_code_ids", [])
@@ -644,6 +737,8 @@ def bulk_assign_charge_codes():
                 charge_code = mongo.db.charge_codes.find_one({"_id": cc_obj_id})
                 if not charge_code:
                     continue
+                if is_deprecated_charge_code(charge_code):
+                    continue
 
                 existing = mongo.db.charge_code_assignments.find_one({
                     "employee_id":    emp_obj_id,
@@ -665,6 +760,8 @@ def bulk_assign_charge_codes():
                     "sub_type":         charge_code.get("sub_type", ""),
                     "client":           charge_code.get("client", ""),
                     "country":          charge_code.get("country", ""),
+                    "owner_name":       charge_code.get("owner_name", ""),
+                    "owner_email":      charge_code.get("owner_email", ""),
                     "assigned_by":      ObjectId(assigned_by),
                     "assigned_at":      datetime.utcnow(),
                     "is_active":        True,
