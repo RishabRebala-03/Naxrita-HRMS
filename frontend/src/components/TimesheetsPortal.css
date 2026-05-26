@@ -87,6 +87,62 @@
   padding: 6px 0;
 }
 
+.mte-timesheet-submit-toolbar {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.mte-timesheet-context {
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #32363a;
+}
+
+.mte-timesheet-context strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.mte-timesheet-context span,
+.mte-timesheet-tool-label {
+  color: #6a6d70;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mte-timesheet-context small {
+  color: #53616f;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mte-timesheet-submit-stack {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: min(100%, 620px);
+}
+
+.mte-timesheet-period-tools {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mte-timesheet-tool-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .mte-date-picker-group,
 .mte-primary-actions,
 .mte-action-toolbar,
@@ -110,6 +166,89 @@
   color: #5a5a5a;
 }
 
+.mte-period-calendar-control {
+  align-items: stretch;
+  gap: 6px;
+}
+
+.mte-period-calendar-control .mte-ghost-icon {
+  min-height: 48px;
+  border-color: #d7dde6;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.mte-period-calendar-card {
+  position: relative;
+  min-height: 48px;
+  min-width: min(100%, 360px);
+  display: inline-grid;
+  grid-template-columns: auto auto minmax(135px, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border: 1px solid #cfd7e3;
+  border-radius: 7px;
+  background: #fff;
+  color: #27313d;
+  box-shadow: 0 1px 2px rgba(15, 39, 66, 0.05);
+}
+
+.mte-period-calendar-card svg {
+  color: #5b738b;
+}
+
+.mte-period-date-tile {
+  width: 42px;
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #dce3ec;
+  border-radius: 6px;
+  background: #f7fafc;
+  overflow: hidden;
+}
+
+.mte-period-date-tile small,
+.mte-period-range-copy small {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.mte-period-date-tile strong {
+  color: #1f2933;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mte-period-range-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.mte-period-range-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #27313d;
+  font-size: 12.5px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mte-period-calendar-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 .mte-native-select {
   border: none;
   background: transparent;
@@ -121,6 +260,7 @@
 .mte-link-action {
   color: #4b4b4b;
   font-size: 14px;
+  font-weight: 700;
 }
 
 .mte-submit-button,
@@ -146,6 +286,13 @@
   border-bottom: 1px solid #d9d9d9;
 }
 
+.mte-action-toolbar-top {
+  align-self: flex-start;
+  padding: 0;
+  border-bottom: none;
+  gap: 6px;
+}
+
 .mte-tool-button {
   min-width: 64px;
   border: none;
@@ -158,6 +305,57 @@
   cursor: pointer;
   font-size: 11px;
   text-transform: uppercase;
+}
+
+.mte-action-toolbar-top .mte-tool-button {
+  min-height: 52px;
+  min-width: 72px;
+  padding: 7px 10px;
+  border: 1px solid #d9dee7;
+  border-radius: 6px;
+  background: #fff;
+  color: #32363a;
+  font-weight: 700;
+  text-transform: none;
+}
+
+.mte-action-toolbar-top .mte-tool-button:hover:not(:disabled) {
+  border-color: #6b5b7a;
+  color: #6b5b7a;
+  background: #fbfaff;
+}
+
+.mte-action-toolbar-top .mte-tool-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mte-charge-code-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 228px;
+}
+
+.mte-row-selector {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  border: 1px solid #c9d1dc;
+  border-radius: 50%;
+  background: #fff;
+  color: #7b8491;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.mte-row-selector:hover,
+.mte-row-selector.is-selected {
+  border-color: #6b5b7a;
+  background: #6b5b7a;
+  color: #fff;
 }
 
 .mte-toolbar-summary {
@@ -330,6 +528,160 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
+}
+
+.mte-expense-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.mte-expense-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.mte-expense-summary-grid article,
+.mte-expense-form-panel {
+  border: 1px solid #d9dee6;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.mte-expense-summary-grid article {
+  min-width: 0;
+  padding: 11px 12px;
+}
+
+.mte-expense-summary-grid span,
+.mte-expense-form-grid label > span,
+.mte-expense-upload-field > span {
+  color: #6a6d70;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mte-expense-summary-grid strong {
+  display: block;
+  margin-top: 6px;
+  color: #32363a;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.mte-expense-form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  gap: 10px;
+  padding: 12px 14px 14px;
+  align-items: end;
+}
+
+.mte-expense-filter-card .mte-module-card-header p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.mte-expense-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) repeat(3, minmax(140px, 1fr)) minmax(130px, 0.8fr) repeat(2, minmax(130px, 0.8fr)) auto;
+  gap: 10px;
+  padding: 12px 14px 14px;
+  align-items: end;
+}
+
+.mte-expense-filter-search {
+  grid-column: span 2;
+}
+
+.mte-expense-filter-field {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mte-expense-filter-field > span {
+  color: #6a6d70;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mte-expense-filter-field .value-help,
+.mte-expense-filter-field .value-help-search-field,
+.mte-expense-filter-field select,
+.mte-expense-filter-field input {
+  width: 100%;
+}
+
+.mte-expense-filter-field .value-help-trigger,
+.mte-expense-filter-field .value-help-search-field,
+.mte-expense-filter-field select,
+.mte-expense-filter-field input {
+  min-height: 38px;
+  box-sizing: border-box;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  background: #fff;
+  color: #32363a;
+  font-size: 13px;
+  padding: 0 11px;
+  outline: none;
+}
+
+.mte-expense-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mte-expense-filter-actions button {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #c9ced8;
+  border-radius: 6px;
+  background: #fff;
+  color: #32363a;
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mte-expense-form-grid label,
+.mte-expense-upload-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mte-expense-form-grid .input {
+  min-height: 38px;
+  border: 1px solid #d8dde6;
+  border-radius: 6px;
+  color: #32363a;
+  font-size: 13px;
+  padding: 0 11px;
+}
+
+.mte-expense-description-field {
+  grid-column: span 2;
+}
+
+.mte-expense-save-button {
+  min-height: 38px;
+  justify-content: center;
 }
 
 .mte-simple-table-wrap,
@@ -523,10 +875,156 @@
   box-shadow: none !important;
 }
 
-.mte-sheet-footer {
-  background: transparent !important;
-  border-top: none !important;
-  padding-top: 14px !important;
+.mte-sheet-edit-cell {
+  width: 52px;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #32363a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mte-sheet-edit-cell:hover,
+.mte-sheet-edit-cell:focus-visible {
+  border-color: #b8c4d3;
+  background: #f6f9fc;
+  outline: none;
+}
+
+.mte-sheet-edit-cell.has-value {
+  background: #eef5fb;
+  border-color: #d2e1ee;
+  color: #1f3f5b;
+}
+
+.mte-sheet-edit-cell:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mte-sheet-adjustment-display {
+  min-width: 52px;
+}
+
+.mte-sheet-hour-input:disabled {
+  background: #e5e7eb !important;
+  color: #6a6d70 !important;
+  cursor: not-allowed;
+}
+
+.mte-charge-code-popover {
+  max-height: 420px;
+}
+
+.mte-charge-code-popover .value-help-search {
+  background: #f7f9fb;
+}
+
+.mte-charge-code-popover .value-help-list {
+  max-height: 342px;
+  padding: 0;
+}
+
+.mte-charge-code-popover .value-help-table-head,
+.mte-charge-code-popover .value-help-option-grid {
+  display: grid;
+  grid-template-columns: minmax(76px, 0.8fr) minmax(170px, 1.6fr) minmax(100px, 1fr) minmax(72px, 0.8fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.mte-charge-code-popover .value-help-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 9px 12px;
+  border-bottom: 1px solid #d9dee6;
+  background: #eef2f6;
+  color: #5f6368;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mte-charge-code-popover .value-help-option {
+  min-height: 44px;
+  border-radius: 0;
+  border-bottom: 1px solid #eef1f5;
+  padding: 9px 12px;
+}
+
+.mte-charge-code-popover .value-help-option:hover,
+.mte-charge-code-popover .value-help-option.is-selected {
+  background: #f2f6fb;
+}
+
+.mte-charge-code-popover .value-help-option-grid {
+  flex: 1 1 auto;
+}
+
+.mte-charge-code-popover .value-help-option-grid strong,
+.mte-charge-code-popover .value-help-option-grid small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mte-charge-code-popover .value-help-option-grid strong {
+  color: #263238;
+  font-size: 12.5px;
+}
+
+.mte-charge-code-popover .value-help-option-grid small {
+  margin-top: 0;
+  color: #5f6368;
+  font-size: 12px;
+}
+
+.mte-sheet-adjustment-input {
+  width: 52px;
+  min-height: 28px;
+  border: 1px solid #d8dde6;
+  border-radius: 4px;
+  background: #fff;
+  color: #32363a;
+  font-size: 13px;
+  text-align: center;
+  outline: none;
+}
+
+.mte-sheet-adjustment-input:disabled {
+  background: #f7f9fb;
+  color: #6a6d70;
+}
+
+.mte-sheet-leave-cell {
+  display: inline-flex;
+  min-width: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.mte-sheet-leave-cell button {
+  min-height: 22px;
+  border: 1px solid #e8c4c6;
+  border-radius: 4px;
+  background: #fef3f3;
+  color: #9f3035;
+  padding: 0 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .mte-adjustments-list {
@@ -985,6 +1483,43 @@
   min-height: 100%;
 }
 
+.mte-chargecodes-assignment-grid {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.4fr) repeat(3, minmax(118px, 1fr));
+  gap: 6px;
+  align-items: end;
+}
+
+.mte-chargecodes-assignment-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  flex-wrap: wrap;
+}
+
+.mte-chargecodes-assignment-actions button {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #c9ced8;
+  border-radius: 5px;
+  background: #fff;
+  color: #32363a;
+  padding: 0 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mte-chargecodes-assignment-actions span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .mte-chargecodes-assign-card .mte-chargecodes-employee-pick,
 .mte-chargecodes-assign-card > .mte-chargecodes-view-field {
   width: 100%;
@@ -1000,6 +1535,8 @@
   flex-wrap: wrap;
   gap: 5px;
   margin-top: 7px;
+  max-height: 56px;
+  overflow: auto;
 }
 
 .mte-chargecodes-selected-employees button {
@@ -1012,6 +1549,12 @@
   font-size: 10.5px;
   font-weight: 700;
   cursor: pointer !important;
+}
+
+.mte-chargecodes-selected-count {
+  color: #667085;
+  font-size: 10.5px;
+  font-weight: 800;
 }
 
 .mte-chargecodes-assign-card .mte-chargecodes-actions {
@@ -1603,6 +2146,21 @@
   box-shadow: 0 0 0 2px rgba(111, 84, 182, 0.12);
 }
 
+.mte-locations-date-grid article.is-weekend {
+  background: #e5e7eb;
+  border-color: #cfd5de;
+}
+
+.mte-locations-date-grid article.is-weekend button,
+.mte-locations-date-grid article.is-weekend select {
+  color: #6a6d70;
+  cursor: not-allowed !important;
+}
+
+.mte-locations-date-grid article.is-weekend select {
+  background: #f0f2f5;
+}
+
 .mte-locations-date-grid button {
   border: none;
   border-radius: 5px;
@@ -1802,11 +2360,15 @@
 }
 
 .mte-summary-charge-col {
-  width: 24%;
+  width: 22%;
+}
+
+.mte-summary-client-col {
+  width: 10%;
 }
 
 .mte-summary-metric-col {
-  width: 7.6%;
+  width: 6.8%;
 }
 
 .mte-summary-table-wrap .mte-simple-table th,
@@ -1879,6 +2441,10 @@
   white-space: normal;
 }
 
+.mte-summary-table-wrap.is-employee-summary .mte-summary-table td:nth-child(2) {
+  text-align: left;
+}
+
 .mte-summary-table td:not(:first-child) {
   text-align: right;
 }
@@ -1892,37 +2458,54 @@
 
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(1),
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(1) {
-  width: 18%;
+  width: 16%;
 }
 
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(2),
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(2) {
-  width: 25%;
+  width: 22%;
 }
 
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(3),
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(3) {
-  width: 17%;
+  width: 14%;
 }
 
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(4),
-.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(4),
+.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(4) {
+  width: 14%;
+  text-align: left;
+}
+
 .mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(5),
-.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(5) {
-  width: 10%;
+.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(5),
+.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table th:nth-child(6),
+.mte-summary-table-wrap.is-admin-employee-summary .mte-simple-table td:nth-child(6) {
+  width: 9%;
+  text-align: right;
 }
 
 .mte-summary-table-wrap.is-admin-department-summary .mte-simple-table th:nth-child(1),
 .mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(1) {
-  width: 34%;
+  width: 30%;
 }
 
 .mte-summary-table-wrap.is-admin-department-summary .mte-simple-table th:nth-child(2),
-.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(2),
+.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(2) {
+  width: 10%;
+  text-align: right;
+}
+
 .mte-summary-table-wrap.is-admin-department-summary .mte-simple-table th:nth-child(3),
-.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(3),
+.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(3) {
+  width: 20%;
+  text-align: left;
+}
+
 .mte-summary-table-wrap.is-admin-department-summary .mte-simple-table th:nth-child(4),
-.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(4) {
+.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(4),
+.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table th:nth-child(5),
+.mte-summary-table-wrap.is-admin-department-summary .mte-simple-table td:nth-child(5) {
   width: 12%;
   text-align: right;
 }
@@ -2093,6 +2676,15 @@
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
 
+  .mte-chargecodes-assignment-grid,
+  .mte-expense-filter-grid {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+
+  .mte-expense-filter-search {
+    grid-column: 1 / -1;
+  }
+
   .mte-chargecodes-actions {
     justify-content: flex-start;
     flex-wrap: wrap;
@@ -2102,6 +2694,15 @@
   .mte-locations-add-row,
   .mte-locations-body {
     grid-template-columns: 1fr;
+  }
+
+  .mte-expense-summary-grid,
+  .mte-expense-form-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mte-expense-description-field {
+    grid-column: 1 / -1;
   }
 
   .mte-locations-card {
@@ -2123,6 +2724,20 @@
   }
 
   .mte-chargecodes-add-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mte-chargecodes-assignment-grid,
+  .mte-expense-filter-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mte-expense-filter-search {
+    grid-column: auto;
+  }
+
+  .mte-expense-summary-grid,
+  .mte-expense-form-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2178,6 +2793,40 @@
   .mte-grid-caption {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .mte-timesheet-submit-stack,
+  .mte-timesheet-period-tools,
+  .mte-timesheet-tool-block,
+  .mte-action-toolbar-top,
+  .mte-primary-actions {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .mte-timesheet-period-tools {
+    justify-content: flex-start;
+  }
+
+  .mte-date-picker-group {
+    width: 100%;
+  }
+
+  .mte-date-select-shell {
+    flex: 1 1 auto;
+  }
+
+  .mte-period-calendar-card {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .mte-submit-button {
+    width: 100%;
+  }
+
+  .mte-action-toolbar-top .mte-tool-button {
+    flex: 1 1 calc(50% - 6px);
   }
 
   .mte-toolbar-summary {

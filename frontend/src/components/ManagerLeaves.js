@@ -36,12 +36,44 @@ const buildSearchSuggestions = (items) => {
   );
 };
 
+const toDateKey = (value) => {
+  if (!value) return "";
+  try {
+    return new Date(value).toISOString().slice(0, 10);
+  } catch {
+    return "";
+  }
+};
+
+const parseDateKey = (dateStr) => {
+  if (!dateStr) return null;
+  const [year, month, day] = dateStr.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
+const LEAVE_CANCELLATION_CUTOFF_HOURS = 48;
+
+const getLeaveCancellationCutoff = (leave = {}) => {
+  const startKey = toDateKey(leave.approved_start_date || leave.start_date);
+  const startDate = parseDateKey(startKey);
+  if (!startDate) return null;
+  return new Date(startDate.getTime() - (LEAVE_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000));
+};
+
+const canLeadCancelApprovedLeave = (leave = {}) => {
+  if (leave.status !== "Approved") return false;
+  const cutoff = getLeaveCancellationCutoff(leave);
+  return Boolean(cutoff && Date.now() > cutoff.getTime());
+};
+
 const ManagerLeaves = ({ user }) => {
   const [activeTab, setActiveTab] = useState("pending");
   const [pendingLeaves, setPendingLeaves] = useState([]);
   const [myBalance, setMyBalance] = useState(null);
   const [myHistory, setMyHistory] = useState([]);
   const [teamMembers, setTeamMembers] = useState([]);
+  const [teamLeaveHistory, setTeamLeaveHistory] = useState([]);
   const [rejectModal, setRejectModal] = useState({ show: false, leaveId: null, reason: "" });
   const [leave, setLeave] = useState({
     leave_type: "Casual",
@@ -103,14 +135,55 @@ const ManagerLeaves = ({ user }) => {
     }
   };
 
+  const fetchTeamLeaveHistory = async (members = teamMembers) => {
+    if (!members.length) {
+      setTeamLeaveHistory([]);
+      return;
+    }
+
+    try {
+      const responses = await Promise.all(
+        members.map(async (member) => {
+          const employeeId = member._id || member.id;
+          const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/history/${employeeId}`);
+          const records = Array.isArray(response.data) ? response.data : [];
+          return records.map((record) => ({
+            ...record,
+            employee_name: member.name,
+            employee_email: member.email,
+            employee_department: member.department,
+            employee_designation: member.designation,
+          }));
+        })
+      );
+
+      setTeamLeaveHistory(
+        responses
+          .flat()
+          .filter((record) => ["Approved", "Rejected", "Cancelled"].includes(record.status))
+          .sort((first, second) => {
+            const firstDate = new Date(first.approved_on || first.rejected_on || first.cancelled_on || first.applied_on || 0);
+            const secondDate = new Date(second.approved_on || second.rejected_on || second.cancelled_on || second.applied_on || 0);
+            return secondDate - firstDate;
+          })
+      );
+    } catch (err) {
+      console.error("Error fetching team leave history:", err);
+      setTeamLeaveHistory([]);
+    }
+  };
+
   const fetchTeamMembers = async () => {
     try {
       const res = await axios.get(
         `${process.env.REACT_APP_BACKEND_URL}/api/users/get_employees_by_manager/${encodeURIComponent(user.email)}`
       );
-      setTeamMembers(res.data || []);
+      const members = res.data || [];
+      setTeamMembers(members);
+      fetchTeamLeaveHistory(members);
     } catch (err) {
       console.error("Error fetching team members:", err);
+      setTeamLeaveHistory([]);
     }
   };
 
@@ -200,6 +273,36 @@ const ManagerLeaves = ({ user }) => {
     }
   };
 
+  const cancelTeamApprovedLeave = async (leaveId) => {
+    if (!window.confirm("Cancel this approved leave for your reportee? The matching timesheet rows will refresh.")) return;
+
+    try {
+      setLoading(true);
+      const res = await axios.put(
+        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/cancel_by_lead/${leaveId}`,
+        {
+          lead_id: user.id || user._id,
+          lead_email: user.email,
+          reason: "Cancelled by reporting lead after 48-hour employee cancellation window",
+        }
+      );
+
+      if (res.status === 200) {
+        setMessage("Approved leave cancelled successfully");
+        fetchPendingLeaves();
+        fetchTeamMembers();
+        fetchMyLeaveData();
+        setTimeout(() => setMessage(""), 3000);
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage(`Error: ${err.response?.data?.error || "Failed to cancel approved leave"}`);
+      setTimeout(() => setMessage(""), 3000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const formatDate = (dateStr) => {
     if (!dateStr) return "N/A";
     try {
@@ -261,6 +364,10 @@ const ManagerLeaves = ({ user }) => {
   const totalMyBalance = myBalance ? (myBalance.sick || 0) + (myBalance.planned || 0) : 0;
   const approvedHistory = myHistory.filter((item) => item.status === "Approved").length;
   const rejectedHistory = myHistory.filter((item) => item.status === "Rejected").length;
+  const approvedTeamLeaves = useMemo(
+    () => teamLeaveHistory.filter((item) => item.status === "Approved"),
+    [teamLeaveHistory]
+  );
 
   const balanceCards = myBalance
     ? [
@@ -364,6 +471,7 @@ const ManagerLeaves = ({ user }) => {
           {[
             { id: "pending", label: `Pending Approvals (${pendingLeaves.length})` },
             { id: "myLeaves", label: `My Leaves (${myHistory.length})` },
+            { id: "teamLeaves", label: `Team Leaves (${approvedTeamLeaves.length})` },
             { id: "teamBalance", label: `Team Balance (${teamMembers.length})` },
           ].map((tab) => (
             <button
@@ -642,6 +750,76 @@ const ManagerLeaves = ({ user }) => {
             </section>
           </div>
         </>
+      ) : null}
+
+      {activeTab === "teamLeaves" ? (
+        <section className="fiori-panel">
+          <div className="fiori-panel-header">
+            <div>
+              <h3>Team approved leaves</h3>
+              <p>Approved reportee leaves become lead-cancellable after the employee 48-hour cancellation window has passed.</p>
+            </div>
+            <span className="fiori-status-pill is-approved">{approvedTeamLeaves.length} approved</span>
+          </div>
+
+          {approvedTeamLeaves.length === 0 ? (
+            <div className="admin-empty-state">
+              <ClipboardList size={28} />
+              <div>
+                <strong>No approved team leaves</strong>
+                <p>Approved reportee leave records will appear here.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="fiori-table-shell">
+              <table className="fiori-table">
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Leave</th>
+                    <th>Dates</th>
+                    <th>Approved</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvedTeamLeaves.map((item) => (
+                    <tr key={item._id}>
+                      <td>
+                        <div className="fiori-primary-cell">
+                          <strong>{item.employee_name || "Unknown employee"}</strong>
+                          <span>{item.employee_email || "Email unavailable"}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="fiori-primary-cell">
+                          <strong>{item.leave_type} Leave</strong>
+                          <span>{item.days || 0} day(s)</span>
+                        </div>
+                      </td>
+                      <td>{formatDate(item.start_date)} to {formatDate(item.end_date)}</td>
+                      <td>{formatDate(item.approved_on)}</td>
+                      <td>
+                        {canLeadCancelApprovedLeave(item) ? (
+                          <button
+                            className="fiori-button secondary danger"
+                            onClick={() => cancelTeamApprovedLeave(item._id)}
+                            disabled={loading}
+                          >
+                            <XCircle size={16} />
+                            Cancel Leave
+                          </button>
+                        ) : (
+                          <span className="fiori-stat-note">Employee window open</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       ) : null}
 
       {activeTab === "teamBalance" ? (

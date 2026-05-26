@@ -23,7 +23,7 @@ const buttons = [
   { key: "employees", label: "Employees", roles: ["Admin", "Manager"], icon: Users },
   { key: "leaves", label: "Leave Management", roles: ["Admin", "Manager", "Employee"], icon: ClipboardList },
   { key: "tea-coffee", label: "Tea and Coffee", roles: ["Admin", "Manager", "Employee"], icon: Coffee },
-  { key: "timesheets", label: "Timesheets", roles: ["Admin", "Manager", "Employee"], icon: Clock3 },
+  { key: "timesheets", label: "MyTimeAndExpenses", roles: ["Admin", "Manager", "Employee"], icon: Clock3 },
   { key: "payslips", label: "Payslips", roles: ["Admin", "Manager", "Employee"], icon: FileBadge2 },
   { key: "policy", label: "Policies", roles: ["Admin", "Manager", "Employee"], icon: FileText },
   { key: "projects", label: "Projects", roles: ["Admin"], icon: FolderKanban },

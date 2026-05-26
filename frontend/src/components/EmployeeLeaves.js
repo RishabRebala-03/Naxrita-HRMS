@@ -74,6 +74,43 @@ const calculateWorkingLeaveDays = (startDate, endDate) => {
   return count;
 };
 
+const LEAVE_CANCELLATION_CUTOFF_HOURS = 48;
+
+const getLeaveStartKey = (leave = {}) =>
+  toDateKey(leave.approved_start_date || leave.start_date);
+
+const getLeaveCancellationCutoff = (leave = {}) => {
+  const startKey = getLeaveStartKey(leave);
+  if (!startKey) return null;
+  const startDate = parseDateKey(startKey);
+  if (!startDate) return null;
+  return new Date(startDate.getTime() - (LEAVE_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000));
+};
+
+const canEmployeeCancelApprovedLeave = (leave = {}) => {
+  if (leave.status !== "Approved") return false;
+  const cutoff = getLeaveCancellationCutoff(leave);
+  return Boolean(cutoff && Date.now() <= cutoff.getTime());
+};
+
+const canLeadCancelApprovedLeave = (leave = {}) => {
+  if (leave.status !== "Approved") return false;
+  const cutoff = getLeaveCancellationCutoff(leave);
+  return Boolean(cutoff && Date.now() > cutoff.getTime());
+};
+
+const getCancellationCutoffLabel = (leave = {}) => {
+  const cutoff = getLeaveCancellationCutoff(leave);
+  if (!cutoff) return "Not available";
+  return cutoff.toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
 const leaveOverlapsRange = (item, dateRange) => {
   if (!dateRange.start && !dateRange.end) return true;
   const start = toDateKey(item.approved_start_date || item.start_date);
@@ -474,7 +511,11 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   };
 
   const cancelLeave = async (leaveId) => {
-    if (!window.confirm("Are you sure you want to cancel this leave?")) return;
+    const leaveRecord = history.find((record) => record._id === leaveId);
+    const confirmationText = leaveRecord?.status === "Approved"
+      ? "Cancel this approved leave? Your timesheet leave rows will refresh after cancellation."
+      : "Are you sure you want to cancel this leave?";
+    if (!window.confirm(confirmationText)) return;
 
     try {
       setLoading(true);
@@ -517,6 +558,35 @@ const EmployeeLeaves = ({ user, navigationState }) => {
     } catch (err) {
       console.error(err);
       setMessage("Error updating leave status");
+    }
+  };
+
+  const cancelTeamApprovedLeave = async (leaveId) => {
+    if (!window.confirm("Cancel this approved leave for your reportee? The matching timesheet rows will refresh.")) return;
+
+    try {
+      setLoading(true);
+      const res = await axios.put(
+        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/cancel_by_lead/${leaveId}`,
+        {
+          lead_id: user.id || user._id,
+          lead_email: user.email,
+          reason: "Cancelled by reporting lead after 48-hour employee cancellation window",
+        }
+      );
+
+      if (res.status === 200) {
+        setMessage("Approved leave cancelled successfully");
+        fetchTeamPendingLeaves();
+        fetchTeamDecisionHistory();
+        fetchData();
+        window.dispatchEvent(new Event("refreshNotifications"));
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage(`Error: ${err.response?.data?.error || "Failed to cancel approved leave"}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -967,7 +1037,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
               </span>
             </div>
 
-            <div className="leave-filter-grid">
+            <div className="leave-filter-grid leave-history-filter-grid">
               <div className="fiori-form-field employee-history-search">
                 <label className="leave-field-label">Search</label>
                 <ValueHelpSearch
@@ -1135,15 +1205,19 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                         </td>
                         <td>{formatDate(item.applied_on)}</td>
                         <td className="employee-history-actions-cell">
-                          {item.status === "Pending" ? (
+                          {item.status === "Pending" || canEmployeeCancelApprovedLeave(item) ? (
                             <div className="employee-table-actions">
-                              <button className="fiori-button secondary" onClick={() => setEditingLeave(item)}>
-                                Edit
-                              </button>
+                              {item.status === "Pending" ? (
+                                <button className="fiori-button secondary" onClick={() => setEditingLeave(item)}>
+                                  Edit
+                                </button>
+                              ) : null}
                               <button className="fiori-button secondary danger" onClick={() => cancelLeave(item._id)}>
                                 Cancel
                               </button>
                             </div>
+                          ) : item.status === "Approved" ? (
+                            <span className="fiori-stat-note">Lead cancellation after {getCancellationCutoffLabel(item)}</span>
                           ) : (
                             <span className="fiori-stat-note">No actions</span>
                           )}
@@ -1390,6 +1464,16 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                       </div>
                     ) : null}
                   </div>
+                  {canLeadCancelApprovedLeave(record) ? (
+                    <div className="admin-approval-actions">
+                      <button
+                        className="fiori-button secondary danger"
+                        onClick={() => cancelTeamApprovedLeave(record._id)}
+                      >
+                        Cancel Approved Leave
+                      </button>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>

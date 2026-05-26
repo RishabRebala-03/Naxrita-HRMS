@@ -476,13 +476,28 @@ function ChargeCodeSelector({ chargeCodes, selectedId, onChange, disabled, selec
       disabled={disabled}
       placeholder="Select charge code"
       searchPlaceholder="Search charge codes"
+      className="mte-charge-code-picker"
+      popoverClassName="mte-charge-code-popover"
+      tableHeaders={['Code', 'Name', 'Client', 'Type']}
       options={[
-        { value: '', label: 'Select charge code' },
+        {
+          value: '',
+          label: 'No charge code selected',
+          description: 'Clear this row',
+          meta: { code: 'Clear', name: 'No charge code selected', client: '-', type: '-' },
+        },
         ...chargeCodes
           .filter((cc) => !unavailableIds.has(cc.charge_code_id))
           .map((cc) => ({
             value: cc.charge_code_id,
             label: `${cc.charge_code} - ${cc.charge_code_name}`,
+            description: [cc.client || cc.project_name, cc.type, cc.country].filter(Boolean).join(' • '),
+            meta: {
+              code: cc.charge_code,
+              name: cc.charge_code_name,
+              client: cc.client || cc.project_name || '-',
+              type: cc.type || cc.sub_type || '-',
+            },
           })),
       ]}
     />
@@ -584,6 +599,7 @@ const getTimesheetAssignmentMeta = (source = {}) => {
   const companyCode = source.employee_company_code || source.companyCode || '';
   const costCenter = source.employee_cost_center || source.costCenter || '';
   const companyCostCenter = companyCode || costCenter;
+  const employeeId = source.employee_external_id || source.employeeId || source.employeeCode || source.employee_id || '';
 
   return {
     workLocation: assignedLocation || 'Not assigned',
@@ -591,6 +607,7 @@ const getTimesheetAssignmentMeta = (source = {}) => {
     companyCode,
     costCenter,
     companyCostCenter: companyCostCenter || 'Not assigned',
+    employeeId: employeeId || 'Not assigned',
   };
 };
 
@@ -774,6 +791,12 @@ const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
 
       leaveByDate.set(dateKey, {
         date: dateKey,
+        startDate: start,
+        endDate: end,
+        start_date: leave.start_date,
+        end_date: leave.end_date,
+        approved_start_date: leave.approved_start_date,
+        approved_end_date: leave.approved_end_date,
         code,
         displayCode,
         hours,
@@ -794,12 +817,50 @@ const isWeekendDate = (dateStr) => {
   return day === 0 || day === 6;
 };
 
+const LEAVE_CANCELLATION_CUTOFF_HOURS = 48;
+
+const getApprovedLeaveStartKey = (leave = {}) =>
+  normalizeDateKey(leave.approved_start_date || leave.approvedStartDate || leave.startDate || leave.start_date || leave.start || leave.date);
+
+const getApprovedLeaveCancellationCutoff = (leave = {}) => {
+  const startKey = getApprovedLeaveStartKey(leave);
+  if (!startKey) return null;
+  const startDate = new Date(`${startKey}T00:00:00`);
+  if (Number.isNaN(startDate.getTime())) return null;
+  return new Date(startDate.getTime() - (LEAVE_CANCELLATION_CUTOFF_HOURS * 60 * 60 * 1000));
+};
+
+const canEmployeeCancelApprovedLeave = (leave = {}) => {
+  const cutoff = getApprovedLeaveCancellationCutoff(leave);
+  return Boolean(cutoff && Date.now() <= cutoff.getTime());
+};
+
+const normalizeAdjustmentPayload = (adjustments = {}) =>
+  Object.fromEntries(
+    Object.entries(adjustments || {})
+      .filter(([date, value]) => {
+        const hours = Number(value);
+        return normalizeDateKey(date) && Number.isFinite(hours);
+      })
+      .map(([date, value]) => [normalizeDateKey(date), Math.min(Math.max(Number(value), 0), DAILY_WORK_HOUR_LIMIT)])
+  );
+
+const formatTimesheetHourValue = (hours) => {
+  const numericHours = Number(hours);
+  if (!Number.isFinite(numericHours) || numericHours <= 0) return '';
+  return Number.isInteger(numericHours)
+    ? String(numericHours)
+    : String(parseFloat(numericHours.toFixed(2)));
+};
+
+const formatTimesheetHoursWithSuffix = (hours) => {
+  const value = formatTimesheetHourValue(hours);
+  return value ? `${value}h` : '';
+};
+
 const getDefaultWorkEntryValue = (dateStr, defaultHoursByDate = {}) => {
   const defaultHours = Number(defaultHoursByDate[dateStr] || 0);
-  if (!Number.isFinite(defaultHours) || defaultHours <= 0) return '0';
-  return Number.isInteger(defaultHours)
-    ? String(defaultHours)
-    : String(parseFloat(defaultHours.toFixed(2)));
+  return formatTimesheetHourValue(defaultHours);
 };
 
 const createEmptyWorkEntries = (dates, lockedDateSet = new Set(), defaultHoursByDate = {}) =>
@@ -871,6 +932,7 @@ const buildGroupedLeaveRows = (approvedLeaveEntries = []) => {
         displayCode: leave.displayCode,
         label: leave.label,
         hoursByDate: {},
+        leaveByDate: {},
         totalHours: 0,
       });
     }
@@ -878,6 +940,7 @@ const buildGroupedLeaveRows = (approvedLeaveEntries = []) => {
     const row = grouped.get(key);
     const hours = Number(leave.hours || 0);
     row.hoursByDate[leave.date] = (row.hoursByDate[leave.date] || 0) + hours;
+    row.leaveByDate[leave.date] = leave;
     row.totalHours += hours;
   });
 
@@ -978,10 +1041,19 @@ const buildLiveSummaryEntries = ({
 
 // ─── TimesheetGrid ────────────────────────────────────────────────────────────
 function TimesheetGrid({
-  dates, rows, chargeCodes, onRowUpdate, onRowAdd, onRowDelete,
+  dates, rows, chargeCodes, onRowUpdate,
   readOnly = false, approvedLeaves = [], holidays = [],
   assignmentMeta = {},
+  dailyOvertime = {},
+  holidayPayout = {},
+  onAdjustmentChange,
+  onLeaveCancel,
+  selectedRowId = '',
+  onRowSelect,
 }) {
+  const { notify } = useTimesheetUi();
+  const limitAlertRef = useRef('');
+  const [editingCell, setEditingCell] = useState('');
   const WORKDAY_HOURS = DAILY_WORK_HOUR_LIMIT;
   const getEntry = (row, dateStr) =>
     row.entries.find((e) => e.date === dateStr) || { date: dateStr, hours: 0, entry_type: 'work' };
@@ -1026,8 +1098,12 @@ function TimesheetGrid({
       : String(parseFloat(numericHours.toFixed(2)));
   };
   const displayHours = (hours, showZero = false) => {
-    if (!hours && showZero) return '0';
+    if (!hours && showZero) return '';
     return hours ? formatHoursValue(hours) : '';
+  };
+  const displayHoursWithSuffix = (hours) => {
+    const value = displayHours(hours);
+    return value ? `${value}h` : '';
   };
   const holidayHoursForDate = (dateStr) => (holidayByDate[dateStr] ? WORKDAY_HOURS : 0);
   const leaveHoursForDate = (dateStr) => (leaveByDate[dateStr]?.hours || 0);
@@ -1045,18 +1121,96 @@ function TimesheetGrid({
   const dailyOvertimeHoursForDate = (dateStr) => Math.max(getColTotal(dateStr) - workScheduleForDate(dateStr), 0);
   const holidayPayoutHoursForDate = (dateStr) => (isWeekendDate(dateStr) ? getColTotal(dateStr) : 0);
   const supportCheckboxRows = [
+    'Shift Allowance – Shift Type A',
     'Shift Allowance – Shift Type B',
     'Shift Allowance – Shift Type C',
     'On Call – Primary Support',
     'On Call – Secondary Support',
     'On Call – Support By Unassigned',
   ];
+  const getAdjustmentValue = (source, dateStr, fallback = 0) => (
+    Object.prototype.hasOwnProperty.call(source || {}, dateStr)
+      ? Number(source[dateStr] || 0)
+      : fallback
+  );
+  const adjustmentInputValue = (source, dateStr, fallback = 0) => {
+    const value = getAdjustmentValue(source, dateStr, fallback);
+    if (!value) return '';
+    return formatHoursValue(value);
+  };
+  const setAdjustmentValue = (kind, dateStr, rawValue) => {
+    const typedHours = parseFloat(rawValue);
+    const cappedHours = Number.isFinite(typedHours)
+      ? Math.min(Math.max(typedHours, 0), WORKDAY_HOURS)
+      : 0;
 
-  const thStyle = (isHol) => ({
+    if (Number.isFinite(typedHours) && typedHours > WORKDAY_HOURS) {
+      const alertKey = `${kind}-${dateStr}-${typedHours}`;
+      if (limitAlertRef.current !== alertKey) {
+        limitAlertRef.current = alertKey;
+        notify(`Per-day ${kind === 'daily_overtime' ? 'overtime' : 'holiday payout'} cannot exceed ${WORKDAY_HOURS} hours on ${dateStr}.`, 'warning');
+      }
+    }
+
+    onAdjustmentChange?.(kind, dateStr, rawValue === '' ? '' : cappedHours);
+  };
+
+  const renderAdjustmentCell = (kind, dateStr, source, fallback) => {
+    const disabled = readOnly || isWeekendDate(dateStr);
+    const cellKey = `${kind}-${dateStr}`;
+    const isEditing = editingCell === cellKey && !disabled;
+    const value = getAdjustmentValue(source, dateStr, fallback);
+    const displayValue = displayHours(value);
+
+    if (isEditing) {
+      return (
+        <input
+          className="mte-sheet-adjustment-input"
+          type="number"
+          min="0"
+          max={WORKDAY_HOURS}
+          step="0.25"
+          value={adjustmentInputValue(source, dateStr, fallback)}
+          disabled={disabled}
+          autoFocus
+          onBlur={() => setEditingCell('')}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === 'Escape') {
+              event.currentTarget.blur();
+            }
+          }}
+          onChange={(event) => setAdjustmentValue(kind, dateStr, event.target.value)}
+          onFocus={(event) => {
+            if (event.target.value === '0') event.target.select();
+          }}
+          placeholder=""
+        />
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        className={`mte-sheet-edit-cell mte-sheet-adjustment-display ${displayValue ? 'has-value' : ''}`}
+        disabled={disabled}
+        onDoubleClick={() => setEditingCell(cellKey)}
+        aria-label={`${kind === 'daily_overtime' ? 'Daily overtime' : 'Holiday payout'} ${dateStr}`}
+      >
+        {displayValue}
+      </button>
+    );
+  };
+
+  const weekendCellStyle = (dateStr) => (
+    isWeekendDate(dateStr)
+      ? { background: '#e5e7eb', color: C.textMid }
+      : {}
+  );
+  const thStyle = (isHol, isWeekend) => ({
     padding: '10px 8px', textAlign: 'center', fontSize: '12px', fontWeight: '600',
     minWidth: '90px', borderLeft: `1px solid ${C.borderLight}`,
-    background: isHol ? C.holiday : C.headerBg,
-    color:      isHol ? C.holidayText : C.text,
+    background: isHol ? C.holiday : isWeekend ? '#e5e7eb' : C.headerBg,
+    color:      isHol ? C.holidayText : isWeekend ? '#4b5563' : C.text,
     position: 'relative', zIndex: 1,
   });
 
@@ -1074,6 +1228,7 @@ function TimesheetGrid({
     workLocation = 'Not assigned',
     assignedLocation = 'Not assigned',
     companyCostCenter = 'Not assigned',
+    employeeId = 'Not assigned',
   } = assignmentMeta;
   const selectedChargeCodeIds = rows.map((row) => row.chargeCodeId).filter(Boolean);
 
@@ -1087,10 +1242,11 @@ function TimesheetGrid({
 
               {dates.map((d) => {
                 const isHol = isHoliday(d);
+                const isWeekend = isWeekendDate(d);
                 return (
-                  <th key={d} style={thStyle(isHol)} className="mte-sheet-date-head">
+                  <th key={d} style={thStyle(isHol, isWeekend)} className="mte-sheet-date-head">
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                      <span style={{ fontSize: '11px', color: isHol ? C.holidayText : C.textMid }}>
+                      <span style={{ fontSize: '11px', color: isHol ? C.holidayText : isWeekend ? '#4b5563' : C.textMid }}>
                         {format(parseISO(d), 'EEE')}
                       </span>
                       <span>{format(parseISO(d), 'MMM d')}</span>
@@ -1108,14 +1264,6 @@ function TimesheetGrid({
               }}>
                 Total
               </th>
-              {!readOnly && (
-                <th style={{
-                  padding: '12px', background: C.headerBg,
-                  position: 'sticky', right: 0, zIndex: 15,
-                  borderLeft: `1px solid ${C.borderLight}`, width: '50px',
-                  boxShadow: '-2px 0 4px rgba(0,0,0,0.04)',
-                }} />
-              )}
             </tr>
           </thead>
 
@@ -1131,10 +1279,9 @@ function TimesheetGrid({
                 <span className="mte-sheet-meta-link">Work Location</span>
               </td>
               {dates.map((d) => (
-                <td key={`work-location-${d}`} className="mte-sheet-meta-cell">{workLocation}</td>
+                <td key={`work-location-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{workLocation}</td>
               ))}
               <td className="mte-sheet-meta-total" />
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
             <tr className="mte-sheet-meta-row">
@@ -1148,13 +1295,12 @@ function TimesheetGrid({
                 Assigned Location
               </td>
               {dates.map((d) => (
-                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell">{assignedLocation}</td>
+                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{assignedLocation}</td>
               ))}
               <td className="mte-sheet-meta-total">{assignedLocation}</td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
-            <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+            <tr className="mte-sheet-meta-row">
               <td className="mte-sheet-meta-label" style={{
                 padding: '10px 16px',
                 position: 'sticky', left: 0,
@@ -1165,10 +1311,25 @@ function TimesheetGrid({
                 Company Code/Cost Center
               </td>
               {dates.map((d) => (
-                <td key={`cost-center-${d}`} className="mte-sheet-meta-cell">{companyCostCenter}</td>
+                <td key={`cost-center-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{companyCostCenter}</td>
               ))}
               <td className="mte-sheet-meta-total">{companyCostCenter}</td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
+            </tr>
+
+            <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+              <td className="mte-sheet-meta-label" style={{
+                padding: '10px 16px',
+                position: 'sticky', left: 0,
+                background: C.white,
+                zIndex: 9,
+                borderRight: `1px solid ${C.borderLight}`,
+              }}>
+                Employee Id
+              </td>
+              {dates.map((d) => (
+                <td key={`employee-id-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{employeeId}</td>
+              ))}
+              <td className="mte-sheet-meta-total">{employeeId}</td>
             </tr>
 
             <tr className="mte-sheet-spacer-row">
@@ -1179,18 +1340,21 @@ function TimesheetGrid({
                 zIndex: 9,
                 borderRight: `1px solid ${C.borderLight}`,
               }} />
-              {dates.map((d) => <td key={`spacer-${d}`} />)}
+              {dates.map((d) => <td key={`spacer-${d}`} style={weekendCellStyle(d)} />)}
               <td />
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
             {rows.map((row, ri) => {
-              const rowBg = ri % 2 === 0 ? C.white : C.rowAlt;
+              const isSelected = selectedRowId === row.id;
+              const rowBg = isSelected ? '#f2f6fb' : (ri % 2 === 0 ? C.white : C.rowAlt);
 
               return (
                 <tr
                   key={row.id}
-                  className="mte-sheet-entry-row"
+                  className={`mte-sheet-entry-row ${isSelected ? 'is-selected' : ''}`}
+                  onClick={() => {
+                    if (!readOnly) onRowSelect?.(row.id);
+                  }}
                   style={{ background: rowBg, borderBottom: `1px solid ${C.borderLight}` }}
                 >
                   <td style={{
@@ -1202,17 +1366,36 @@ function TimesheetGrid({
                     boxShadow: '2px 0 4px rgba(0,0,0,0.04)',
                     overflow: 'visible',
                   }}>
-                    <ChargeCodeSelector
-                      chargeCodes={chargeCodes}
-                      selectedId={row.chargeCodeId}
-                      onChange={(id) => onRowUpdate(row.id, { chargeCodeId: id })}
-                      disabled={readOnly}
-                      selectedIds={selectedChargeCodeIds}
-                    />
+                    <div className="mte-charge-code-cell">
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          className={`mte-row-selector ${isSelected ? 'is-selected' : ''}`}
+                          aria-label="Select charge code row"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRowSelect?.(row.id);
+                          }}
+                        >
+                          <CheckCircle2 size={14} />
+                        </button>
+                      )}
+                      <ChargeCodeSelector
+                        chargeCodes={chargeCodes}
+                        selectedId={row.chargeCodeId}
+                        onChange={(id) => {
+                          onRowSelect?.(row.id);
+                          onRowUpdate(row.id, { chargeCodeId: id });
+                        }}
+                        disabled={readOnly}
+                        selectedIds={selectedChargeCodeIds}
+                      />
+                    </div>
                   </td>
 
                   {dates.map((d) => {
                     const isHol = isHoliday(d);
+                    const isWeekend = isWeekendDate(d);
                     const leaveEntry = leaveByDate[d];
                     const entry = getEntry(row, d);
                     const isFullDayLeave = leaveEntry && !leaveEntry.isHalfDay;
@@ -1221,9 +1404,9 @@ function TimesheetGrid({
                       <td key={d} style={{
                         padding: '8px', textAlign: 'center',
                         borderLeft: `1px solid ${C.borderLight}`,
-                        background: isHol ? '#fffbeb' : leaveEntry ? C.purpleLight : 'transparent',
+                        background: isHol ? '#fffbeb' : isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
                       }}>
-                        {isHol || isFullDayLeave ? (
+                        {isHol || isWeekend || isFullDayLeave ? (
                           <span
                             style={{
                               display: 'inline-flex',
@@ -1233,17 +1416,50 @@ function TimesheetGrid({
                               borderRadius: '999px',
                               fontSize: '11px',
                               fontWeight: '700',
-                              border: `1px solid ${isHol ? C.amberBorder : C.purpleBorder}`,
-                              background: isHol ? '#fff7d6' : C.white,
-                              color: isHol ? C.holidayText : C.purple,
+                              border: `1px solid ${isHol ? C.amberBorder : isWeekend ? '#bfc7d1' : C.purpleBorder}`,
+                              background: isHol ? '#fff7d6' : isWeekend ? '#e5e7eb' : C.white,
+                              color: isHol ? C.holidayText : isWeekend ? '#6b7280' : C.purple,
                             }}
                             title={isHol
                               ? `${holidayChargeCodeForDate(d).name} (${holidayChargeCodeForDate(d).code})`
+                              : isWeekend
+                              ? 'Weekend locked'
                               : `${leaveEntry.label}${leaveEntry.isHalfDay && leaveEntry.halfDayPeriod ? ` (${leaveEntry.halfDayPeriod})` : ''}`}
                           >
-                            {isHol ? 'PH' : leaveEntry.displayCode}
+                            {isHol ? 'PH' : isWeekend ? '' : leaveEntry.displayCode}
                           </span>
-                        ) : (
+                        ) : (() => {
+                          const cellKey = `work-${row.id}-${d}`;
+                          const isEditing = editingCell === cellKey && !readOnly;
+                          const displayValue = displayHours(numericVal(entry));
+                          const updateWorkHours = (typedValue) => {
+                            const typedHours = parseFloat(typedValue);
+                            if (Number.isFinite(typedHours) && typedHours > rowHourLimit) {
+                              const alertKey = `work-${d}-${typedHours}`;
+                              if (limitAlertRef.current !== alertKey) {
+                                limitAlertRef.current = alertKey;
+                                notify(
+                                  `Per-day work hours cannot exceed ${DAILY_WORK_HOUR_LIMIT} hours. ${d} has ${formatHoursValue(rowHourLimit)} hour(s) available.`,
+                                  'warning'
+                                );
+                              }
+                            }
+                            const cappedHours = Number.isFinite(typedHours)
+                              ? Math.min(Math.max(typedHours, 0), rowHourLimit)
+                              : 0;
+                            const nextValue = typedValue === ''
+                              ? ''
+                              : String(cappedHours);
+                            onRowUpdate(row.id, {
+                              entries: row.entries.map((ent) =>
+                                ent.date === d
+                                  ? { ...ent, value: nextValue, hours: cappedHours, entry_type: 'work' }
+                                  : ent
+                              ),
+                            });
+                          };
+
+                          return isEditing ? (
                           <input
                             className="mte-sheet-hour-input"
                             type="number"
@@ -1251,28 +1467,20 @@ function TimesheetGrid({
                             max={rowHourLimit}
                             step="0.25"
                             value={entry.value ?? ''}
-                            disabled={readOnly}
+                            disabled={readOnly || isWeekend}
+                            autoFocus
                             title={leaveEntry ? `${leaveEntry.label} covers ${displayHours(leaveEntry.hours)} hours on this date` : undefined}
+                            onBlur={() => setEditingCell('')}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === 'Escape') {
+                                event.currentTarget.blur();
+                              }
+                            }}
                             onFocus={(event) => {
+                              onRowSelect?.(row.id);
                               if (event.target.value === '0') event.target.select();
                             }}
-                            onChange={(e) => {
-                              const typedValue = e.target.value;
-                              const typedHours = parseFloat(typedValue);
-                              const cappedHours = Number.isFinite(typedHours)
-                                ? Math.min(Math.max(typedHours, 0), rowHourLimit)
-                                : 0;
-                              const nextValue = typedValue === ''
-                                ? ''
-                                : String(cappedHours);
-                              onRowUpdate(row.id, {
-                                entries: row.entries.map((ent) =>
-                                  ent.date === d
-                                    ? { ...ent, value: nextValue, hours: cappedHours, entry_type: 'work' }
-                                    : ent
-                                ),
-                              });
-                            }}
+                            onChange={(e) => updateWorkHours(e.target.value)}
                             style={{
                               width: '52px', padding: '4px 6px',
                               border: `1px solid ${C.border}`, borderRadius: '4px',
@@ -1281,7 +1489,23 @@ function TimesheetGrid({
                               color: C.text,
                             }}
                           />
-                        )}
+                          ) : (
+                            <button
+                              type="button"
+                              className={`mte-sheet-edit-cell ${displayValue ? 'has-value' : ''}`}
+                              title={leaveEntry ? `${leaveEntry.label} covers ${displayHours(leaveEntry.hours)} hours on this date` : undefined}
+                              onClick={() => onRowSelect?.(row.id)}
+                              onDoubleClick={(event) => {
+                                event.stopPropagation();
+                                onRowSelect?.(row.id);
+                                setEditingCell(cellKey);
+                              }}
+                              aria-label={`Work hours ${d}`}
+                            >
+                              {displayValue}
+                            </button>
+                          );
+                        })()}
                       </td>
                     );
                   })}
@@ -1290,23 +1514,8 @@ function TimesheetGrid({
                     padding: '10px 16px', textAlign: 'center', fontWeight: '600',
                     background: C.totalBg, borderLeft: `1px solid ${C.border}`, color: C.purple,
                   }}>
-                    {getRowTotal(row)}h
+                    {displayHoursWithSuffix(getRowTotal(row))}
                   </td>
-
-                  {!readOnly && (
-                    <td style={{
-                      padding: '10px', textAlign: 'center',
-                      position: 'sticky', right: 0,
-                      background: rowBg,
-                      zIndex: 10,
-                      borderLeft: `1px solid ${C.borderLight}`,
-                      boxShadow: '-2px 0 4px rgba(0,0,0,0.04)',
-                    }}>
-                      <button onClick={() => onRowDelete(row.id)} style={{ ...S.btnIcon, color: C.red }}>
-                        <Trash2 size={14} />
-                      </button>
-                    </td>
-                  )}
                 </tr>
               );
             })}
@@ -1325,13 +1534,31 @@ function TimesheetGrid({
                     {`${leave.label} (${leave.code})`}
                   </span>
                 </td>
-                {dates.map((d) => (
-                  <td key={`leave-cell-${leave.key}-${d}`} className="mte-sheet-static-value-cell">
-                    {displayHours(leave.hoursByDate[d] || 0, true)}
-                  </td>
-                ))}
+                {dates.map((d) => {
+                  const leaveCell = leave.leaveByDate[d];
+                  const canCancelLeave = leaveCell && canEmployeeCancelApprovedLeave(leaveCell);
+                  return (
+                    <td key={`leave-cell-${leave.key}-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                      {leaveCell ? (
+                        <span className="mte-sheet-leave-cell">
+                          <span>{displayHours(leave.hoursByDate[d] || 0)}</span>
+                          {canCancelLeave && onLeaveCancel ? (
+                            <button
+                              type="button"
+                              onClick={() => onLeaveCancel(leaveCell)}
+                              title="Cancel approved leave"
+                            >
+                              Cancel
+                            </button>
+                          ) : null}
+                        </span>
+                      ) : (
+                        ''
+                      )}
+                    </td>
+                  );
+                })}
                 <td className="mte-sheet-static-total-cell">{displayHours(leave.totalHours)}</td>
-                {!readOnly && <td className="mte-sheet-sticky-end" />}
               </tr>
             ))}
 
@@ -1350,12 +1577,11 @@ function TimesheetGrid({
                   </span>
                 </td>
                 {dates.map((d) => (
-                  <td key={`holiday-cell-${dateStr}-${d}`} className="mte-sheet-static-value-cell">
+                  <td key={`holiday-cell-${dateStr}-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
                     {d === dateStr ? displayHours(WORKDAY_HOURS) : ''}
                   </td>
                 ))}
                 <td className="mte-sheet-static-total-cell">{displayHours(WORKDAY_HOURS)}</td>
-                {!readOnly && <td className="mte-sheet-sticky-end" />}
               </tr>
             ))}
 
@@ -1368,15 +1594,14 @@ function TimesheetGrid({
                 borderRight: `1px solid ${C.borderLight}`,
                 boxShadow: '2px 0 4px rgba(0,0,0,0.04)',
               }}>
-                Total hours
+                Total working hours
               </td>
               {dates.map((d) => (
-                <td key={`total-hours-${d}`} className="mte-sheet-static-value-cell">
-                  {displayHours(totalHoursForDate(d), true)}
+                <td key={`total-hours-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                  {displayHours(totalHoursForDate(d))}
                 </td>
               ))}
-              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + totalHoursForDate(dateStr), 0), true)}</td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
+              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + totalHoursForDate(dateStr), 0))}</td>
             </tr>
 
             <tr className="mte-sheet-static-row mte-sheet-static-divider-top">
@@ -1391,12 +1616,11 @@ function TimesheetGrid({
                 Work Schedule
               </td>
               {dates.map((d) => (
-                <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell">
-                  {displayHours(workScheduleForDate(d), isWeekendDate(d))}
+                <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                  {displayHours(workScheduleForDate(d))}
                 </td>
               ))}
-              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + workScheduleForDate(dateStr), 0), true)}</td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
+              <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + workScheduleForDate(dateStr), 0))}</td>
             </tr>
 
             <tr className="mte-sheet-static-row mte-sheet-static-divider-top">
@@ -1411,14 +1635,13 @@ function TimesheetGrid({
                 Daily Overtime
               </td>
               {dates.map((d) => (
-                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell">
-                  {displayHours(dailyOvertimeHoursForDate(d), isWeekendDate(d))}
+                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                  {renderAdjustmentCell('daily_overtime', d, dailyOvertime, dailyOvertimeHoursForDate(d))}
                 </td>
               ))}
               <td className="mte-sheet-static-total-cell">
-                {displayHours(dates.reduce((sum, dateStr) => sum + dailyOvertimeHoursForDate(dateStr), 0), true)}
+                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(dailyOvertime, dateStr, dailyOvertimeHoursForDate(dateStr)), 0))}
               </td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
             <tr className="mte-sheet-static-row">
@@ -1433,14 +1656,13 @@ function TimesheetGrid({
                 Holiday Payout
               </td>
               {dates.map((d) => (
-                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell">
-                  {isWeekendDate(d) ? displayHours(holidayPayoutHoursForDate(d), true) : ''}
+                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                  {renderAdjustmentCell('holiday_payout', d, holidayPayout, holidayPayoutHoursForDate(d))}
                 </td>
               ))}
               <td className="mte-sheet-static-total-cell">
-                {displayHours(dates.reduce((sum, dateStr) => sum + holidayPayoutHoursForDate(dateStr), 0), true)}
+                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(holidayPayout, dateStr, holidayPayoutHoursForDate(dateStr)), 0))}
               </td>
-              {!readOnly && <td className="mte-sheet-sticky-end" />}
             </tr>
 
             {supportCheckboxRows.map((label) => (
@@ -1456,25 +1678,17 @@ function TimesheetGrid({
                   {label}
                 </td>
                 {dates.map((d) => (
-                  <td key={`${label}-${d}`} className="mte-sheet-checkbox-cell">
-                    <input type="checkbox" className="mte-sheet-checkbox" disabled={readOnly} />
+                  <td key={`${label}-${d}`} className="mte-sheet-checkbox-cell" style={weekendCellStyle(d)}>
+                    <input type="checkbox" className="mte-sheet-checkbox" disabled={readOnly || isWeekendDate(d)} />
                   </td>
                 ))}
-                <td className="mte-sheet-static-total-cell">0</td>
-                {!readOnly && <td className="mte-sheet-sticky-end" />}
+                <td className="mte-sheet-static-total-cell" />
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      {!readOnly && (
-        <div className="mte-sheet-footer" style={{ padding: '12px 16px', borderTop: `1px solid ${C.border}`, background: C.headerBg }}>
-          <button onClick={onRowAdd} style={S.btnSecondary}>
-            <Plus size={14} /> Add Charge Code
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -1492,6 +1706,9 @@ function TimesheetPage({
   const [internalSelectedPeriod, setInternalSelectedPeriod] = useState(availablePeriods[0]?.value || '');
   const [timesheetStatus, setTimesheetStatus]   = useState('draft');
   const [rows, setRows]                         = useState([]);
+  const [selectedRowId, setSelectedRowId]       = useState('');
+  const [dailyOvertime, setDailyOvertime]       = useState({});
+  const [holidayPayout, setHolidayPayout]       = useState({});
   const [validationErrors, setValidationErrors] = useState([]);
   const [chargeCodes, setChargeCodes]           = useState([]);
   const [approvedLeaves, setApprovedLeaves]     = useState([]);
@@ -1509,6 +1726,9 @@ function TimesheetPage({
   const setActivePeriod = (nextPeriod) => {
     hasLocalTimesheetEditsRef.current = false;
     setSheetLoaded(false);
+    setSelectedRowId('');
+    setDailyOvertime({});
+    setHolidayPayout({});
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
   const selectedPeriodOption = availablePeriods.find((period) => period.value === activePeriod) || availablePeriods[0];
@@ -1555,12 +1775,13 @@ function TimesheetPage({
   );
   const lockedDateSet = useMemo(
     () => new Set([
+      ...dates.filter(isWeekendDate),
       ...Object.keys(holidayByDate),
       ...Object.values(approvedLeaveByDate)
         .filter((leave) => !leave.isHalfDay)
         .map((leave) => leave.date),
     ]),
-    [holidayByDate, approvedLeaveByDate]
+    [dates, holidayByDate, approvedLeaveByDate]
   );
   const halfDayWorkDefaultsByDate = useMemo(
     () => Object.fromEntries(
@@ -1645,6 +1866,8 @@ function TimesheetPage({
 
         if (match) {
           setTimesheetStatus(match.status || 'draft');
+          setDailyOvertime(match.daily_overtime || {});
+          setHolidayPayout(match.holiday_payout || {});
 
           // FIX 3: Build ccMap keyed by charge_code_id (or charge_code as fallback)
           // Store the full label (code + name) alongside entries
@@ -1681,7 +1904,7 @@ function TimesheetPage({
                 ? { date: d, hours: 0, value: '', entry_type: 'work', locked: true }
                 : byDate[d]
                 // FIX 3: Use hours as the display value, not description
-                ? { date: d, hours: byDate[d].hours || 0, value: String(byDate[d].hours ?? getDefaultWorkEntryValue(d)), entry_type: 'work' }
+                ? { date: d, hours: Number(byDate[d].hours || 0), value: formatTimesheetHourValue(byDate[d].hours), entry_type: 'work' }
                 : {
                     date: d,
                     hours: i === 0 && !savedWorkTotalsByDate[d] ? Number(halfDayWorkDefaultsByDate[d] || 0) : 0,
@@ -1701,10 +1924,14 @@ function TimesheetPage({
           }
         } else {
           setTimesheetStatus('draft');
+          setDailyOvertime({});
+          setHolidayPayout({});
           setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
         }
       })
       .catch(() => {
+        setDailyOvertime({});
+        setHolidayPayout({});
         setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
       })
       .finally(() => setSheetLoaded(true));
@@ -1745,6 +1972,9 @@ function TimesheetPage({
       }, 0);
       const approvedLeave = approvedLeaveByDate[date];
       const systemHours = (approvedLeave?.hours || 0) + (holidayByDate[date] ? DAILY_WORK_HOUR_LIMIT : 0);
+      if (isWeekendDate(date) && total > 0) {
+        errors.push(`${date} is a weekend and cannot contain work hours`);
+      }
       if (approvedLeave && !approvedLeave.isHalfDay && total > 0) {
         errors.push(`${date} is already marked as ${approvedLeaveByDate[date].label} (${approvedLeaveByDate[date].code})`);
       }
@@ -1763,6 +1993,12 @@ function TimesheetPage({
 
   useEffect(() => { setValidationErrors(validate()); }, [rows, validate]);
 
+  useEffect(() => {
+    if (selectedRowId && !rows.some((row) => row.id === selectedRowId)) {
+      setSelectedRowId('');
+    }
+  }, [rows, selectedRowId]);
+
   const getTotalHours = () =>
     rows.reduce((t, row) =>
       t + row.entries.reduce((s, e) => {
@@ -1778,6 +2014,14 @@ function TimesheetPage({
   const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
   const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
   const errors       = validationErrors;
+  const rowHasPositiveHours = useCallback((row) =>
+    row.entries.some((entry) => {
+      const rawValue = entry?.value !== undefined ? entry.value : String(entry?.hours ?? '');
+      const hours = parseFloat(rawValue);
+      return Number.isFinite(hours) && hours > 0;
+    }), []);
+  const hasSelectedRowsWithoutHours = useCallback((sourceRows = rows) =>
+    sourceRows.some((row) => row.chargeCodeId && !rowHasPositiveHours(row)), [rowHasPositiveHours, rows]);
 
   const buildWorkEntries = useCallback(({ requireChargeCode = true, sourceRows = rows } = {}) => {
     const entries = [];
@@ -1793,6 +2037,7 @@ function TimesheetPage({
         if (numHrs > DAILY_WORK_HOUR_LIMIT) {
           throw new Error(`Working hours for any charge code cannot exceed ${DAILY_WORK_HOUR_LIMIT} hours on ${e.date}`);
         }
+        if (isWeekendDate(e.date)) throw new Error(`${e.date} is a weekend and cannot contain work hours`);
         if (lockedDateSet.has(e.date)) {
           const leaveEntry = approvedLeaveByDate[e.date];
           if (leaveEntry) throw new Error(`${e.date} is already marked as ${leaveEntry.label} (${leaveEntry.code})`);
@@ -1857,7 +2102,10 @@ function TimesheetPage({
       entries: liveSummaryEntries,
       total_hours: liveSummaryEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0),
       work_hours: getEntriesWorkHours(liveSummaryEntries),
+      daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
+      holiday_payout: normalizeAdjustmentPayload(holidayPayout),
       status: timesheetStatus,
+      employee_external_id: profile.employeeId || '',
       employee_work_location: profile.workLocation || '',
       employee_assigned_location: profile.assignedLocation || profile.costCenter || profile.workLocation || '',
       employee_company_code: profile.companyCode || '',
@@ -1865,7 +2113,9 @@ function TimesheetPage({
     });
   }, [
     activePeriod,
+    dailyOvertime,
     dates,
+    holidayPayout,
     liveSummaryEntries,
     onSheetSnapshotChange,
     profile,
@@ -1887,13 +2137,17 @@ function TimesheetPage({
           period_start: dates[0],
           period_end: dates[dates.length - 1],
           entries,
+          daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
+          holiday_payout: normalizeAdjustmentPayload(holidayPayout),
         }),
       });
-      hasLocalTimesheetEditsRef.current = false;
+      if (!hasSelectedRowsWithoutHours()) {
+        hasLocalTimesheetEditsRef.current = false;
+      }
     } catch (_) {
       // Silent autosave should never interrupt typing or replace validation.
     }
-  }, [buildWorkEntries, dates, isReadOnly, userId]);
+  }, [buildWorkEntries, dailyOvertime, dates, hasSelectedRowsWithoutHours, holidayPayout, isReadOnly, userId]);
 
   useEffect(() => {
     if (!hasLocalTimesheetEditsRef.current || isReadOnly) return undefined;
@@ -1968,7 +2222,11 @@ function TimesheetPage({
       if (existingId) {
         await fetchAPI(`/timesheets/update/${existingId}`, {
           method: 'PUT',
-          body: JSON.stringify({ entries }),
+          body: JSON.stringify({
+            entries,
+            daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
+            holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+          }),
         });
         await fetchAPI(`/timesheets/submit/${existingId}`, { method: 'PUT' });
       } else {
@@ -1979,6 +2237,8 @@ function TimesheetPage({
             period_start: dates[0],
             period_end:   dates[dates.length - 1],
             entries,
+            daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
+            holiday_payout: normalizeAdjustmentPayload(holidayPayout),
           }),
         });
       }
@@ -2005,11 +2265,17 @@ function TimesheetPage({
           period_start: dates[0],
           period_end: dates[dates.length - 1],
           entries,
+          daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
+          holiday_payout: normalizeAdjustmentPayload(holidayPayout),
         }),
       });
       setTimesheetStatus('draft');
-      hasLocalTimesheetEditsRef.current = false;
-      setReloadTrigger((t) => t + 1);
+      if (hasSelectedRowsWithoutHours()) {
+        hasLocalTimesheetEditsRef.current = true;
+      } else {
+        hasLocalTimesheetEditsRef.current = false;
+        setReloadTrigger((t) => t + 1);
+      }
       notify('Draft saved successfully.', 'success');
     } catch (err) {
       notify(`Save failed: ${err.message}`, 'error');
@@ -2018,28 +2284,57 @@ function TimesheetPage({
     }
   };
 
-  const handleDeleteTimesheet = async () => {
+  const handleAddRow = () => {
     if (isReadOnly) return;
-    const shouldDelete = await confirmAction({
-      title: 'Delete Draft Timesheet',
-      message: 'Delete this draft timesheet for the selected period? This cannot be undone.',
-      confirmLabel: 'Delete Draft',
+    const nextRow = createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet);
+    hasLocalTimesheetEditsRef.current = true;
+    setRows((previous) => [...previous, nextRow]);
+    setSelectedRowId(nextRow.id);
+  };
+
+  const handleDeleteSelectedRow = () => {
+    if (isReadOnly) return;
+    if (!selectedRowId) {
+      notify('Select a charge code row to delete.', 'warning');
+      return;
+    }
+    hasLocalTimesheetEditsRef.current = true;
+    setRows((previous) => previous.filter((row) => row.id !== selectedRowId));
+    setSelectedRowId('');
+    notify('Charge code row removed.', 'success');
+  };
+
+  const handleAdjustmentChange = (kind, dateStr, value) => {
+    hasLocalTimesheetEditsRef.current = true;
+    const setter = kind === 'daily_overtime' ? setDailyOvertime : setHolidayPayout;
+    setter((previous) => ({
+      ...previous,
+      [dateStr]: value === '' ? 0 : value,
+    }));
+  };
+
+  const handleCancelApprovedLeaveFromTimesheet = async (leaveEntry) => {
+    if (!leaveEntry?.leaveId) return;
+    const shouldCancel = await confirmAction({
+      title: 'Cancel Approved Leave',
+      message: `Cancel approved leave from ${leaveEntry.startDate || leaveEntry.date} to ${leaveEntry.endDate || leaveEntry.date}? The matching timesheet rows will refresh after cancellation.`,
+      confirmLabel: 'Cancel Leave',
       tone: 'danger',
     });
-    if (!shouldDelete) return;
+    if (!shouldCancel) return;
+
     setLoading(true);
     try {
-      const match = await findCurrentTimesheet();
-      if (match) {
-        await fetchAPI(`/timesheets/delete/${match._id || match.id}`, { method: 'DELETE' });
-      }
-      setTimesheetStatus('draft');
+      await fetchAPI(`/leaves/cancel/${leaveEntry.leaveId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ cancelled_by: profile.name || user?.name || profile.email || user?.email || 'Employee' }),
+      });
+      notify('Approved leave cancelled and timesheet refreshed.', 'success');
       hasLocalTimesheetEditsRef.current = false;
-      setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
+      loadTimesheetReferenceData();
       setReloadTrigger((t) => t + 1);
-      notify('Timesheet deleted successfully.', 'success');
     } catch (err) {
-      notify(`Delete failed: ${err.message}`, 'error');
+      notify(`Leave cancellation failed: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -2071,96 +2366,121 @@ function TimesheetPage({
     );
   };
 
+  const periodStartDate = selectedPeriodOption?.start ? parseISO(selectedPeriodOption.start) : null;
+  const periodEndDate = selectedPeriodOption?.end ? parseISO(selectedPeriodOption.end) : null;
+  const periodDayCount = periodStartDate && periodEndDate
+    ? eachDayOfInterval({ start: periodStartDate, end: periodEndDate }).length
+    : dates.length;
+
   return (
     <div className={`mte-embedded-shell ${embedded ? 'is-embedded' : ''}`}>
-      <div className="mte-date-toolbar">
-        <div className="mte-date-picker-group">
-          <button
-            type="button"
-            className="mte-ghost-icon"
-            aria-label="Previous period"
-            onClick={() => movePeriod(1)}
-            disabled={!canGoToPreviousPeriod}
-          >
-            <ChevronLeft size={16} />
+      <div className="mte-date-toolbar mte-timesheet-submit-toolbar">
+        <div className="mte-timesheet-context">
+          <strong>Timesheet</strong>
+          <span>{selectedPeriodOption?.label || 'Current period'}</span>
+          <small>{formatTimesheetHoursWithSuffix(getTotalHours()) ? `Total working hours ${formatTimesheetHoursWithSuffix(getTotalHours())}` : 'Total working hours'}</small>
+        </div>
+        <div className="mte-action-toolbar mte-action-toolbar-top">
+          <button type="button" className="mte-tool-button" onClick={handleSaveDraft} disabled={isReadOnly || loading}>
+            <Save size={18} />
+            <span>Save</span>
           </button>
-          <div className="mte-date-select-shell">
-            <Calendar size={15} />
-            <select
-              className="mte-native-select"
-              value={activePeriod}
-              onChange={(event) => {
-                saveDraftSilentlyRef.current?.();
-                setActivePeriod(event.target.value);
-                setTimesheetStatus('draft');
-              }}
-            >
-              {availablePeriods.map((period) => (
-                <option key={period.value} value={period.value}>
-                  {period.shortLabel || period.label}
-                </option>
-              ))}
-            </select>
-          </div>
           <button
             type="button"
-            className="mte-ghost-icon"
-            aria-label="Next period"
-            onClick={() => movePeriod(-1)}
-            disabled={!canGoToNextPeriod}
+            className="mte-tool-button"
+            onClick={handleDeleteSelectedRow}
+            disabled={isReadOnly || loading || !selectedRowId}
+            title={selectedRowId ? 'Delete selected charge code row' : 'Select a charge code row first'}
           >
-            <ChevronRight size={16} />
+            <Trash2 size={18} />
+            <span>Delete</span>
+          </button>
+          <button type="button" className="mte-tool-button" onClick={handleAddRow} disabled={isReadOnly || loading}>
+            <Plus size={18} />
+            <span>Add Row</span>
+          </button>
+          <button type="button" className="mte-tool-button">
+            <CircleHelp size={18} />
+            <span>Help</span>
           </button>
         </div>
-        <div className="mte-primary-actions">
-          <span className="mte-link-action">New</span>
-          {canSubmit ? (
-            <button
-              type="button"
-              className="mte-submit-button"
-              onClick={handleSubmit}
-              disabled={errors.length > 0 || loading}
-            >
-              {loading ? 'Submitting' : 'Submit'}
-            </button>
-          ) : (
-            <div className="mte-status-inline">
-              <StatusBadge status={timesheetStatus} />
+        <div className="mte-timesheet-submit-stack">
+          <div className="mte-timesheet-period-tools">
+            <div className="mte-timesheet-tool-block">
+              <span className="mte-timesheet-tool-label">Calendar</span>
+              <div className="mte-date-picker-group mte-period-calendar-control">
+                <button
+                  type="button"
+                  className="mte-ghost-icon"
+                  aria-label="Previous period"
+                  onClick={() => movePeriod(1)}
+                  disabled={!canGoToPreviousPeriod}
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <label className="mte-period-calendar-card">
+                  <Calendar size={16} />
+                  <span className="mte-period-date-tile">
+                    <small>{periodStartDate ? format(periodStartDate, 'MMM') : 'Start'}</small>
+                    <strong>{periodStartDate ? format(periodStartDate, 'd') : '--'}</strong>
+                  </span>
+                  <span className="mte-period-range-copy">
+                    <strong>
+                      {periodStartDate && periodEndDate
+                        ? `${format(periodStartDate, 'MMM d')} - ${format(periodEndDate, 'MMM d, yyyy')}`
+                        : selectedPeriodOption?.label || 'Current period'}
+                    </strong>
+                    <small>{periodDayCount} day{periodDayCount === 1 ? '' : 's'}</small>
+                  </span>
+                  <span className="mte-period-date-tile">
+                    <small>{periodEndDate ? format(periodEndDate, 'MMM') : 'End'}</small>
+                    <strong>{periodEndDate ? format(periodEndDate, 'd') : '--'}</strong>
+                  </span>
+                  <select
+                    className="mte-period-calendar-select"
+                    aria-label="Timesheet period"
+                    value={activePeriod}
+                    onChange={(event) => {
+                      saveDraftSilentlyRef.current?.();
+                      setActivePeriod(event.target.value);
+                      setTimesheetStatus('draft');
+                    }}
+                  >
+                    {availablePeriods.map((period) => (
+                      <option key={period.value} value={period.value}>
+                        {period.shortLabel || period.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="mte-ghost-icon"
+                  aria-label="Next period"
+                  onClick={() => movePeriod(-1)}
+                  disabled={!canGoToNextPeriod}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
             </div>
-          )}
-        </div>
-      </div>
-
-      <div className="mte-action-toolbar">
-        <button type="button" className="mte-tool-button" onClick={handleSaveDraft} disabled={isReadOnly || loading}>
-          <Save size={18} />
-          <span>Save</span>
-        </button>
-        <button
-          type="button"
-          className="mte-tool-button"
-          onClick={handleDeleteTimesheet}
-          disabled={isReadOnly || loading}
-        >
-          <Trash2 size={18} />
-          <span>Delete</span>
-        </button>
-        <button type="button" className="mte-tool-button" onClick={() => {
-          hasLocalTimesheetEditsRef.current = true;
-          setRows((previous) => [...previous, {
-            ...createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet),
-          }]);
-        }}>
-          <Plus size={18} />
-          <span>Add New Row</span>
-        </button>
-        <button type="button" className="mte-tool-button">
-          <CircleHelp size={18} />
-          <span>Help</span>
-        </button>
-        <div className="mte-toolbar-summary">
-          <strong>{selectedPeriodOption?.label || 'Current period'}</strong>
-          <span>Total hours {getTotalHours()}h</span>
+          </div>
+          <div className="mte-primary-actions">
+            {canSubmit ? (
+              <button
+                type="button"
+                className="mte-submit-button"
+                onClick={handleSubmit}
+                disabled={errors.length > 0 || loading}
+              >
+                {loading ? 'Submitting' : 'Submit'}
+              </button>
+            ) : (
+              <div className="mte-status-inline">
+                <StatusBadge status={timesheetStatus} />
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2190,7 +2510,7 @@ function TimesheetPage({
           <strong>Charge Codes</strong>
           <span>Use your assigned codes and enter day-wise hours exactly as in the reference layout.</span>
         </div>
-        <StatusBadge status={timesheetStatus} />
+        {timesheetStatus !== 'draft' ? <StatusBadge status={timesheetStatus} /> : null}
       </div>
 
       <TimesheetGrid
@@ -2199,20 +2519,19 @@ function TimesheetPage({
         chargeCodes={chargeCodes}
         onRowUpdate={(id, u) => {
           hasLocalTimesheetEditsRef.current = true;
+          setSelectedRowId(id);
           setRows((p) => p.map((r) => r.id === id ? { ...r, ...u } : r));
-        }}
-        onRowAdd={() => {
-          hasLocalTimesheetEditsRef.current = true;
-          setRows((p) => [...p, createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet)]);
-        }}
-        onRowDelete={(id) => {
-          hasLocalTimesheetEditsRef.current = true;
-          setRows((p) => p.filter((r) => r.id !== id));
         }}
         readOnly={isReadOnly}
         approvedLeaves={approvedLeaves}
         holidays={holidays}
         assignmentMeta={assignmentMeta}
+        dailyOvertime={dailyOvertime}
+        holidayPayout={holidayPayout}
+        onAdjustmentChange={handleAdjustmentChange}
+        onLeaveCancel={handleCancelApprovedLeaveFromTimesheet}
+        selectedRowId={selectedRowId}
+        onRowSelect={setSelectedRowId}
       />
 
       <div className="mte-bottom-note">
@@ -2362,7 +2681,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
               <span style={{ margin: '0 8px', color: C.borderLight }}>|</span>
               Period: <strong style={{ color: C.text }}>{period}</strong>
               <span style={{ margin: '0 8px', color: C.borderLight }}>|</span>
-              Total: <strong style={{ color: C.purple }}>{grandTotal}h</strong>
+              Total: <strong style={{ color: C.purple }}>{formatTimesheetHoursWithSuffix(grandTotal)}</strong>
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
@@ -2439,7 +2758,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                   ))}
                   <td className="mte-sheet-meta-total">{assignmentMeta.assignedLocation}</td>
                 </tr>
-                <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+                <tr className="mte-sheet-meta-row">
                   <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
                     Company Code/Cost Center
                   </td>
@@ -2447,6 +2766,15 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                     <td key={`detail-cost-center-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.companyCostCenter}</td>
                   ))}
                   <td className="mte-sheet-meta-total">{assignmentMeta.companyCostCenter}</td>
+                </tr>
+                <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+                  <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
+                    Employee Id
+                  </td>
+                  {allDates.map((date) => (
+                    <td key={`detail-employee-id-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.employeeId}</td>
+                  ))}
+                  <td className="mte-sheet-meta-total">{assignmentMeta.employeeId}</td>
                 </tr>
                 {chargeCodeRows.length === 0 ? (
                   <tr>
@@ -2480,8 +2808,8 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                                 background: isHol ? '#fffbeb' : 'transparent',
                               }}>
                                 {entry && entry.hours > 0
-                                  ? <strong style={{ color: C.text }}>{entry.hours}h</strong>
-                                  : <span style={{ color: C.textMid }}>0</span>}
+                                  ? <strong style={{ color: C.text }}>{formatTimesheetHoursWithSuffix(entry.hours)}</strong>
+                                  : ''}
                               </td>
                             );
                           })}
@@ -2490,7 +2818,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                             background: C.totalBg, borderLeft: `1px solid ${C.border}`,
                             color: C.purple, fontSize: '13px',
                           }}>
-                            {rowTotal}h
+                            {formatTimesheetHoursWithSuffix(rowTotal)}
                           </td>
                         </tr>
                       );
@@ -2510,9 +2838,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                           fontWeight: '700', color: C.purple, fontSize: '13px',
                           borderLeft: `1px solid ${C.borderLight}`,
                         }}>
-                          {getDateTotal(date) > 0
-                            ? `${getDateTotal(date)}h`
-                            : <span style={{ color: C.textMid, fontWeight: '400' }}>0</span>}
+                          {formatTimesheetHoursWithSuffix(getDateTotal(date))}
                         </td>
                       ))}
                       <td style={{
@@ -2520,7 +2846,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                         background: C.purpleLight, color: C.purple, fontSize: '14px',
                         borderLeft: `1px solid ${C.totalBorder}`,
                       }}>
-                        {grandTotal}h
+                        {formatTimesheetHoursWithSuffix(grandTotal)}
                       </td>
                     </tr>
                   </>
@@ -2632,7 +2958,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
             Period: <strong style={{ color: C.text }}>{period}</strong>
           </span>
           <span style={{ fontSize: '13px', color: C.textMid }}>
-            Total: <strong style={{ color: C.purple }}>{grandTotal}h</strong>
+            Total: <strong style={{ color: C.purple }}>{formatTimesheetHoursWithSuffix(grandTotal)}</strong>
           </span>
           {showActionButtons && (
             <>
@@ -2728,7 +3054,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                     ))}
                     <td className="mte-sheet-meta-total">{assignmentMeta.assignedLocation}</td>
                   </tr>
-                  <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+                  <tr className="mte-sheet-meta-row">
                     <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
                       Company Code/Cost Center
                     </td>
@@ -2736,6 +3062,15 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                       <td key={`full-cost-center-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.companyCostCenter}</td>
                     ))}
                     <td className="mte-sheet-meta-total">{assignmentMeta.companyCostCenter}</td>
+                  </tr>
+                  <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
+                    <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
+                      Employee Id
+                    </td>
+                    {allDates.map((date) => (
+                      <td key={`full-employee-id-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.employeeId}</td>
+                    ))}
+                    <td className="mte-sheet-meta-total">{assignmentMeta.employeeId}</td>
                   </tr>
                   {chargeCodeRows.length === 0 ? (
                     <tr>
@@ -2768,8 +3103,8 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                                   background: isHol ? '#fffbeb' : 'transparent',
                                 }}>
                                   {entry && entry.hours > 0
-                                    ? <strong style={{ color: C.text }}>{entry.hours}h</strong>
-                                    : <span style={{ color: C.textMid }}>0</span>}
+                                    ? <strong style={{ color: C.text }}>{formatTimesheetHoursWithSuffix(entry.hours)}</strong>
+                                    : ''}
                                 </td>
                               );
                             })}
@@ -2778,7 +3113,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                               background: C.totalBg, borderLeft: `1px solid ${C.border}`,
                               color: C.purple, fontSize: '13px',
                             }}>
-                              {rowTotal}h
+                              {formatTimesheetHoursWithSuffix(rowTotal)}
                             </td>
                           </tr>
                         );
@@ -2790,13 +3125,11 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                         </td>
                         {allDates.map((date) => (
                           <td key={date} style={{ padding: '10px 4px', textAlign: 'center', fontWeight: '700', color: C.purple, fontSize: '13px', borderLeft: `1px solid ${C.borderLight}` }}>
-                            {getDateTotal(date) > 0
-                              ? `${getDateTotal(date)}h`
-                              : <span style={{ color: C.textMid, fontWeight: '400' }}>0</span>}
+                            {formatTimesheetHoursWithSuffix(getDateTotal(date))}
                           </td>
                         ))}
                         <td style={{ padding: '10px 10px', textAlign: 'center', fontWeight: '700', background: C.purpleLight, color: C.purple, fontSize: '14px', borderLeft: `1px solid ${C.totalBorder}` }}>
-                          {grandTotal}h
+                          {formatTimesheetHoursWithSuffix(grandTotal)}
                         </td>
                       </tr>
                     </>
@@ -3120,7 +3453,7 @@ function Approvals({ user }) {
                           <div style={{ fontSize: '12px', color: C.textMid }}>{a.employee_email}</div>
                         </td>
                         <td style={S.td}>{period}</td>
-                        <td style={S.tdRight}><strong>{a.total_hours || 0}h</strong></td>
+                        <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(a.total_hours)}</strong></td>
                         <td style={S.tdMid}>
                           {a.submitted_at ? format(new Date(a.submitted_at), 'MMM d, yyyy') : '—'}
                         </td>
@@ -3268,6 +3601,7 @@ function Approvals({ user }) {
 }
 
 // ─── History ──────────────────────────────────────────────────────────────────
+// eslint-disable-next-line no-unused-vars
 function History({ user, onNavigate }) {
   const { notify } = useTimesheetUi();
   const [searchQuery,      setSearchQuery]      = useState('');
@@ -3416,7 +3750,7 @@ function History({ user, onNavigate }) {
                     return (
                       <tr key={s._id || s.id} style={i % 2 === 0 ? S.trEven : S.trOdd}>
                         <td style={S.td}><strong>{period}</strong></td>
-                        <td style={S.td}><strong>{s.total_hours || 0}h</strong></td>
+                        <td style={S.td}><strong>{formatTimesheetHoursWithSuffix(s.total_hours)}</strong></td>
                         <td style={S.tdMid}>
                           {s.submitted_at ? format(new Date(s.submitted_at), 'MMM d, yyyy') : '—'}
                         </td>
@@ -3698,6 +4032,7 @@ function Reports({ user }) {
 }
 
 // ─── TeamTimesheets ───────────────────────────────────────────────────────────
+// eslint-disable-next-line no-unused-vars
 function TeamTimesheets({ user }) {
   const { notify, confirmAction, promptAction } = useTimesheetUi();
   const [timesheets,       setTimesheets]       = useState([]);
@@ -3914,7 +4249,7 @@ function TeamTimesheets({ user }) {
                           <div style={{ fontSize: '12px', color: C.textMid }}>{ts.employee_email}</div>
                         </td>
                         <td style={S.td}>{period}</td>
-                        <td style={S.tdRight}><strong>{ts.total_hours || 0}h</strong></td>
+                        <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(ts.total_hours)}</strong></td>
                         <td style={S.tdMid}>
                           {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
                         </td>
@@ -4172,7 +4507,7 @@ function AdminTimesheets() {
                     <div style={{ fontSize: '12px', color: C.textMid }}>{ts.reporting_lead_email || '—'}</div>
                   </td>
                   <td style={S.td}>{period}</td>
-                  <td style={S.tdRight}><strong>{ts.total_hours || 0}h</strong></td>
+                  <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(ts.total_hours)}</strong></td>
                   <td style={S.tdMid}>
                     {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
                   </td>
@@ -4481,7 +4816,7 @@ function AdminTimesheets() {
                         <div style={{ fontSize: '15px', fontWeight: '600', color: C.text }}>{group.label}</div>
                         <div style={{ fontSize: '12px', color: C.textMid }}>
                           {group.items.length} timesheet{group.items.length !== 1 ? 's' : ''} ·{' '}
-                          {group.items.reduce((sum, item) => sum + (item.total_hours || 0), 0)}h
+                          {formatTimesheetHoursWithSuffix(group.items.reduce((sum, item) => sum + (item.total_hours || 0), 0))}
                         </div>
                       </div>
                     </div>
@@ -4547,6 +4882,23 @@ function getChargeCodeGridRow(item = {}, index = 0) {
   };
 }
 
+function getEmployeeProjectNames(employee = {}) {
+  const projectNames = new Set();
+  if (Array.isArray(employee.projectNames)) {
+    employee.projectNames.forEach((name) => {
+      if (name) projectNames.add(String(name));
+    });
+  }
+  if (Array.isArray(employee.projects)) {
+    employee.projects.forEach((project) => {
+      const name = project?.projectName || project?.name || project?.title || project?.project_name;
+      if (name) projectNames.add(String(name));
+    });
+  }
+  if (employee.project) projectNames.add(String(employee.project));
+  return Array.from(projectNames);
+}
+
 function ChargeCodesWorkspace({ user, adminMode = false }) {
   const { notify } = useTimesheetUi();
   const userId = getUserId(user);
@@ -4566,6 +4918,8 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
   const [chargeCodeForm, setChargeCodeForm] = useState(emptyChargeCodeForm);
   const [filter, setFilter] = useState('All');
   const [selectedEmployees, setSelectedEmployees] = useState([]);
+  const [assignmentDepartment, setAssignmentDepartment] = useState('all');
+  const [assignmentProject, setAssignmentProject] = useState('all');
   const [loading, setLoading] = useState(false);
 
   const loadCodes = useCallback(() => {
@@ -4611,6 +4965,26 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     if (filter === 'Selected') return normalized.filter((row) => selectedRows.includes(row.id));
     return normalized;
   }, [codes, displayRows, filter, selectedRows]);
+  const departmentOptions = useMemo(
+    () => Array.from(new Set(employees.map((employee) => employee.department || 'Unassigned')))
+      .sort((first, second) => first.localeCompare(second)),
+    [employees]
+  );
+  const projectOptions = useMemo(
+    () => Array.from(new Set(employees.flatMap(getEmployeeProjectNames)))
+      .sort((first, second) => first.localeCompare(second)),
+    [employees]
+  );
+  const assignmentScopedEmployees = useMemo(
+    () => employees.filter((employee) => {
+      const department = employee.department || 'Unassigned';
+      const employeeProjects = getEmployeeProjectNames(employee);
+      const matchesDepartment = assignmentDepartment === 'all' || department === assignmentDepartment;
+      const matchesProject = assignmentProject === 'all' || employeeProjects.includes(assignmentProject);
+      return matchesDepartment && matchesProject;
+    }),
+    [assignmentDepartment, assignmentProject, employees]
+  );
   const chargeCodeStats = useMemo(() => {
     const normalized = codes.map(getChargeCodeGridRow);
     const owners = new Set(
@@ -4661,6 +5035,20 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
       if (!adminMode) writeChargeCodeDisplayPreferences(userId, next);
       return next;
     });
+  };
+  const addEmployeeSelection = (employeeIds = []) => {
+    const ids = employeeIds.filter(Boolean);
+    if (ids.length === 0) {
+      notify('No employees found for that selection.', 'warning');
+      return;
+    }
+    setSelectedEmployees((previous) => Array.from(new Set([...previous, ...ids])));
+  };
+  const selectAllEmployees = () => {
+    addEmployeeSelection(employees.map((employee) => employee._id));
+  };
+  const selectScopedEmployees = () => {
+    addEmployeeSelection(assignmentScopedEmployees.map((employee) => employee._id));
   };
 
   const handleAddCode = async () => {
@@ -4879,44 +5267,80 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
           </div>
 
           {adminMode ? (
-            <div className="mte-chargecodes-employee-pick">
-              <span>Assign to employee</span>
-              <ValueHelpSelect
-                value=""
-                onChange={(employeeId) => {
-                  if (!employeeId) return;
-                  setSelectedEmployees((previous) =>
-                    previous.includes(employeeId) ? previous : [...previous, employeeId]
-                  );
-                }}
-                placeholder={selectedEmployees.length ? `${selectedEmployees.length} employee(s) selected` : 'Select employee'}
-                searchPlaceholder="Search employees"
-                options={[
-                  { value: '', label: 'Select employee' },
-                  ...employees.map((employee) => ({
-                    value: employee._id,
-                    label: `${employee.name} - ${employee.email}`,
-                    description: employee.department || employee.employeeId,
-                  })),
-                ]}
-              />
+            <div className="mte-chargecodes-assignment-grid">
+              <div className="mte-chargecodes-employee-pick">
+                <span>Assign to employee</span>
+                <ValueHelpSelect
+                  value=""
+                  onChange={(employeeId) => {
+                    if (!employeeId) return;
+                    setSelectedEmployees((previous) =>
+                      previous.includes(employeeId) ? previous : [...previous, employeeId]
+                    );
+                  }}
+                  placeholder={selectedEmployees.length ? `${selectedEmployees.length} employee(s) selected` : 'Select employee'}
+                  searchPlaceholder="Search employees"
+                  options={[
+                    { value: '', label: 'Select employee' },
+                    ...employees.map((employee) => ({
+                      value: employee._id,
+                      label: `${employee.name} - ${employee.email}`,
+                      description: [employee.department, getEmployeeProjectNames(employee).join(', ') || employee.employeeId]
+                        .filter(Boolean)
+                        .join(' • '),
+                    })),
+                  ]}
+                />
+              </div>
+
+              <label className="mte-chargecodes-filter-field">
+                <span>Department</span>
+                <select value={assignmentDepartment} onChange={(event) => setAssignmentDepartment(event.target.value)}>
+                  <option value="all">All departments</option>
+                  {departmentOptions.map((department) => (
+                    <option key={department} value={department}>{department}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="mte-chargecodes-filter-field">
+                <span>Project</span>
+                <select value={assignmentProject} onChange={(event) => setAssignmentProject(event.target.value)}>
+                  <option value="all">All projects</option>
+                  {projectOptions.map((project) => (
+                    <option key={project} value={project}>{project}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="mte-chargecodes-filter-field mte-chargecodes-view-field">
+                <span>View</span>
+                <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+                  <option>All</option>
+                  <option>Displayed</option>
+                  <option>Selected</option>
+                </select>
+              </label>
             </div>
           ) : null}
 
           {adminMode ? (
-            <label className="mte-chargecodes-filter-field mte-chargecodes-view-field">
-              <span>View</span>
-              <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-                <option>All</option>
-                <option>Displayed</option>
-                <option>Selected</option>
-              </select>
-            </label>
+            <div className="mte-chargecodes-assignment-actions">
+              <button type="button" onClick={selectAllEmployees}>
+                <Users size={13} />
+                <span>Select All</span>
+              </button>
+              <button type="button" onClick={selectScopedEmployees}>
+                <Building2 size={13} />
+                <span>Select Group</span>
+              </button>
+              <span>{assignmentScopedEmployees.length} employee{assignmentScopedEmployees.length === 1 ? '' : 's'} match</span>
+            </div>
           ) : null}
 
           {selectedEmployees.length > 0 ? (
             <div className="mte-chargecodes-selected-employees">
-              {selectedEmployees.map((employeeId) => {
+              {selectedEmployees.slice(0, 8).map((employeeId) => {
                 const employee = employees.find((item) => item._id === employeeId);
                 return (
                   <button
@@ -4928,6 +5352,9 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                   </button>
                 );
               })}
+              {selectedEmployees.length > 8 ? (
+                <span className="mte-chargecodes-selected-count">+{selectedEmployees.length - 8} more</span>
+              ) : null}
             </div>
           ) : null}
 
@@ -4945,7 +5372,10 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
             <button type="button" onClick={() => {
               setChargeCodeForm(emptyChargeCodeForm);
               setSelectedRows([]);
+              setSelectedEmployees([]);
               setFilter('All');
+              setAssignmentDepartment('all');
+              setAssignmentProject('all');
             }}>
               <RefreshCw size={14} />
               <span>Reset</span>
@@ -5563,7 +5993,7 @@ function AssignmentAdmin({ user }) {
             <ul style={S.infoList}>
               {[
                 'These values are maintained by admin and are reused by employee and lead timesheet views.',
-                'New submissions snapshot the current assignment values onto the timesheet for approval history consistency.',
+                'Future submissions snapshot the current assignment values onto the timesheet for approval history consistency.',
                 'Employees with incomplete assignments will still save, but the timesheet UI will show missing metadata until completed.',
               ].map((item, index) => (
                 <li key={index} style={S.infoItem}>• {item}</li>
@@ -5606,21 +6036,34 @@ function ExpensesPanel({ user }) {
   const [form, setForm] = useState({
     expense_date: today,
     category: 'Travel',
+    client_code: '',
     amount: '',
     description: '',
     documentFile: null,
   });
   const [editingId, setEditingId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [expenseFilters, setExpenseFilters] = useState({
+    search: '',
+    department: 'all',
+    category: 'all',
+    clientCode: 'all',
+    document: 'all',
+    from: '',
+    to: '',
+  });
 
   const loadExpenses = useCallback(() => {
     if (!userId) return;
     setLoading(true);
-    fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`)
+    const endpoint = isAdmin
+      ? '/expenses?role=Admin'
+      : `/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`;
+    fetchAPI(endpoint)
       .then((data) => setExpenses(Array.isArray(data) ? data : []))
       .catch((err) => notify(`Failed to load expenses: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [notify, userId, user?.role]);
+  }, [isAdmin, notify, userId, user?.role]);
 
   useEffect(() => {
     loadExpenses();
@@ -5628,7 +6071,7 @@ function ExpensesPanel({ user }) {
 
   const resetForm = () => {
     setEditingId('');
-    setForm({ expense_date: today, category: 'Travel', amount: '', description: '', documentFile: null });
+    setForm({ expense_date: today, category: 'Travel', client_code: '', amount: '', description: '', documentFile: null });
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -5648,6 +6091,7 @@ function ExpensesPanel({ user }) {
         employee_id: userId,
         expense_date: form.expense_date,
         category: form.category,
+        client_code: form.client_code.trim(),
         amount: Number(form.amount),
         description: form.description,
       };
@@ -5677,6 +6121,7 @@ function ExpensesPanel({ user }) {
     setForm({
       expense_date: expense.expense_date || today,
       category: expense.category || 'Travel',
+      client_code: expense.client_code || '',
       amount: String(expense.amount || ''),
       description: expense.description || '',
       documentFile: null,
@@ -5705,92 +6150,299 @@ function ExpensesPanel({ user }) {
     }
   };
 
+  const expenseDepartmentOptions = useMemo(
+    () => Array.from(new Set(expenses.map((expense) => expense.employee_department || 'Unassigned')))
+      .sort((first, second) => first.localeCompare(second)),
+    [expenses]
+  );
+  const expenseCategoryOptions = useMemo(
+    () => Array.from(new Set(expenses.map((expense) => expense.category).filter(Boolean)))
+      .sort((first, second) => first.localeCompare(second)),
+    [expenses]
+  );
+  const expenseClientCodeOptions = useMemo(
+    () => Array.from(new Set(expenses.map((expense) => expense.client_code || 'Unassigned')))
+      .sort((first, second) => first.localeCompare(second)),
+    [expenses]
+  );
+  const expenseSearchSuggestions = useMemo(
+    () => uniqSuggestions(expenses, [
+      'employee_name',
+      'employee_email',
+      'employee_department',
+      'client_code',
+      'category',
+      'description',
+    ]),
+    [expenses]
+  );
+  const visibleExpenses = useMemo(() => {
+    if (!isAdmin) return expenses;
+    const query = expenseFilters.search.trim().toLowerCase();
+    return expenses.filter((expense) => {
+      const matchesSearch = !query || [
+        expense.employee_name,
+        expense.employee_email,
+        expense.employee_department,
+        expense.client_code,
+        expense.category,
+        expense.description,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+      const matchesDepartment = expenseFilters.department === 'all'
+        || (expense.employee_department || 'Unassigned') === expenseFilters.department;
+      const matchesCategory = expenseFilters.category === 'all'
+        || expense.category === expenseFilters.category;
+      const matchesClientCode = expenseFilters.clientCode === 'all'
+        || (expense.client_code || 'Unassigned') === expenseFilters.clientCode;
+      const matchesDocument = expenseFilters.document === 'all'
+        || (expenseFilters.document === 'with' && expense.document?.url)
+        || (expenseFilters.document === 'without' && !expense.document?.url);
+      const matchesFrom = !expenseFilters.from || !expense.expense_date || expense.expense_date >= expenseFilters.from;
+      const matchesTo = !expenseFilters.to || !expense.expense_date || expense.expense_date <= expenseFilters.to;
+      return matchesSearch && matchesDepartment && matchesCategory && matchesClientCode && matchesDocument && matchesFrom && matchesTo;
+    });
+  }, [expenseFilters, expenses, isAdmin]);
+  const activeExpenseFilterCount = isAdmin
+    ? [
+        expenseFilters.search.trim(),
+        expenseFilters.department !== 'all',
+        expenseFilters.category !== 'all',
+        expenseFilters.clientCode !== 'all',
+        expenseFilters.document !== 'all',
+        expenseFilters.from,
+        expenseFilters.to,
+      ].filter(Boolean).length
+    : 0;
+  const resetExpenseFilters = () => {
+    setExpenseFilters({ search: '', department: 'all', category: 'all', clientCode: 'all', document: 'all', from: '', to: '' });
+  };
+  const totalExpenseAmount = visibleExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+  const attachedDocumentCount = visibleExpenses.filter((expense) => expense.document?.url).length;
+  const expenseTableColSpan = isAdmin ? 8 : 7;
+
   return (
-    <div className="mte-module-card">
-      <div className="mte-module-toolbar">
-        <button
-          type="button"
-          className="mte-select-shell"
-          onClick={handleSaveExpense}
-          disabled={loading}
-        >
-          <span>{editingId ? 'Edit Expense' : 'Add Expense'}</span>
-          <ChevronRight size={14} />
-        </button>
-        <button type="button" className="mte-icon-text-button" onClick={resetForm}>
-          <LayoutGrid size={16} />
-          <span>Clear</span>
-        </button>
+    <div className="mte-module-card mte-expense-shell">
+      <div className="mte-expense-summary-grid">
+        <article>
+          <span>Total claims</span>
+          <strong>{expenses.length}</strong>
+        </article>
+        <article>
+          <span>Total amount</span>
+          <strong>{totalExpenseAmount.toFixed(2)}</strong>
+        </article>
+        <article>
+          <span>Documents</span>
+          <strong>{attachedDocumentCount}</strong>
+        </article>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '16px' }}>
-        <input
-          className="input"
-          type="date"
-          value={form.expense_date}
-          onChange={(event) => setForm({ ...form, expense_date: event.target.value })}
-        />
-        <select
-          className="input"
-          value={form.category}
-          onChange={(event) => setForm({ ...form, category: event.target.value })}
-        >
-          {expenseCategories.map((category) => <option key={category}>{category}</option>)}
-        </select>
-        <input
-          className="input"
-          type="number"
-          min="0"
-          step="0.01"
-          placeholder="Amount"
-          value={form.amount}
-          onChange={(event) => setForm({ ...form, amount: event.target.value })}
-        />
-        <input
-          className="input"
-          placeholder="Description"
-          value={form.description}
-          onChange={(event) => setForm({ ...form, description: event.target.value })}
-        />
-        <div className="mte-expense-upload">
-          <button
-            type="button"
-            className="mte-icon-text-button"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Upload size={16} />
-            <span>{form.documentFile ? 'Change Document' : 'Upload Document'}</span>
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.gif,.webp,.ppt,.pptx,.zip,.msg,.eml"
-            onChange={(event) => setForm({ ...form, documentFile: event.target.files?.[0] || null })}
-          />
-          {form.documentFile ? <span title={form.documentFile.name}>{form.documentFile.name}</span> : null}
-        </div>
-        <button type="button" className="mte-submit-button" onClick={handleSaveExpense} disabled={loading}>
-          <Save size={16} />
-          <span>{editingId ? 'Update Expense' : 'Save Expense'}</span>
-        </button>
-      </div>
+
+      {isAdmin ? (
+        <section className="mte-expense-form-panel mte-expense-filter-card">
+          <div className="mte-module-card-header">
+            <div>
+              <h3>Expense Review Filters</h3>
+              <p>{visibleExpenses.length} of {expenses.length} claims{activeExpenseFilterCount ? ` with ${activeExpenseFilterCount} filter${activeExpenseFilterCount === 1 ? '' : 's'}` : ''}</p>
+            </div>
+            <button type="button" className="mte-icon-text-button" onClick={loadExpenses}>
+              <RefreshCw size={16} />
+              <span>Refresh</span>
+            </button>
+          </div>
+          <div className="mte-expense-filter-grid">
+            <label className="mte-expense-filter-field mte-expense-filter-search">
+              <span>Search</span>
+              <ValueHelpSearch
+                value={expenseFilters.search}
+                onChange={(value) => setExpenseFilters((previous) => ({ ...previous, search: value }))}
+                suggestions={expenseSearchSuggestions}
+                placeholder="Employee, email, department, client code, or category"
+              />
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>Department</span>
+              <select
+                value={expenseFilters.department}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, department: event.target.value }))}
+              >
+                <option value="all">All departments</option>
+                {expenseDepartmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
+              </select>
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>Category</span>
+              <select
+                value={expenseFilters.category}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, category: event.target.value }))}
+              >
+                <option value="all">All categories</option>
+                {expenseCategoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>Client / Charge Code</span>
+              <select
+                value={expenseFilters.clientCode}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, clientCode: event.target.value }))}
+              >
+                <option value="all">All client codes</option>
+                {expenseClientCodeOptions.map((clientCode) => <option key={clientCode} value={clientCode}>{clientCode}</option>)}
+              </select>
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>Document</span>
+              <select
+                value={expenseFilters.document}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, document: event.target.value }))}
+              >
+                <option value="all">All documents</option>
+                <option value="with">With document</option>
+                <option value="without">Without document</option>
+              </select>
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>From</span>
+              <input
+                type="date"
+                value={expenseFilters.from}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, from: event.target.value }))}
+              />
+            </label>
+            <label className="mte-expense-filter-field">
+              <span>To</span>
+              <input
+                type="date"
+                value={expenseFilters.to}
+                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, to: event.target.value }))}
+              />
+            </label>
+            <div className="mte-expense-filter-actions">
+              <button type="button" onClick={resetExpenseFilters}>
+                <RefreshCw size={14} />
+                <span>Reset</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <section className="mte-expense-form-panel">
+          <div className="mte-module-card-header">
+            <div>
+              <h3>{editingId ? 'Edit Expense' : 'Add Expense'}</h3>
+            </div>
+            <button type="button" className="mte-icon-text-button" onClick={resetForm}>
+              <LayoutGrid size={16} />
+              <span>Clear</span>
+            </button>
+          </div>
+          <div className="mte-expense-form-grid">
+            <label>
+              <span>Date</span>
+              <input
+                className="input"
+                type="date"
+                value={form.expense_date}
+                onChange={(event) => setForm({ ...form, expense_date: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Category</span>
+              <select
+                className="input"
+                value={form.category}
+                onChange={(event) => setForm({ ...form, category: event.target.value })}
+              >
+                {expenseCategories.map((category) => <option key={category}>{category}</option>)}
+              </select>
+            </label>
+            <label>
+              <span>Client / Charge Code</span>
+              <input
+                className="input"
+                placeholder="Client or charge code"
+                value={form.client_code}
+                onChange={(event) => setForm({ ...form, client_code: event.target.value })}
+              />
+            </label>
+            <label>
+              <span>Amount</span>
+              <input
+                className="input"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Amount"
+                value={form.amount}
+                onChange={(event) => setForm({ ...form, amount: event.target.value })}
+              />
+            </label>
+            <label className="mte-expense-description-field">
+              <span>Description</span>
+              <input
+                className="input"
+                placeholder="Description"
+                value={form.description}
+                onChange={(event) => setForm({ ...form, description: event.target.value })}
+              />
+            </label>
+            <div className="mte-expense-upload-field">
+              <span>Document</span>
+              <div className="mte-expense-upload">
+                <button
+                  type="button"
+                  className="mte-icon-text-button"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload size={16} />
+                  <span>{form.documentFile ? 'Change Document' : 'Upload Document'}</span>
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.gif,.webp,.ppt,.pptx,.zip,.msg,.eml"
+                  onChange={(event) => setForm({ ...form, documentFile: event.target.files?.[0] || null })}
+                />
+                {form.documentFile ? <span title={form.documentFile.name}>{form.documentFile.name}</span> : null}
+              </div>
+            </div>
+            <button type="button" className="mte-submit-button mte-expense-save-button" onClick={handleSaveExpense} disabled={loading}>
+              <Save size={16} />
+              <span>{editingId ? 'Update Expense' : 'Save Expense'}</span>
+            </button>
+          </div>
+        </section>
+      )}
       <div className="mte-simple-table-wrap">
         <table className="mte-simple-table">
           <thead>
             <tr>
-              {['Date', ...(isAdmin ? ['Employee'] : []), 'Category', 'Description', 'Amount', 'Document', 'Action'].map((header) => (
+              {[
+                'Date',
+                ...(isAdmin ? ['Employee', 'Department'] : []),
+                'Client / Charge Code',
+                'Category',
+                'Description',
+                'Amount',
+                'Document',
+                ...(isAdmin ? [] : ['Action']),
+              ].map((header) => (
                 <th key={header}>{header}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {loading && expenses.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 7 : 6}>Loading expenses...</td></tr>
-            ) : expenses.length === 0 ? (
-              <tr><td colSpan={isAdmin ? 7 : 6}>No expenses added yet.</td></tr>
-            ) : expenses.map((expense) => (
+            {loading && visibleExpenses.length === 0 ? (
+              <tr><td colSpan={expenseTableColSpan}>Loading expenses...</td></tr>
+            ) : visibleExpenses.length === 0 ? (
+              <tr><td colSpan={expenseTableColSpan}>{isAdmin ? 'No expense claims match the current filters.' : 'No expenses added yet.'}</td></tr>
+            ) : visibleExpenses.map((expense) => (
               <tr key={expense._id}>
                 <td>{expense.expense_date}</td>
                 {isAdmin ? <td>{expense.employee_name || 'Employee'}</td> : null}
+                {isAdmin ? <td>{expense.employee_department || 'Unassigned'}</td> : null}
+                <td>{expense.client_code || '-'}</td>
                 <td>{expense.category}</td>
                 <td>{expense.description || '-'}</td>
                 <td>{Number(expense.amount || 0).toFixed(2)}</td>
@@ -5807,14 +6459,16 @@ function ExpensesPanel({ user }) {
                     </span>
                   ) : '-'}
                 </td>
-                <td>
-                  <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense">
-                    <FileText size={14} />
-                  </button>
-                  <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense">
-                    <Trash2 size={14} />
-                  </button>
-                </td>
+                {!isAdmin ? (
+                  <td>
+                    <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense">
+                      <FileText size={14} />
+                    </button>
+                    <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense">
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>
@@ -5900,6 +6554,7 @@ function LocationsPanel({
 
     const nextDailyLocations = dates.reduce((acc, day) => {
       const key = format(day, 'yyyy-MM-dd');
+      if (isWeekendDate(key)) return acc;
       acc[key] = dailyLocations[key] || locationOne;
       return acc;
     }, {});
@@ -5942,7 +6597,9 @@ function LocationsPanel({
     }
     const targetDates = selectedDates.length
       ? selectedDates
-      : dates.map((day) => format(day, 'yyyy-MM-dd'));
+      : dates
+        .map((day) => format(day, 'yyyy-MM-dd'))
+        .filter((dateKey) => !isWeekendDate(dateKey));
     const nextDailyLocations = {
       ...dailyLocations,
       ...targetDates.reduce((acc, dateKey) => {
@@ -5955,6 +6612,7 @@ function LocationsPanel({
   };
 
   const toggleSelectedDate = (dateKey) => {
+    if (isWeekendDate(dateKey)) return;
     setSelectedDates((previous) => (
       previous.includes(dateKey)
         ? previous.filter((item) => item !== dateKey)
@@ -5983,7 +6641,7 @@ function LocationsPanel({
             setLocationOne('');
             setLocationTwo('');
           }}>
-            New
+            Draft
           </button>
           <button type="button" className="is-primary" onClick={() => persistLocations({ submit: true })} disabled={loading}>
             Submit
@@ -6069,15 +6727,17 @@ function LocationsPanel({
             {dates.map((day) => {
               const key = format(day, 'yyyy-MM-dd');
               const isSelected = selectedDates.includes(key);
+              const isWeekend = isWeekendDate(key);
               return (
-                <article key={key} className={isSelected ? 'is-selected' : ''}>
-                  <button type="button" onClick={() => toggleSelectedDate(key)}>
+                <article key={key} className={`${isSelected ? 'is-selected' : ''} ${isWeekend ? 'is-weekend' : ''}`.trim()}>
+                  <button type="button" onClick={() => toggleSelectedDate(key)} disabled={isWeekend}>
                     <span>{format(day, 'EEE')}</span>
                     <strong>{format(day, 'dd MMM')}</strong>
                   </button>
                   <select
-                    value={dailyLocations[key] || assignmentMeta.workLocation || ''}
+                    value={isWeekend ? '' : dailyLocations[key] || assignmentMeta.workLocation || ''}
                     onChange={(event) => updateDailyLocation(key, event.target.value)}
+                    disabled={isWeekend}
                   >
                     <option value="">Select location</option>
                     {locationOptions.map((option) => <option key={option}>{option}</option>)}
@@ -6342,8 +7002,7 @@ function PortalTimeWorkspace({
       ? [{ key: 'all', label: 'All Timesheets' }]
       : [
           { key: 'entry', label: 'My Timesheet' },
-          ...(hasTeamScope ? [{ key: 'approvals', label: 'Approvals' }, { key: 'team', label: 'Team History' }] : []),
-          { key: 'history', label: 'Past Timesheets' },
+          ...(hasTeamScope ? [{ key: 'approvals', label: 'Approvals' }] : []),
         ]
   ), [hasTeamScope, isAdmin]);
 
@@ -6378,8 +7037,6 @@ function PortalTimeWorkspace({
         />
       ) : null}
       {activeView === 'approvals' ? <Approvals user={user} /> : null}
-      {activeView === 'team' ? <TeamTimesheets user={user} /> : null}
-      {activeView === 'history' ? <History user={user} onNavigate={() => setActiveView('entry')} /> : null}
       {activeView === 'all' ? <AdminTimesheets user={user} /> : null}
     </div>
   );
@@ -6412,6 +7069,13 @@ function getEffectiveSummaryEntries(entries = []) {
     usedWorkByDate[date] = (usedWorkByDate[date] || 0) + adjustedHours;
     return { ...entry, hours: adjustedHours };
   });
+}
+
+const normalizeSummaryCode = (value) => String(value || '').trim().toLowerCase();
+
+function formatClientCodeList(values = []) {
+  const uniqueValues = Array.from(new Set(values.filter(Boolean).map(String)));
+  return uniqueValues.length ? uniqueValues.sort((first, second) => first.localeCompare(second)).join(', ') : '-';
 }
 
 function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSnapshot }) {
@@ -6517,6 +7181,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
   }).length;
   const workSchedule = weekdayCount * DAILY_WORK_HOUR_LIMIT;
   const standardAvailable = Math.max(workSchedule - weekdayAbsenceHours, 0);
+  const totalWorkingHours = workHours + weekdayAbsenceHours;
   const overtime = weekendWorkHours + Math.max(weekdayWorkHours - standardAvailable, 0);
   const availablePercent = standardAvailable ? Math.round((workHours / standardAvailable) * 100) : 0;
   const assignmentMeta = getTimesheetAssignmentMeta({ ...profile, ...summaryTimesheet });
@@ -6525,34 +7190,72 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 
   const chargeRows = useMemo(() => {
     const grouped = {};
-    entries.forEach((entry) => {
-      const meta = getTimesheetEntryChargeCodeMeta(entry);
-      const key = meta.code || entry.charge_code_id || entry.charge_code || 'Unassigned';
+    const codeToKey = {};
+    const ensureRow = (key, label, code = '') => {
       if (!grouped[key]) {
         grouped[key] = {
-          label: meta.code ? `${meta.name || 'Charge Code'} (${meta.code})` : (meta.name || 'Charge Code'),
+          key,
+          label,
+          code,
+          clientCodes: [],
+          clientCode: '-',
           hours: 0,
           expenses: 0,
           absence: 0,
         };
       }
+      if (code) codeToKey[normalizeSummaryCode(code)] = key;
+      codeToKey[normalizeSummaryCode(label)] = key;
+      return grouped[key];
+    };
+
+    entries.forEach((entry) => {
+      const meta = getTimesheetEntryChargeCodeMeta(entry);
+      const key = meta.code || entry.charge_code_id || entry.charge_code || 'Unassigned';
+      const row = ensureRow(
+        key,
+        meta.code ? `${meta.name || 'Charge Code'} (${meta.code})` : (meta.name || 'Charge Code'),
+        meta.code || entry.charge_code || ''
+      );
       if ((entry.entry_type || 'work') === 'work') {
-        grouped[key].hours += Number(entry.hours || 0);
+        row.hours += Number(entry.hours || 0);
       } else if (['leave', 'holiday'].includes(entry.entry_type)) {
-        grouped[key].absence += Number(entry.hours || 0);
+        row.absence += Number(entry.hours || 0);
       }
     });
-    return Object.values(grouped);
-  }, [entries]);
 
-  const summaryRows = useMemo(() => [
-    ...chargeRows,
-    { label: 'Total', hours: workHours, expenses: expenseTotal, absence: absenceHours, isTotal: true },
-    { label: 'Work Schedule', hours: workSchedule, expenses: '', absence: '', isMeta: true },
-    { label: 'Overtime', hours: overtime || '', expenses: '', absence: '', isMeta: true },
-    { label: 'Standard Available Hours', hours: standardAvailable || '', expenses: '', absence: '', isMeta: true },
-    { label: 'Percentage of Standard Available Hours', hours: standardAvailable ? `${availablePercent}%` : '', expenses: '', absence: '', isMeta: true },
-  ], [absenceHours, availablePercent, chargeRows, expenseTotal, overtime, standardAvailable, workHours, workSchedule]);
+    expenses.forEach((expense, index) => {
+      const clientCode = String(expense.client_code || '').trim();
+      const normalizedClientCode = normalizeSummaryCode(clientCode);
+      const matchedKey = normalizedClientCode ? codeToKey[normalizedClientCode] : '';
+      const key = matchedKey || clientCode || `expense-${expense._id || index}`;
+      const row = ensureRow(
+        key,
+        clientCode ? `Expense (${clientCode})` : 'Expense (Unassigned)',
+        clientCode
+      );
+      row.expenses += Number(expense.amount || 0);
+      if (clientCode) row.clientCodes.push(clientCode);
+    });
+
+    return Object.values(grouped).map((row) => ({
+      ...row,
+      clientCode: formatClientCodeList(row.clientCodes),
+      clientCodes: Array.from(new Set(row.clientCodes)),
+    }));
+  }, [entries, expenses]);
+
+  const summaryRows = useMemo(() => {
+    const clientCodeSummary = formatClientCodeList(chargeRows.flatMap((row) => row.clientCodes || []));
+    return [
+      ...chargeRows,
+      { label: 'Total', clientCode: clientCodeSummary, hours: totalWorkingHours, expenses: expenseTotal, absence: absenceHours, isTotal: true },
+      { label: 'Work Schedule', clientCode: '', hours: workSchedule, expenses: '', absence: '', isMeta: true },
+      { label: 'Overtime', clientCode: '', hours: overtime || '', expenses: '', absence: '', isMeta: true },
+      { label: 'Standard Available Hours', clientCode: '', hours: standardAvailable || '', expenses: '', absence: '', isMeta: true },
+      { label: 'Percentage of Standard Available Hours', clientCode: '', hours: standardAvailable ? `${availablePercent}%` : '', expenses: '', absence: '', isMeta: true },
+    ];
+  }, [absenceHours, availablePercent, chargeRows, expenseTotal, overtime, standardAvailable, totalWorkingHours, workSchedule]);
 
   const leaveBalance = profile.leaveBalance || {};
   const earnedLeave = Number(leaveBalance.earned ?? leaveBalance.earnedLeave ?? 0);
@@ -6574,6 +7277,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           employee: item.employee_name || 'Employee',
           email: item.employee_email || '',
           department: item.employee_department || 'Unassigned',
+          clientCodes: new Set(),
           hours: 0,
           expenses: 0,
           documents: [],
@@ -6588,15 +7292,23 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           employee: expense.employee_name || 'Employee',
           email: expense.employee_email || '',
           department: expense.employee_department || 'Unassigned',
+          clientCodes: new Set(),
           hours: 0,
           expenses: 0,
           documents: [],
         };
       }
       grouped[key].expenses += Number(expense.amount || 0);
+      if (expense.client_code) grouped[key].clientCodes.add(String(expense.client_code));
       if (expense.document?.url) grouped[key].documents.push(expense.document);
     });
-    return Object.values(grouped).sort((a, b) => a.employee.localeCompare(b.employee));
+    return Object.values(grouped)
+      .map((row) => ({
+        ...row,
+        clientCodes: Array.from(row.clientCodes),
+        clientCodesText: formatClientCodeList(Array.from(row.clientCodes)),
+      }))
+      .sort((a, b) => a.employee.localeCompare(b.employee));
   }, [allTimesheets, expenses, isAdmin]);
   const summaryDepartmentOptions = useMemo(
     () => Array.from(new Set(adminEmployeeRows.map((row) => row.department || 'Unassigned')))
@@ -6608,7 +7320,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     if (!isAdmin) return [];
     return adminEmployeeRows.filter((row) => {
       const matchesSearch = !summarySearch
-        || [row.employee, row.email, row.department]
+        || [row.employee, row.email, row.department, row.clientCodesText]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(summarySearch));
       const matchesDepartment = summaryFilters.department === 'all'
@@ -6626,19 +7338,28 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     const grouped = {};
     filteredAdminEmployeeRows.forEach((row) => {
       const key = row.department || 'Unassigned';
-      if (!grouped[key]) grouped[key] = { department: key, employees: 0, hours: 0, expenses: 0, documents: [] };
+      if (!grouped[key]) grouped[key] = { department: key, employees: 0, clientCodes: new Set(), hours: 0, expenses: 0, documents: [] };
       grouped[key].employees += 1;
+      row.clientCodes.forEach((clientCode) => grouped[key].clientCodes.add(clientCode));
       grouped[key].hours += row.hours;
       grouped[key].expenses += row.expenses;
       grouped[key].documents.push(...row.documents);
     });
-    return Object.values(grouped).sort((a, b) => a.department.localeCompare(b.department));
+    return Object.values(grouped)
+      .map((row) => ({
+        ...row,
+        clientCodes: Array.from(row.clientCodes),
+        clientCodesText: formatClientCodeList(Array.from(row.clientCodes)),
+      }))
+      .sort((a, b) => a.department.localeCompare(b.department));
   }, [filteredAdminEmployeeRows, isAdmin]);
   const filteredSummaryRows = useMemo(() => {
     if (isAdmin) return [];
     return summaryRows.filter((row) => {
       if (!summarySearch) return true;
-      return String(row.label || '').toLowerCase().includes(summarySearch);
+      return [row.label, row.clientCode]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(summarySearch));
     });
   }, [isAdmin, summaryRows, summarySearch]);
   const resetSummaryFilters = () => {
@@ -6648,30 +7369,33 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     const rowsForExport = isAdmin
       ? [
           buildCsvRow(['Employee Wise Summary']),
-          buildCsvRow(['Employee', 'Email', 'Department', 'Hours', 'Expenses', 'Documents']),
+          buildCsvRow(['Employee', 'Email', 'Department', 'Client Codes', 'Hours', 'Expenses', 'Documents']),
           ...filteredAdminEmployeeRows.map((row) => buildCsvRow([
             row.employee,
             row.email || '',
             row.department,
+            row.clientCodesText,
             row.hours.toFixed(2),
             row.expenses.toFixed(2),
             row.documents.map((document) => document.name || document.url || 'Document').join('; '),
           ])),
           buildCsvRow([]),
           buildCsvRow(['Department Wise Summary']),
-          buildCsvRow(['Department', 'Employees', 'Hours', 'Expenses', 'Documents']),
+          buildCsvRow(['Department', 'Employees', 'Client Codes', 'Hours', 'Expenses', 'Documents']),
           ...adminDepartmentRows.map((row) => buildCsvRow([
             row.department,
             row.employees,
+            row.clientCodesText,
             row.hours.toFixed(2),
             row.expenses.toFixed(2),
             row.documents.map((document) => document.name || document.url || 'Document').join('; '),
           ])),
         ]
       : [
-          buildCsvRow(['Charge Code', 'Hours', 'Expenses', 'Chargeable', 'Absences']),
+          buildCsvRow(['Charge Code', 'Client Code', 'Hours', 'Expenses', 'Chargeable', 'Absences']),
           ...filteredSummaryRows.map((row) => buildCsvRow([
             row.label,
+            row.clientCode || '',
             summaryCell(row.hours),
             summaryCell(row.expenses, 2),
             !row.isMeta ? summaryCell(row.hours) : '',
@@ -6692,7 +7416,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
       <div className="mte-summary-filter-head">
         <div>
           <h3>Summary Filters</h3>
-          <p>{isAdmin ? 'Find employees by name, email, department, or records with hours, expenses, and documents.' : 'Find summary rows by charge code or category name.'}</p>
+          <p>{isAdmin ? 'Find employees by name, email, department, client code, or records with hours, expenses, and documents.' : 'Find summary rows by charge code, client code, or category name.'}</p>
         </div>
         <div className="mte-summary-filter-actions">
           <button type="button" onClick={resetSummaryFilters}>
@@ -6711,7 +7435,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           <input
             value={summaryFilters.search}
             onChange={(event) => setSummaryFilters((previous) => ({ ...previous, search: event.target.value }))}
-            placeholder={isAdmin ? 'Employee, email, or department' : 'Charge code or summary row'}
+            placeholder={isAdmin ? 'Employee, email, department, or client code' : 'Charge code, client code, or summary row'}
           />
         </label>
         {isAdmin ? (
@@ -6760,19 +7484,20 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
             <table className="mte-simple-table">
               <thead>
                 <tr>
-                  {['Employee', 'Email', 'Department', 'Hours', 'Expenses', 'Documents'].map((header) => <th key={header}>{header}</th>)}
+                  {['Employee', 'Email', 'Department', 'Client Codes', 'Hours', 'Expenses', 'Documents'].map((header) => <th key={header}>{header}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {loading ? (
-                  <tr><td colSpan={6}>Loading summary...</td></tr>
+                  <tr><td colSpan={7}>Loading summary...</td></tr>
                 ) : filteredAdminEmployeeRows.length === 0 ? (
-                  <tr><td colSpan={6}>No employee data found for this period.</td></tr>
+                  <tr><td colSpan={7}>No employee data found for this period.</td></tr>
                 ) : filteredAdminEmployeeRows.map((row) => (
                   <tr key={`${row.employee}-${row.email}`}>
                     <td title={row.employee}>{row.employee}</td>
                     <td title={row.email || '-'}>{row.email || '-'}</td>
                     <td title={row.department}>{row.department}</td>
+                    <td title={row.clientCodesText}>{row.clientCodesText}</td>
                     <td>{row.hours.toFixed(2)}</td>
                     <td>{row.expenses.toFixed(2)}</td>
                     <td>
@@ -6798,16 +7523,17 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
             <table className="mte-simple-table">
               <thead>
                 <tr>
-                  {['Department', 'Employees', 'Hours', 'Expenses', 'Documents'].map((header) => <th key={header}>{header}</th>)}
+                  {['Department', 'Employees', 'Client Codes', 'Hours', 'Expenses', 'Documents'].map((header) => <th key={header}>{header}</th>)}
                 </tr>
               </thead>
               <tbody>
                 {adminDepartmentRows.length === 0 ? (
-                  <tr><td colSpan={5}>No department data found for this period.</td></tr>
+                  <tr><td colSpan={6}>No department data found for this period.</td></tr>
                 ) : adminDepartmentRows.map((row) => (
                   <tr key={row.department}>
                     <td title={row.department}>{row.department}</td>
                     <td>{row.employees}</td>
+                    <td title={row.clientCodesText}>{row.clientCodesText}</td>
                     <td>{row.hours.toFixed(2)}</td>
                     <td>{row.expenses.toFixed(2)}</td>
                     <td>
@@ -6835,6 +7561,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
         <table className="mte-summary-table">
           <colgroup>
             <col className="mte-summary-charge-col" />
+            <col className="mte-summary-client-col" />
             {Array.from({ length: 10 }).map((_, index) => (
               <col key={`summary-metric-col-${index}`} className="mte-summary-metric-col" />
             ))}
@@ -6842,6 +7569,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           <thead>
             <tr>
               <th rowSpan={2}>Charge Code</th>
+              <th rowSpan={2}>Client Code</th>
               <th colSpan={2}>Current Time Report <span>i</span></th>
               <th colSpan={6}>Projected Productivity Metrics <span>i</span></th>
               <th colSpan={2}>Adjustments <span>i</span></th>
@@ -6861,12 +7589,13 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           </thead>
           <tbody>
             {loading && !summaryTimesheet ? (
-              <tr><td colSpan={11}>Loading summary...</td></tr>
+              <tr><td colSpan={12}>Loading summary...</td></tr>
             ) : filteredSummaryRows.length === 0 ? (
-              <tr><td colSpan={11}>No summary rows match the current filters.</td></tr>
+              <tr><td colSpan={12}>No summary rows match the current filters.</td></tr>
             ) : filteredSummaryRows.map((row) => (
-              <tr key={row.label} className={row.isTotal || row.isMeta ? 'is-summary-row' : ''}>
+              <tr key={`${row.key || row.label}-${row.clientCode || ''}`} className={row.isTotal || row.isMeta ? 'is-summary-row' : ''}>
                 <td title={row.label}>{row.label}</td>
+                <td title={row.clientCode || '-'}>{row.clientCode || '-'}</td>
                 <td>{summaryCell(row.hours)}</td>
                 <td>{summaryCell(row.expenses, 2)}</td>
                 <td>{!row.isMeta ? summaryCell(row.hours) : ''}</td>

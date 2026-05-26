@@ -11,6 +11,7 @@ function normalizeOption(option) {
     value: String(option.value ?? ""),
     label: option.label ?? String(option.value ?? ""),
     description: option.description,
+    meta: option.meta,
   };
 }
 
@@ -23,6 +24,8 @@ export default function ValueHelpSelect({
   className = "",
   disabled = false,
   style,
+  popoverClassName = "",
+  tableHeaders = [],
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -33,14 +36,21 @@ export default function ValueHelpSelect({
   const [popoverStyle, setPopoverStyle] = useState({});
 
   const normalizedOptions = useMemo(() => options.map(normalizeOption), [options]);
-  const selected = normalizedOptions.find((option) => option.value === String(value ?? ""));
+  const selected = String(value ?? "")
+    ? normalizedOptions.find((option) => option.value === String(value ?? ""))
+    : null;
 
   const filteredOptions = useMemo(() => {
     const nextQuery = query.trim().toLowerCase();
     if (!nextQuery) return normalizedOptions;
 
     return normalizedOptions.filter((option) =>
-      [option.label, option.description, option.value]
+      [
+        option.label,
+        option.description,
+        option.value,
+        ...(option.meta ? Object.values(option.meta) : []),
+      ]
         .filter(Boolean)
         .some((part) => String(part).toLowerCase().includes(nextQuery))
     );
@@ -54,7 +64,8 @@ export default function ValueHelpSelect({
       if (!rect) return;
 
       const viewportWidth = window.innerWidth;
-      const preferredWidth = Math.max(rect.width, Math.min(360, viewportWidth - 24));
+      const targetWidth = tableHeaders.length ? 640 : 360;
+      const preferredWidth = Math.max(rect.width, Math.min(targetWidth, viewportWidth - 24));
       const maxWidth = viewportWidth - 24;
       const width = Math.min(preferredWidth, maxWidth);
       const left = Math.max(12, Math.min(rect.left, viewportWidth - width - 12));
@@ -97,7 +108,7 @@ export default function ValueHelpSelect({
       window.removeEventListener("resize", updatePopoverPosition);
       window.removeEventListener("scroll", updatePopoverPosition, true);
     };
-  }, [open]);
+  }, [open, tableHeaders.length]);
 
   const handleSelect = (nextValue) => {
     onChange?.(nextValue);
@@ -124,7 +135,7 @@ export default function ValueHelpSelect({
 
       {open ? (
         createPortal(
-          <div className="value-help-popover" ref={popoverRef} style={popoverStyle}>
+          <div className={`value-help-popover ${popoverClassName}`.trim()} ref={popoverRef} style={popoverStyle}>
             <div className="value-help-search">
               <Search size={15} />
               <input
@@ -141,9 +152,14 @@ export default function ValueHelpSelect({
             </div>
 
             <div className="value-help-list" role="listbox">
+              {tableHeaders.length ? (
+                <div className="value-help-table-head" aria-hidden="true">
+                  {tableHeaders.map((header) => <span key={header}>{header}</span>)}
+                </div>
+              ) : null}
               {filteredOptions.length ? (
                 filteredOptions.map((option) => {
-                  const isSelected = option.value === String(value ?? "");
+                  const isSelected = option.value !== "" && option.value === String(value ?? "");
                   return (
                     <button
                       type="button"
@@ -153,10 +169,19 @@ export default function ValueHelpSelect({
                       role="option"
                       aria-selected={isSelected}
                     >
-                      <span>
-                        <strong>{option.label}</strong>
-                        {option.description ? <small>{option.description}</small> : null}
-                      </span>
+                      {option.meta ? (
+                        <span className="value-help-option-grid">
+                          <strong>{option.meta.code || option.label}</strong>
+                          <small>{option.meta.name || option.description || ""}</small>
+                          <small>{option.meta.client || "-"}</small>
+                          <small>{option.meta.type || "-"}</small>
+                        </span>
+                      ) : (
+                        <span>
+                          <strong>{option.label}</strong>
+                          {option.description ? <small>{option.description}</small> : null}
+                        </span>
+                      )}
                       {isSelected ? <Check size={16} /> : null}
                     </button>
                   );

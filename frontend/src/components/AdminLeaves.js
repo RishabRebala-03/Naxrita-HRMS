@@ -826,7 +826,7 @@ const AdminLeaves = ({ user }) => {
               </div>
             </div>
 
-            <div className="leave-filter-grid">
+            <div className="leave-filter-grid leave-history-filter-grid">
               <label className="fiori-form-field">
                 <span className="leave-field-label">Search</span>
                 <ValueHelpSearch
@@ -929,7 +929,7 @@ const AdminLeaves = ({ user }) => {
             </div>
           </section>
 
-          <section className="fiori-panel">
+          <section className="fiori-panel leave-records-panel">
             {filteredLeaves.length === 0 ? (
               <div className="admin-empty-state">
                 <CheckCircle2 size={28} />
@@ -939,8 +939,8 @@ const AdminLeaves = ({ user }) => {
                 </div>
               </div>
             ) : (
-              <div className="fiori-table-shell">
-                <table className="fiori-table">
+              <div className="fiori-table-shell leave-history-table-shell">
+                <table className="fiori-table leave-history-table">
                   <thead>
                     <tr>
                       <th>Employee</th>

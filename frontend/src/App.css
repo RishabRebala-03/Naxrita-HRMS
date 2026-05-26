@@ -8241,6 +8241,76 @@ button:hover:not(:disabled) {
   font-size: 12px;
 }
 
+.leave-history-filter-grid {
+  padding: 12px;
+  border: 1px solid #e0e6ee;
+  border-radius: 12px;
+  background: #f7fafc;
+}
+
+.leave-records-panel {
+  overflow: hidden;
+}
+
+.leave-history-table-shell,
+.employee-history-shell {
+  border: 1px solid #dce4ed;
+  border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(15, 39, 66, 0.06);
+}
+
+.leave-history-table,
+.employee-history-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.leave-history-table th,
+.employee-history-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #eef4f8;
+  color: #2f3b48;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.leave-history-table td,
+.employee-history-table td {
+  border-bottom: 1px solid #edf1f5;
+}
+
+.leave-history-table tbody tr:hover td,
+.employee-history-table tbody tr:hover td {
+  background: #f6fbff;
+}
+
+.employee-history-row-highlight td {
+  background: #fff7df !important;
+}
+
+.employee-history-primary strong,
+.leave-history-table .fiori-primary-cell strong {
+  color: #16212d;
+}
+
+.employee-history-reason,
+.leave-history-table .fiori-primary-cell span {
+  color: #637083;
+}
+
+.employee-history-days-cell {
+  font-weight: 800;
+  color: #2f3b48;
+}
+
+.employee-history-actions-cell .fiori-button,
+.leave-history-table .employee-table-actions .fiori-button {
+  border-radius: 999px;
+}
+
 .tea-history-shell {
   max-height: 285px;
   overflow: auto;

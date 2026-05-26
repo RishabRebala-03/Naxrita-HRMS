@@ -99,6 +99,128 @@ def calculate_working_leave_days(start, end):
     return day_count
 
 
+LEAVE_CANCELLATION_CUTOFF_HOURS = 48
+
+
+def parse_leave_date(value):
+    """Parse stored leave date values to a date-only datetime."""
+    if isinstance(value, datetime):
+        return datetime(value.year, value.month, value.day)
+    if isinstance(value, str) and value:
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d")
+        except ValueError:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return datetime(parsed.year, parsed.month, parsed.day)
+            except Exception:
+                return None
+    return None
+
+
+def get_effective_leave_start(leave):
+    return parse_leave_date(leave.get("approved_start_date") or leave.get("start_date"))
+
+
+def get_leave_cancellation_cutoff(leave):
+    effective_start = get_effective_leave_start(leave)
+    if not effective_start:
+        return None
+    return effective_start - timedelta(hours=LEAVE_CANCELLATION_CUTOFF_HOURS)
+
+
+def employee_can_cancel_approved_leave(leave, now=None):
+    cutoff = get_leave_cancellation_cutoff(leave)
+    if not cutoff:
+        return False
+    return (now or datetime.utcnow()) <= cutoff
+
+
+def lead_can_cancel_approved_leave(leave, now=None):
+    cutoff = get_leave_cancellation_cutoff(leave)
+    if not cutoff:
+        return False
+    return (now or datetime.utcnow()) > cutoff
+
+
+def get_leave_days_for_balance(leave):
+    try:
+        return float(leave.get("approved_days") or leave.get("days") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def restore_leave_balance_for_cancelled_approval(leave):
+    """Reverse the balance effect of an approved leave cancellation."""
+    employee = mongo.db.users.find_one({"_id": leave["employee_id"]})
+    if not employee:
+        return
+
+    leave_balance = employee.get("leaveBalance", {
+        "sick": 0,
+        "sickTotal": 0,
+        "planned": 0,
+        "plannedTotal": 0,
+        "optional": 2,
+        "optionalTotal": 2,
+        "lwp": 0,
+    })
+    leave_type = normalize_leave_type(leave.get("leave_type", "")).lower()
+    days = get_leave_days_for_balance(leave)
+
+    if leave_type in ["sick", "planned", "optional"]:
+        total_key = f"{leave_type}Total"
+        restored = leave_balance.get(leave_type, 0) + days
+        if total_key in leave_balance:
+            restored = min(restored, leave_balance.get(total_key, restored))
+        leave_balance[leave_type] = restored
+    elif leave_type in ["lwp", "lop", "leave with loss of pay", "leave without pay"]:
+        leave_balance["lwp"] = max(0, leave_balance.get("lwp", 0) - days)
+
+    mongo.db.users.update_one(
+        {"_id": leave["employee_id"]},
+        {"$set": {"leaveBalance": leave_balance}},
+    )
+
+
+def cancel_approved_leave_record(leave, leave_id, performed_by, cancelled_by_role, reason=""):
+    old_data = trim_leave(leave.copy())
+    restore_leave_balance_for_cancelled_approval(leave)
+
+    update_data = {
+        "status": "Cancelled",
+        "cancelled_on": datetime.utcnow(),
+        "cancelled_by": performed_by,
+        "cancelled_by_role": cancelled_by_role,
+    }
+    if reason:
+        update_data["cancellation_reason"] = reason
+
+    mongo.db.leaves.update_one(
+        {"_id": ObjectId(leave_id)},
+        {"$set": update_data},
+    )
+    updated_leave = mongo.db.leaves.find_one({"_id": ObjectId(leave_id)})
+
+    log_leave_action(
+        leave_id=leave_id,
+        employee_id=str(leave["employee_id"]),
+        action="Cancelled",
+        performed_by=performed_by,
+        remarks=reason or f"Approved leave cancelled by {cancelled_by_role}",
+        old_data=old_data,
+        new_data=trim_leave(updated_leave),
+    )
+
+    try:
+        from routes.timesheet_routes import sync_timesheets_for_cancelled_leave
+        sync_timesheets_for_cancelled_leave(updated_leave)
+    except Exception as sync_error:
+        print(f"⚠️ Could not sync timesheets for cancelled leave {leave_id}: {sync_error}")
+
+    return updated_leave
+
+
 # ========== ⭐ NEW ESCALATION FUNCTION (NO EMAIL) ⭐ ==========
 # FIXED escalate_leave_request function - Replace in leave_routes.py
 
@@ -1110,6 +1232,7 @@ def update_leave(leave_id):
 def cancel_leave(leave_id):
     try:
         print(f"🔍 Cancel request for leave: {leave_id}")
+        data = request.get_json(silent=True) or {}
 
         obj_id = ObjectId(leave_id)
         leave = mongo.db.leaves.find_one({"_id": obj_id})
@@ -1117,8 +1240,52 @@ def cancel_leave(leave_id):
         if not leave:
             return jsonify({"error": "Leave request not found"}), 404
 
+        if leave.get("status") == "Approved":
+            if not employee_can_cancel_approved_leave(leave):
+                cutoff = get_leave_cancellation_cutoff(leave)
+                cutoff_text = cutoff.strftime("%Y-%m-%d %H:%M UTC") if cutoff else "the 48-hour cutoff"
+                return jsonify({
+                    "error": (
+                        "Approved leave can be cancelled by the employee only until "
+                        f"{cutoff_text}. Please contact your lead to cancel this leave."
+                    )
+                }), 400
+
+            cancelled_by = (
+                data.get("cancelled_by")
+                or leave.get("employee_email")
+                or leave.get("employee_name")
+                or "Employee"
+            )
+            updated_leave = cancel_approved_leave_record(
+                leave=leave,
+                leave_id=leave_id,
+                performed_by=cancelled_by,
+                cancelled_by_role="employee",
+                reason=data.get("reason", ""),
+            )
+
+            current_approver_id = leave.get("current_approver_id")
+            if current_approver_id:
+                create_notification(
+                    user_id=current_approver_id,
+                    notification_type="leave_cancelled",
+                    message=(
+                        f"{leave.get('employee_name', 'An employee')} cancelled their approved "
+                        f"{leave.get('leave_type', 'leave')} request "
+                        f"({leave.get('start_date')} to {leave.get('end_date')})"
+                    ),
+                    related_leave_id=leave_id
+                )
+
+            print("✅ Approved leave cancelled by employee")
+            return jsonify({
+                "message": "Approved leave cancelled successfully",
+                "leave_id": str(updated_leave["_id"]) if updated_leave else leave_id,
+            }), 200
+
         if leave.get("status") != "Pending":
-            return jsonify({"error": "Only pending leave requests can be cancelled"}), 400
+            return jsonify({"error": "Only pending or eligible approved leave requests can be cancelled"}), 400
 
         mongo.db.leaves.update_one(
             {"_id": obj_id},
@@ -1152,6 +1319,74 @@ def cancel_leave(leave_id):
 
     except Exception as e:
         print("❌ Cancel error:", str(e))
+        return jsonify({"error": str(e)}), 500
+
+
+@leave_bp.route("/cancel_by_lead/<leave_id>", methods=["PUT"])
+def cancel_leave_by_lead(leave_id):
+    try:
+        data = request.get_json() or {}
+        lead_id = data.get("lead_id")
+        lead_email = data.get("lead_email")
+        reason = (data.get("reason") or "").strip()
+
+        leave = mongo.db.leaves.find_one({"_id": ObjectId(leave_id)})
+        if not leave:
+            return jsonify({"error": "Leave request not found"}), 404
+        if leave.get("status") != "Approved":
+            return jsonify({"error": "Only approved leaves can be cancelled by lead"}), 400
+        if not lead_can_cancel_approved_leave(leave):
+            return jsonify({
+                "error": "Lead cancellation is available only after the employee 48-hour cancellation window has passed"
+            }), 400
+
+        lead = None
+        if lead_id:
+            try:
+                lead = mongo.db.users.find_one({"_id": ObjectId(lead_id)})
+            except Exception:
+                lead = None
+        if not lead and lead_email:
+            lead = mongo.db.users.find_one({"email": lead_email})
+        if not lead:
+            return jsonify({"error": "Lead user not found"}), 404
+
+        employee = mongo.db.users.find_one({"_id": leave["employee_id"]})
+        reporting_lead_id = employee.get("reportsTo") if employee else None
+        current_approver_id = leave.get("current_approver_id")
+        is_admin = lead.get("role") == "Admin"
+        is_reporting_lead = reporting_lead_id and str(reporting_lead_id) == str(lead["_id"])
+        is_current_approver = current_approver_id and str(current_approver_id) == str(lead["_id"])
+
+        if not (is_admin or is_reporting_lead or is_current_approver):
+            return jsonify({"error": "Only the reporting lead or admin can cancel this approved leave"}), 403
+
+        performed_by = lead.get("name") or lead.get("email") or "Lead"
+        updated_leave = cancel_approved_leave_record(
+            leave=leave,
+            leave_id=leave_id,
+            performed_by=performed_by,
+            cancelled_by_role="lead",
+            reason=reason,
+        )
+
+        create_notification(
+            user_id=leave["employee_id"],
+            notification_type="leave_cancelled",
+            message=(
+                f"Your approved {leave.get('leave_type', 'leave')} request "
+                f"({leave.get('start_date')} to {leave.get('end_date')}) was cancelled by {performed_by}"
+            ),
+            related_leave_id=leave_id
+        )
+
+        return jsonify({
+            "message": "Approved leave cancelled by lead successfully",
+            "leave_id": str(updated_leave["_id"]) if updated_leave else leave_id,
+        }), 200
+
+    except Exception as e:
+        print("❌ Lead cancel error:", str(e))
         return jsonify({"error": str(e)}), 500
 
 

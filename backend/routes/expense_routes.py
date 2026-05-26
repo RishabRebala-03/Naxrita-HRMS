@@ -60,6 +60,7 @@ def create_expense():
         employee_id = data.get("employee_id")
         expense_date = data.get("expense_date")
         category = (data.get("category") or "").strip()
+        client_code = (data.get("client_code") or "").strip()
         description = (data.get("description") or "").strip()
 
         try:
@@ -82,6 +83,7 @@ def create_expense():
             "employee_department": employee.get("department", ""),
             "expense_date": expense_date,
             "category": category,
+            "client_code": client_code,
             "description": description,
             "amount": round(amount, 2),
             "status": "saved",
@@ -106,6 +108,8 @@ def update_expense(expense_id):
             update_data["expense_date"] = data["expense_date"]
         if "category" in data:
             update_data["category"] = (data.get("category") or "").strip()
+        if "client_code" in data:
+            update_data["client_code"] = (data.get("client_code") or "").strip()
         if "description" in data:
             update_data["description"] = (data.get("description") or "").strip()
         if "amount" in data:

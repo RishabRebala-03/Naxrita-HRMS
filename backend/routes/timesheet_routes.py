@@ -135,6 +135,7 @@ def apply_employee_assignment_snapshot(timesheet_doc, employee):
     if not isinstance(timesheet_doc, dict) or not isinstance(employee, dict):
         return timesheet_doc
 
+    timesheet_doc["employee_external_id"] = employee.get("employeeId", "") or ""
     timesheet_doc["employee_work_location"] = employee.get("workLocation", "") or ""
     timesheet_doc["employee_assigned_location"] = (
         employee.get("assignedLocation")
@@ -160,6 +161,7 @@ def enrich_timesheet_with_employee_assignments(timesheet_doc):
         timesheet_doc.get("employee_work_location")
         and timesheet_doc.get("employee_assigned_location")
         and timesheet_doc.get("employee_company_code")
+        and timesheet_doc.get("employee_external_id")
     ):
         return timesheet_doc
 
@@ -183,6 +185,8 @@ def validate_daily_work_hours(entries):
         date_key = entry.get("date")
         if not date_key:
             continue
+        if not is_weekday_date(date_key):
+            return f"Work hours cannot be entered on weekends: {date_key}"
         try:
             hours = float(entry.get("hours") or 0)
         except (TypeError, ValueError):
@@ -226,6 +230,37 @@ def daterange_keys(start_key, end_key):
     while current <= end:
         yield current.strftime("%Y-%m-%d")
         current += timedelta(days=1)
+
+
+def normalize_daily_adjustments(adjustments, period_start, period_end, field_label):
+    """Validate editable daily adjustment rows such as overtime and holiday payout."""
+    if adjustments in (None, ""):
+        return {}, None
+    if not isinstance(adjustments, dict):
+        return {}, f"{field_label} must be keyed by date"
+
+    valid_dates = set(daterange_keys(period_start, period_end))
+    normalized = {}
+    for raw_date, raw_hours in adjustments.items():
+        date_key = normalize_date_key(raw_date)
+        if not date_key or date_key not in valid_dates:
+            return {}, f"{field_label} contains a date outside the timesheet period"
+        if raw_hours in (None, ""):
+            continue
+
+        try:
+            hours = float(raw_hours or 0)
+        except (TypeError, ValueError):
+            return {}, f"{field_label} has invalid hours on {date_key}"
+
+        if hours < 0:
+            return {}, f"{field_label} cannot be negative on {date_key}"
+        if hours > WORKDAY_HOURS:
+            return {}, f"{field_label} cannot exceed {WORKDAY_HOURS:g} hours on {date_key}"
+
+        normalized[date_key] = round(hours, 2)
+
+    return normalized, None
 
 
 def normalize_absence_label(value):
@@ -557,6 +592,43 @@ def sync_timesheets_for_approved_leave(leave_record):
     return updated_count
 
 
+def sync_timesheets_for_cancelled_leave(leave_record):
+    """Refresh overlapping timesheets after an approved leave is cancelled."""
+    if not leave_record:
+        return 0
+
+    employee_id = leave_record.get("employee_id")
+    leave_start = normalize_date_key(
+        leave_record.get("approved_start_date") or leave_record.get("start_date")
+    )
+    leave_end = normalize_date_key(
+        leave_record.get("approved_end_date") or leave_record.get("end_date")
+    )
+    if not employee_id or not leave_start or not leave_end:
+        return 0
+
+    query = {
+        "employee_id": employee_id,
+        "period_start": {"$lte": leave_end},
+        "period_end": {"$gte": leave_start},
+        "status": {"$in": ["draft", "pending_lead", "pending_manager", "approved"]},
+    }
+    updated_count = 0
+    for timesheet in mongo.db.timesheets.find(query):
+        refreshed = refresh_timesheet_system_entries(timesheet)
+        if not refreshed:
+            continue
+        mongo.db.timesheets.update_one(
+            {"_id": timesheet["_id"]},
+            {"$set": refreshed},
+        )
+        updated_count += 1
+
+    if updated_count:
+        print(f"✅ Synced {updated_count} timesheet(s) for cancelled leave {leave_record.get('_id')}")
+    return updated_count
+
+
 def refresh_timesheet_for_read(timesheet):
     """Refresh system entries before returning a timesheet to the UI."""
     refreshed = refresh_timesheet_system_entries(timesheet)
@@ -590,6 +662,18 @@ def create_timesheet():
         limit_error = validate_daily_work_hours(entries)
         if limit_error:
             return jsonify({"error": limit_error}), 400
+
+        daily_overtime, adjustment_error = normalize_daily_adjustments(
+            data.get("daily_overtime", {}), period_start, period_end, "Daily overtime"
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
+        holiday_payout, adjustment_error = normalize_daily_adjustments(
+            data.get("holiday_payout", {}), period_start, period_end, "Holiday payout"
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
 
         try:
             emp_obj_id = ObjectId(employee_id)
@@ -629,6 +713,8 @@ def create_timesheet():
             "period_start":        period_start,
             "period_end":          period_end,
             "entries":             validated_entries,
+            "daily_overtime":      daily_overtime,
+            "holiday_payout":      holiday_payout,
             "total_hours":         total_hours,
             "work_hours":          get_work_hours_total(validated_entries),
             "status":              "pending_lead",
@@ -695,6 +781,24 @@ def update_timesheet(timesheet_id):
         if ts.get("status") not in ("draft", "rejected_by_lead", "rejected_by_manager"):
             return jsonify({"error": "Only draft or rejected timesheets can be updated"}), 400
 
+        daily_overtime, adjustment_error = normalize_daily_adjustments(
+            data.get("daily_overtime", ts.get("daily_overtime", {})),
+            ts.get("period_start"),
+            ts.get("period_end"),
+            "Daily overtime",
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
+        holiday_payout, adjustment_error = normalize_daily_adjustments(
+            data.get("holiday_payout", ts.get("holiday_payout", {})),
+            ts.get("period_start"),
+            ts.get("period_end"),
+            "Holiday payout",
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         validated_entries, total_hours, entry_error = build_validated_timesheet_entries(
             ts["employee_id"],
             ts.get("period_start"),
@@ -707,10 +811,12 @@ def update_timesheet(timesheet_id):
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
             {"$set": {
-                "entries":     validated_entries,
-                "total_hours": total_hours,
-                "work_hours":  get_work_hours_total(validated_entries),
-                "updated_at":  datetime.utcnow(),
+                "entries":        validated_entries,
+                "daily_overtime": daily_overtime,
+                "holiday_payout": holiday_payout,
+                "total_hours":    total_hours,
+                "work_hours":     get_work_hours_total(validated_entries),
+                "updated_at":     datetime.utcnow(),
             }}
         )
         return jsonify({"message": "Timesheet updated", "total_hours": total_hours}), 200
@@ -736,6 +842,18 @@ def save_timesheet_draft():
         limit_error = validate_daily_work_hours(entries)
         if limit_error:
             return jsonify({"error": limit_error}), 400
+
+        daily_overtime, adjustment_error = normalize_daily_adjustments(
+            data.get("daily_overtime", {}), period_start, period_end, "Daily overtime"
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
+        holiday_payout, adjustment_error = normalize_daily_adjustments(
+            data.get("holiday_payout", {}), period_start, period_end, "Holiday payout"
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
 
         try:
             emp_obj_id = ObjectId(employee_id)
@@ -768,6 +886,8 @@ def save_timesheet_draft():
             "period_start": period_start,
             "period_end": period_end,
             "entries": validated_entries,
+            "daily_overtime": daily_overtime,
+            "holiday_payout": holiday_payout,
             "total_hours": total_hours,
             "work_hours": get_work_hours_total(validated_entries),
             "status": "draft",
@@ -834,6 +954,24 @@ def submit_timesheet(timesheet_id):
         if limit_error:
             return jsonify({"error": limit_error}), 400
 
+        daily_overtime, adjustment_error = normalize_daily_adjustments(
+            ts.get("daily_overtime", {}),
+            ts.get("period_start"),
+            ts.get("period_end"),
+            "Daily overtime",
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
+        holiday_payout, adjustment_error = normalize_daily_adjustments(
+            ts.get("holiday_payout", {}),
+            ts.get("period_start"),
+            ts.get("period_end"),
+            "Holiday payout",
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         work_entries = [
             entry for entry in (ts.get("entries") or [])
             if entry.get("entry_type", "work") == "work"
@@ -852,6 +990,8 @@ def submit_timesheet(timesheet_id):
             {"_id": ObjectId(timesheet_id)},
             {"$set": {
                 "entries":       validated_entries,
+                "daily_overtime": daily_overtime,
+                "holiday_payout": holiday_payout,
                 "total_hours":   total_hours,
                 "work_hours":    get_work_hours_total(validated_entries),
                 "status":       "pending_lead",
