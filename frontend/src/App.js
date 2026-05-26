@@ -24,6 +24,7 @@ import TeaCoffee from "./components/TeaCoffee";
 import Policy from "./components/Policy";
 import Projects from "./components/Projects";
 import Timesheets from "./components/Timesheets";
+import Payslips from "./components/Payslips";
 
 // Injects critical CSS to fix mobile scrolling
 const MobileScrollFix = () => (
@@ -446,6 +447,9 @@ function App() {
             <Timesheets user={currentUser} />
           </div>
         );
+
+      case "payslips":
+        return <Payslips user={currentUser} />;
 
       default:
         if (role === "Admin") {
