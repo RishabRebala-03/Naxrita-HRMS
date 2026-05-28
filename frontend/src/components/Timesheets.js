@@ -1406,7 +1406,7 @@ function TimesheetGrid({
                         borderLeft: `1px solid ${C.borderLight}`,
                         background: isHol ? '#fffbeb' : isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
                       }}>
-                        {isHol || isWeekend || isFullDayLeave ? (
+                        {isWeekend ? null : isHol || isFullDayLeave ? (
                           <span
                             style={{
                               display: 'inline-flex',
@@ -1416,17 +1416,15 @@ function TimesheetGrid({
                               borderRadius: '999px',
                               fontSize: '11px',
                               fontWeight: '700',
-                              border: `1px solid ${isHol ? C.amberBorder : isWeekend ? '#bfc7d1' : C.purpleBorder}`,
-                              background: isHol ? '#fff7d6' : isWeekend ? '#e5e7eb' : C.white,
-                              color: isHol ? C.holidayText : isWeekend ? '#6b7280' : C.purple,
+                              border: `1px solid ${isHol ? C.amberBorder : C.purpleBorder}`,
+                              background: isHol ? '#fff7d6' : C.white,
+                              color: isHol ? C.holidayText : C.purple,
                             }}
                             title={isHol
                               ? `${holidayChargeCodeForDate(d).name} (${holidayChargeCodeForDate(d).code})`
-                              : isWeekend
-                              ? 'Weekend locked'
                               : `${leaveEntry.label}${leaveEntry.isHalfDay && leaveEntry.halfDayPeriod ? ` (${leaveEntry.halfDayPeriod})` : ''}`}
                           >
-                            {isHol ? 'PH' : isWeekend ? '' : leaveEntry.displayCode}
+                            {isHol ? 'PH' : leaveEntry.displayCode}
                           </span>
                         ) : (() => {
                           const cellKey = `work-${row.id}-${d}`;

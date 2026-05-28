@@ -2178,8 +2178,13 @@
   cursor: not-allowed !important;
 }
 
+.mte-locations-date-grid article.is-weekend button {
+  background: transparent;
+  border-radius: 0;
+}
+
 .mte-locations-date-grid article.is-weekend select {
-  background: #f0f2f5;
+  display: none;
 }
 
 .mte-locations-date-grid button {
