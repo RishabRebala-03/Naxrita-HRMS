@@ -23,6 +23,30 @@ UPLOAD_HISTORY_COLLECTION = "payslip_upload_history"
 PAYSLIP_COLLECTION = "payslips"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "company_logo.png")
 
+METADATA_COLUMNS = {
+    "employee id", "employeeid", "name", "month", "year", "bank", "bank a/c no",
+    "bankaccountno", "doj", "lop days", "lopdays", "std days", "stddays",
+    "worked days", "workeddays", "pf no", "pfno", "location", "department",
+    "facility", "entity", "pf - uan", "pfuan", "management level", "managementlevel",
+}
+EARNING_ALIASES = {
+    "basic": ("basic", "BASIC"),
+    "hra": ("hra", "HOUSE RENT ALLOWENCE"),
+    "house rent allowance": ("hra", "HOUSE RENT ALLOWENCE"),
+    "conveyance": ("conveyance", "CONV C CCA"),
+    "cca": ("conveyance", "CONV C CCA"),
+    "conv c cca": ("conveyance", "CONV C CCA"),
+}
+DEDUCTION_ALIASES = {
+    "pf deduction": ("pf_deduction", "PROVIDENT FUND"),
+    "pfdeduction": ("pf_deduction", "PROVIDENT FUND"),
+    "provident fund": ("pf_deduction", "PROVIDENT FUND"),
+    "professional tax": ("professional_tax", "PROFESSIONAL TAX"),
+    "professionaltax": ("professional_tax", "PROFESSIONAL TAX"),
+    "income tax": ("income_tax", "Income Tax"),
+    "esi": ("esi", "ESI"),
+}
+
 
 def _collection():
     return mongo.db[PAYSLIP_COLLECTION]
@@ -64,8 +88,105 @@ def _parse_float(value):
         return 0.0
 
 
+def _normalize_column_name(value):
+    return " ".join(str(value or "").strip().lower().replace("_", " ").split())
+
+
+def _normalize_excel_identifier(value):
+    if value in (None, ""):
+        return ""
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    if isinstance(value, int):
+        return str(value)
+
+    raw = str(value).strip()
+    if raw.endswith(".0"):
+        integer_portion = raw[:-2]
+        if integer_portion.isdigit():
+            return integer_portion
+    return raw
+
+
+def _stringify_excel_value(value):
+    if value in (None, ""):
+        return ""
+
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+
+    if isinstance(value, int):
+        return str(value)
+
+    return str(value).strip()
+
+
 def _get_excel_value(row, column_name, default=""):
-    return row.get(column_name, default) or default
+    if column_name in row:
+        value = row.get(column_name, default)
+        return default if value is None or value == "" else value
+
+    target = _normalize_column_name(column_name)
+    for key, value in row.items():
+        if _normalize_column_name(key) == target:
+            return default if value is None or value == "" else value
+    return default
+
+
+def _money_line(label, amount, key=None):
+    return {
+        "key": key or _normalize_column_name(label).replace(" ", "_"),
+        "label": str(label or "").strip(),
+        "amount": _parse_float(amount),
+    }
+
+
+def _derive_pay_components(row_dict):
+    headers = row_dict.get("__headers") or [key for key in row_dict.keys() if key != "__headers"]
+    known_values = {}
+    earning_items = []
+    deduction_items = []
+    section = "earnings"
+
+    for header in headers:
+        if header in (None, ""):
+            continue
+
+        label = str(header).strip()
+        normalized = _normalize_column_name(label)
+        compact = normalized.replace(" ", "")
+        value = row_dict.get(header)
+        if normalized in METADATA_COLUMNS or compact in METADATA_COLUMNS:
+            continue
+
+        alias = EARNING_ALIASES.get(normalized) or EARNING_ALIASES.get(compact)
+        if alias:
+            key, display_label = alias
+            known_values[key] = _parse_float(value)
+            earning_items.append(_money_line(display_label, value, key))
+            section = "earnings"
+            continue
+
+        alias = DEDUCTION_ALIASES.get(normalized) or DEDUCTION_ALIASES.get(compact)
+        if alias:
+            key, display_label = alias
+            known_values[key] = _parse_float(value)
+            deduction_items.append(_money_line(display_label, value, key))
+            section = "deductions"
+            continue
+
+        amount = _parse_float(value)
+        if not amount:
+            continue
+
+        if section == "deductions":
+            deduction_items.append(_money_line(label, value))
+        else:
+            earning_items.append(_money_line(label, value))
+
+    return known_values, earning_items, deduction_items
 
 
 def _month_number(month_name):
@@ -92,25 +213,40 @@ def _normalize_year(value):
 
 
 def _find_user_by_employee_id(employee_id):
-    return mongo.db.users.find_one({"employeeId": str(employee_id).strip()})
+    return mongo.db.users.find_one({"employeeId": _normalize_excel_identifier(employee_id)})
 
 
 def _derive_employee_profile(row_dict):
+    source_profile = row_dict.get("employee_profile") or {}
     return {
-        "name": str(_get_excel_value(row_dict, "Name", "Unknown")),
-        "bank": str(_get_excel_value(row_dict, "Bank", "HDFC")),
-        "bank_account_no": str(
+        "name": _stringify_excel_value(
+            source_profile.get("name")
+            or row_dict.get("name")
+            or _get_excel_value(row_dict, "Name", "Unknown")
+        ),
+        "bank": _stringify_excel_value(
+            source_profile.get("bank")
+            or row_dict.get("bank")
+            or _get_excel_value(row_dict, "Bank", "HDFC")
+        ),
+        "bank_account_no": _normalize_excel_identifier(
+            source_profile.get("bank_account_no")
+            or row_dict.get("bank_account_no")
+            or
             _get_excel_value(row_dict, "Bank A/c No")
             or _get_excel_value(row_dict, "BankAccountNo", "")
         ),
-        "doj": str(_get_excel_value(row_dict, "DOJ", "")),
-        "pf_no": str(_get_excel_value(row_dict, "PF NO") or _get_excel_value(row_dict, "PFNO", "")),
-        "location": str(_get_excel_value(row_dict, "Location", "Hyderabad")),
-        "department": str(_get_excel_value(row_dict, "Department", "NTCI")),
-        "facility": str(_get_excel_value(row_dict, "Facility", "Hyderabad – HDC2")),
-        "entity": str(_get_excel_value(row_dict, "Entity", "NTCI")),
-        "pf_uan": str(_get_excel_value(row_dict, "PF - UAN") or _get_excel_value(row_dict, "PFUAN", "")),
-        "management_level": str(
+        "doj": _stringify_excel_value(source_profile.get("doj") or row_dict.get("doj") or _get_excel_value(row_dict, "DOJ", "")),
+        "pf_no": _normalize_excel_identifier(source_profile.get("pf_no") or row_dict.get("pf_no") or _get_excel_value(row_dict, "PF NO") or _get_excel_value(row_dict, "PFNO", "")),
+        "location": _stringify_excel_value(source_profile.get("location") or row_dict.get("location") or _get_excel_value(row_dict, "Location", "Hyderabad")),
+        "department": _stringify_excel_value(source_profile.get("department") or row_dict.get("department") or _get_excel_value(row_dict, "Department", "NTCI")),
+        "facility": _stringify_excel_value(source_profile.get("facility") or row_dict.get("facility") or _get_excel_value(row_dict, "Facility", "Hyderabad – HDC2")),
+        "entity": _stringify_excel_value(source_profile.get("entity") or row_dict.get("entity") or _get_excel_value(row_dict, "Entity", "NTCI")),
+        "pf_uan": _normalize_excel_identifier(source_profile.get("pf_uan") or row_dict.get("pf_uan") or _get_excel_value(row_dict, "PF - UAN") or _get_excel_value(row_dict, "PFUAN", "")),
+        "management_level": _stringify_excel_value(
+            source_profile.get("management_level")
+            or row_dict.get("management_level")
+            or
             _get_excel_value(row_dict, "Management Level")
             or _get_excel_value(row_dict, "ManagementLevel", "11")
         ),
@@ -118,29 +254,44 @@ def _derive_employee_profile(row_dict):
 
 
 def _build_row_data(row_dict):
-    employee_id = str(
+    employee_id = _normalize_excel_identifier(
         _get_excel_value(row_dict, "Employee ID") or _get_excel_value(row_dict, "EmployeeID")
-    ).strip()
+    )
+    profile = _derive_employee_profile(row_dict)
+    pay_values, earnings, deductions = _derive_pay_components(row_dict)
+    gross_earnings = sum(item["amount"] for item in earnings)
+    gross_deductions = sum(item["amount"] for item in deductions)
     return {
         "employee_id": employee_id,
-        "name": str(_get_excel_value(row_dict, "Name", "Unknown")),
+        "name": profile["name"],
         "month": str(_get_excel_value(row_dict, "Month", "April")),
         "year": _normalize_year(_get_excel_value(row_dict, "Year", "2025")),
         "lop_days": _parse_float(_get_excel_value(row_dict, "LOP Days") or _get_excel_value(row_dict, "LOPDays")),
         "std_days": _parse_float(_get_excel_value(row_dict, "STD Days") or _get_excel_value(row_dict, "STDDays", 30)),
         "worked_days": _parse_float(_get_excel_value(row_dict, "Worked Days") or _get_excel_value(row_dict, "WorkedDays", 30)),
-        "basic": _parse_float(_get_excel_value(row_dict, "Basic") or _get_excel_value(row_dict, "BASIC")),
-        "hra": _parse_float(_get_excel_value(row_dict, "HRA") or _get_excel_value(row_dict, "House Rent Allowance")),
-        "conveyance": _parse_float(_get_excel_value(row_dict, "Conveyance") or _get_excel_value(row_dict, "CCA")),
-        "pf_deduction": _parse_float(
-            _get_excel_value(row_dict, "PF Deduction")
-            or _get_excel_value(row_dict, "PFDeduction")
-            or _get_excel_value(row_dict, "Provident Fund")
-        ),
-        "professional_tax": _parse_float(
-            _get_excel_value(row_dict, "Professional Tax") or _get_excel_value(row_dict, "ProfessionalTax")
-        ),
-        "esi": _parse_float(_get_excel_value(row_dict, "ESI")),
+        "basic": pay_values.get("basic", 0),
+        "hra": pay_values.get("hra", 0),
+        "conveyance": pay_values.get("conveyance", 0),
+        "pf_deduction": pay_values.get("pf_deduction", 0),
+        "professional_tax": pay_values.get("professional_tax", 0),
+        "income_tax": pay_values.get("income_tax", 0),
+        "esi": pay_values.get("esi", 0),
+        "earnings": earnings,
+        "deductions": deductions,
+        "gross_earnings": gross_earnings,
+        "gross_deductions": gross_deductions,
+        "net_pay": gross_earnings - gross_deductions,
+        "employee_profile": profile,
+        "bank": profile["bank"],
+        "bank_account_no": profile["bank_account_no"],
+        "doj": profile["doj"],
+        "pf_no": profile["pf_no"],
+        "location": profile["location"],
+        "department": profile["department"],
+        "facility": profile["facility"],
+        "entity": profile["entity"],
+        "pf_uan": profile["pf_uan"],
+        "management_level": profile["management_level"],
     }
 
 
@@ -148,6 +299,11 @@ def _format_amount(value):
     if not value:
         return "000.00"
     return f"{float(value):,.2f}"
+
+
+def _format_plain_number(value):
+    numeric_value = _parse_float(value)
+    return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value).rstrip("0").rstrip(".")
 
 
 def _fit_text(text, max_width, font_name="Helvetica", font_size=8):
@@ -161,42 +317,53 @@ def _fit_text(text, max_width, font_name="Helvetica", font_size=8):
     return f"{trimmed}..." if trimmed else ""
 
 
+def _resolve_profile_value(employee, keys, default=""):
+    for key in keys:
+        value = employee.get(key)
+        if value not in (None, ""):
+            if key in {"employeeId", "employee_id", "bank_account_no", "bankAccountNo", "pf_no", "pfNo", "pf_uan", "pfUan"}:
+                return _normalize_excel_identifier(value)
+            return _stringify_excel_value(value)
+    return default
+
+
+def _merge_profile(existing_profile, incoming_profile):
+    merged = dict(existing_profile or {})
+    for key, value in (incoming_profile or {}).items():
+        if value not in (None, ""):
+            merged[key] = value
+    return merged
+
+
 def _build_pdf(employee, payslip):
     buffer = BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
     width, height = A4
+    left = 65
+    grey_fill = colors.HexColor("#D9D9D9")
+    purple_color = colors.HexColor("#7030A0")
+    border_color = colors.black
 
     if os.path.exists(LOGO_PATH):
         logo = ImageReader(LOGO_PATH)
-        pdf.drawImage(logo, 40, height - 80, width=140, height=50, preserveAspectRatio=True, mask="auto")
+        pdf.drawImage(logo, left, height - 92, width=135, height=48, preserveAspectRatio=True, mask="auto")
 
-    pdf.setFont("Helvetica", 10)
-    pdf.drawString(40, height - 95, "Naxrita Solutions Private Limited")
-
-    y_position = height - 130
-    purple_color = colors.HexColor("#7B3FA0")
-    pdf.setFillColor(purple_color)
-    pdf.rect(40, y_position, width - 80, 25, fill=True, stroke=False)
-
-    pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 11)
-    pdf.drawCentredString(width / 2, y_position + 8, f"Payslip For {payslip['month']} {payslip['year']}")
-    pdf.setFillColor(colors.black)
-
-    y_position -= 35
+    y_position = height - 120
 
     table_data = [
-        ["Employee ID", employee.get("employeeId", payslip.get("employee_id", "")), "Name", str(employee.get("name", "")).upper()],
-        ["Bank", employee.get("bank", "HDFC"), "Bank A/c No", employee.get("bank_account_no", "")],
-        ["DOJ", employee.get("doj", ""), "LOP Days", str(int(payslip.get("lop_days", 0)))],
-        ["PF NO", employee.get("pf_no", ""), "STD Days", str(int(payslip.get("std_days", 30)))],
-        ["Location", employee.get("location", "Hyderabad"), "Worked Days", str(int(payslip.get("worked_days", 30)))],
-        ["Department", employee.get("department", "NTCI"), "Management Level", employee.get("management_level", "11")],
-        ["Facility", employee.get("facility", "Hyderabad - HDC2"), "Entity", employee.get("entity", "NTCI")],
-        ["PF - UAN", employee.get("pf_uan", ""), "", ""],
+        ["Naxrita Solutions Private Limited", "", "", ""],
+        [f"Payslip For {payslip['month']} {payslip['year']}", "", "", ""],
+        ["Employee ID", _resolve_profile_value(employee, ["employeeId", "employee_id"], payslip.get("employee_id", "")), "Name", _resolve_profile_value(employee, ["name"], "").upper()],
+        ["Bank", _resolve_profile_value(employee, ["bank"], "HDFC"), "Bank A/c No", _resolve_profile_value(employee, ["bank_account_no", "bankAccountNo"], "")],
+        ["DOJ", _resolve_profile_value(employee, ["doj"], ""), "LOP Days", _format_plain_number(payslip.get("lop_days", 0))],
+        ["PF NO", _resolve_profile_value(employee, ["pf_no", "pfNo"], ""), "STD Days", _format_plain_number(payslip.get("std_days", 30))],
+        ["Location", _resolve_profile_value(employee, ["location"], "Hyderabad"), "Worked Days", _format_plain_number(payslip.get("worked_days", 30))],
+        ["Department", _resolve_profile_value(employee, ["department"], "NTCI"), "Management Level", _resolve_profile_value(employee, ["management_level", "managementLevel"], "11")],
+        ["Facility", _resolve_profile_value(employee, ["facility"], "Hyderabad - HDC2"), "Entity", _resolve_profile_value(employee, ["entity"], "NTCI")],
+        ["PF - UAN", _resolve_profile_value(employee, ["pf_uan", "pfUan"], ""), "", ""],
     ]
 
-    for row_index, row in enumerate(table_data):
+    for row_index, row in enumerate(table_data[2:], start=2):
         table_data[row_index] = [
             _fit_text(row[0], 95, "Helvetica-Bold", 8),
             _fit_text(row[1], 125),
@@ -204,62 +371,101 @@ def _build_pdf(employee, payslip):
             _fit_text(row[3], 125),
         ]
 
-    detail_table = Table(table_data, colWidths=[100, 130, 120, 130])
+    detail_table = Table(table_data, colWidths=[110, 130, 105, 120], rowHeights=[17, 18] + [18] * 8)
     detail_table.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)),
+        ("SPAN", (0, 1), (-1, 1)),
         ("FONT", (0, 0), (-1, -1), "Helvetica", 8),
-        ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 8),
-        ("FONT", (2, 0), (2, -1), "Helvetica-Bold", 8),
+        ("FONT", (0, 0), (-1, 1), "Helvetica-Bold", 9),
+        ("FONT", (0, 2), (0, -1), "Helvetica-Bold", 8),
+        ("FONT", (2, 2), (2, -1), "Helvetica-Bold", 8),
         ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN", (0, 1), (-1, 1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("GRID", (0, 0), (-1, -1), 0.5, border_color),
+        ("BACKGROUND", (0, 0), (-1, 0), purple_color),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 2), (0, -1), grey_fill),
+        ("BACKGROUND", (2, 2), (2, -1), grey_fill),
         ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("BACKGROUND", (0, 0), (-1, 0), purple_color),
+        ("BACKGROUND", (0, 2), (0, -1), grey_fill),
+        ("BACKGROUND", (2, 2), (2, -1), grey_fill),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
     detail_table.wrapOn(pdf, width, height)
-    detail_table.drawOn(pdf, 40, y_position - 130)
+    detail_table.drawOn(pdf, left, y_position - 180)
 
-    y_position -= 160
-    earnings_deductions_data = [
-        ["Earnings", "Amount in Rs", "Deductions", "Amount in Rs"],
-        ["BASIC", _format_amount(payslip.get("basic", 0)), "PROVIDENT FUND", _format_amount(payslip.get("pf_deduction", 0))],
-        ["", "", "", ""],
-        ["HOUSE RENT ALLOWENCE", _format_amount(payslip.get("hra", 0)), "PROFESSIONAL TAX", _format_amount(payslip.get("professional_tax", 0))],
-        ["CONV C CCA", _format_amount(payslip.get("conveyance", 0)), "ESI", _format_amount(payslip.get("esi", 0))],
-        ["GROSS EARNINGS", _format_amount(payslip.get("gross_earnings", 0)), "GROSS DEDUCTIONS", _format_amount(payslip.get("gross_deductions", 0))],
-        ["", "", "", ""],
-        ["NET PAY", "", "", _format_amount(payslip.get("net_pay", 0))],
+    earnings = payslip.get("earnings") or [
+        _money_line("BASIC", payslip.get("basic", 0), "basic"),
+        _money_line("HOUSE RENT ALLOWENCE", payslip.get("hra", 0), "hra"),
+        _money_line("CONV C CCA", payslip.get("conveyance", 0), "conveyance"),
     ]
+    deductions = payslip.get("deductions") or [
+        _money_line("PROVIDENT FUND", payslip.get("pf_deduction", 0), "pf_deduction"),
+        _money_line("PROFESSIONAL TAX", payslip.get("professional_tax", 0), "professional_tax"),
+        _money_line("Income Tax", payslip.get("income_tax", 0), "income_tax"),
+        _money_line("ESI", payslip.get("esi", 0), "esi"),
+    ]
+    row_count = max(len(earnings), len(deductions), 3)
+    earnings_deductions_data = [["Earnings", "Amount in Rs", "Deductions", "Amount in Rs"]]
+    for index in range(row_count):
+        earning = earnings[index] if index < len(earnings) else {"label": "", "amount": 0}
+        deduction = deductions[index] if index < len(deductions) else {"label": "", "amount": 0}
+        earnings_deductions_data.append([
+            earning.get("label", ""),
+            _format_amount(earning.get("amount", 0)) if earning.get("label") else "",
+            deduction.get("label", ""),
+            _format_amount(deduction.get("amount", 0)) if deduction.get("label") else "",
+        ])
+    gross_row = len(earnings_deductions_data)
+    earnings_deductions_data.append([
+        "GROSS EARNINGS",
+        _format_amount(payslip.get("gross_earnings", 0)),
+        "GROSS DEDUCTIONS",
+        _format_amount(payslip.get("gross_deductions", 0)),
+    ])
+    net_row = len(earnings_deductions_data)
+    earnings_deductions_data.append(["NET PAY", "", _format_amount(payslip.get("net_pay", 0)), ""])
 
-    earnings_table = Table(earnings_deductions_data, colWidths=[165, 75, 165, 75])
+    earnings_table = Table(earnings_deductions_data, colWidths=[138, 95, 138, 94], rowHeights=[14] + [22] * row_count + [22, 22])
     earnings_table.setStyle(TableStyle([
         ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
         ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 9),
-        ("FONT", (0, 5), (-1, 5), "Helvetica-Bold", 9),
-        ("FONT", (0, 7), (-1, 7), "Helvetica-Bold", 9),
+        ("FONT", (0, gross_row), (-1, gross_row), "Helvetica-Bold", 9),
+        ("FONT", (0, net_row), (-1, net_row), "Helvetica-Bold", 9),
         ("ALIGN", (1, 1), (1, -1), "RIGHT"),
         ("ALIGN", (3, 1), (3, -1), "RIGHT"),
         ("ALIGN", (0, 0), (0, -1), "LEFT"),
         ("ALIGN", (2, 0), (2, -1), "LEFT"),
-        ("ALIGN", (1, 0), (1, 0), "LEFT"),
-        ("ALIGN", (3, 0), (3, 0), "LEFT"),
+        ("ALIGN", (0, net_row), (1, net_row), "CENTER"),
+        ("ALIGN", (2, net_row), (2, net_row), "LEFT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("SPAN", (0, 7), (2, 7)),
+        ("BOX", (0, 0), (-1, -1), 0.5, border_color),
+        ("INNERGRID", (0, 0), (-1, 0), 0.5, border_color),
+        ("LINEAFTER", (0, 0), (0, -1), 0.5, border_color),
+        ("LINEAFTER", (1, 0), (1, -1), 0.5, border_color),
+        ("LINEAFTER", (2, 0), (2, -1), 0.5, border_color),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, border_color),
+        ("LINEABOVE", (0, gross_row), (-1, gross_row), 0.5, border_color),
+        ("LINEBELOW", (0, gross_row), (-1, gross_row), 0.5, border_color),
+        ("LINEBELOW", (0, net_row), (-1, net_row), 0.5, border_color),
+        ("BACKGROUND", (0, 0), (-1, 0), grey_fill),
+        ("SPAN", (0, net_row), (1, net_row)),
+        ("SPAN", (2, net_row), (3, net_row)),
         ("LEFTPADDING", (0, 0), (-1, -1), 8),
         ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-        ("TOPPADDING", (0, 0), (-1, -1), 6),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
     earnings_table.wrapOn(pdf, width, height)
-    earnings_table.drawOn(pdf, 40, y_position - 160)
+    earnings_table.drawOn(pdf, left, y_position - 345)
 
-    y_position -= 190
     pdf.setFont("Helvetica", 8)
-    pdf.drawCentredString(width / 2, y_position, "**This is a computer generated payslip does not require signature and stamp.")
+    pdf.drawString(left + 45, y_position - 405, "**This is a computer-generated payslip does not require signature and stamp.")
 
     pdf.save()
     buffer.seek(0)
@@ -287,8 +493,22 @@ def _allowed_to_access(payslip, requester):
     return False
 
 
+def _is_admin_requester(requester):
+    return bool(requester and str(requester.get("role", "")).strip().lower() == "admin")
+
+
+def _normalize_line_items(items):
+    normalized = []
+    for item in items or []:
+        label = _stringify_excel_value(item.get("label"))
+        if not label:
+            continue
+        normalized.append(_money_line(label, item.get("amount", 0), item.get("key")))
+    return normalized
+
+
 def _create_or_get_payslip(data):
-    employee_id = str(data.get("employee_id") or "").strip()
+    employee_id = _normalize_excel_identifier(data.get("employee_id"))
     month = str(data.get("month") or "").strip()
     year = _normalize_year(data.get("year"))
 
@@ -299,22 +519,61 @@ def _create_or_get_payslip(data):
     if not user:
         return None, f"Employee with employeeId '{employee_id}' not found in HRMS", 404
 
-    existing_payslip = _collection().find_one({"employee_id": employee_id, "month": month, "year": year})
-    if existing_payslip:
-        return existing_payslip, None, 200
+    earnings = data.get("earnings") or [
+        _money_line("BASIC", data.get("basic", 0), "basic"),
+        _money_line("HOUSE RENT ALLOWENCE", data.get("hra", 0), "hra"),
+        _money_line("CONV C CCA", data.get("conveyance", 0), "conveyance"),
+    ]
+    deductions = data.get("deductions") or [
+        _money_line("PROVIDENT FUND", data.get("pf_deduction", 0), "pf_deduction"),
+        _money_line("PROFESSIONAL TAX", data.get("professional_tax", 0), "professional_tax"),
+        _money_line("Income Tax", data.get("income_tax", 0), "income_tax"),
+        _money_line("ESI", data.get("esi", 0), "esi"),
+    ]
+    earnings = [_money_line(item.get("label"), item.get("amount"), item.get("key")) for item in earnings if item.get("label")]
+    deductions = [_money_line(item.get("label"), item.get("amount"), item.get("key")) for item in deductions if item.get("label")]
 
-    basic = _parse_float(data.get("basic", 0))
-    hra = _parse_float(data.get("hra", 0))
-    conveyance = _parse_float(data.get("conveyance", 0))
-    pf_deduction = _parse_float(data.get("pf_deduction", 0))
-    professional_tax = _parse_float(data.get("professional_tax", 0))
-    esi = _parse_float(data.get("esi", 0))
+    basic = next((item["amount"] for item in earnings if item.get("key") == "basic"), _parse_float(data.get("basic", 0)))
+    hra = next((item["amount"] for item in earnings if item.get("key") == "hra"), _parse_float(data.get("hra", 0)))
+    conveyance = next((item["amount"] for item in earnings if item.get("key") == "conveyance"), _parse_float(data.get("conveyance", 0)))
+    pf_deduction = next((item["amount"] for item in deductions if item.get("key") == "pf_deduction"), _parse_float(data.get("pf_deduction", 0)))
+    professional_tax = next((item["amount"] for item in deductions if item.get("key") == "professional_tax"), _parse_float(data.get("professional_tax", 0)))
+    income_tax = next((item["amount"] for item in deductions if item.get("key") == "income_tax"), _parse_float(data.get("income_tax", 0)))
+    esi = next((item["amount"] for item in deductions if item.get("key") == "esi"), _parse_float(data.get("esi", 0)))
 
-    gross_earnings = basic + hra + conveyance
-    gross_deductions = pf_deduction + professional_tax + esi
+    gross_earnings = sum(item["amount"] for item in earnings)
+    gross_deductions = sum(item["amount"] for item in deductions)
     net_pay = gross_earnings - gross_deductions
 
     profile = _derive_employee_profile(data)
+
+    existing_payslip = _collection().find_one({"employee_id": employee_id, "month": month, "year": year})
+    if existing_payslip:
+        merged_profile = _merge_profile(existing_payslip.get("employee_profile"), profile)
+        refresh_fields = {
+            "employee_name": user.get("name") or merged_profile.get("name") or existing_payslip.get("employee_name", ""),
+            "lop_days": _parse_float(data.get("lop_days", existing_payslip.get("lop_days", 0))),
+            "std_days": _parse_float(data.get("std_days", existing_payslip.get("std_days", 30))),
+            "worked_days": _parse_float(data.get("worked_days", existing_payslip.get("worked_days", 30))),
+            "basic": basic,
+            "hra": hra,
+            "conveyance": conveyance,
+            "pf_deduction": pf_deduction,
+            "professional_tax": professional_tax,
+            "income_tax": income_tax,
+            "esi": esi,
+            "earnings": earnings,
+            "deductions": deductions,
+            "gross_earnings": gross_earnings,
+            "gross_deductions": gross_deductions,
+            "net_pay": net_pay,
+            "employee_profile": merged_profile,
+            "pdf_filename": f"Payslip_{employee_id}_{month}_{year}.pdf",
+        }
+        _collection().update_one({"_id": existing_payslip["_id"]}, {"$set": refresh_fields})
+        existing_payslip.update(refresh_fields)
+        return existing_payslip, None, 200
+
     payslip_doc = {
         "user_id": user["_id"],
         "employee_id": employee_id,
@@ -331,7 +590,10 @@ def _create_or_get_payslip(data):
         "conveyance": conveyance,
         "pf_deduction": pf_deduction,
         "professional_tax": professional_tax,
+        "income_tax": income_tax,
         "esi": esi,
+        "earnings": earnings,
+        "deductions": deductions,
         "gross_earnings": gross_earnings,
         "gross_deductions": gross_deductions,
         "net_pay": net_pay,
@@ -393,7 +655,8 @@ def upload_excel():
             if not any(row):
                 continue
 
-            row_dict = {headers[i]: row[i] for i in range(len(headers)) if i < len(row)}
+            row_dict = {headers[i]: row[i] for i in range(len(headers)) if i < len(row) and headers[i] not in (None, "")}
+            row_dict["__headers"] = [header for header in headers if header not in (None, "")]
             row_data = _build_row_data(row_dict)
             employee_id = row_data["employee_id"]
             if not employee_id:
@@ -549,7 +812,8 @@ def download_payslip(payslip_id):
         return jsonify({"error": "Employee not found"}), 404
 
     employee_snapshot = dict(employee)
-    employee_snapshot.update(payslip.get("employee_profile") or {})
+    employee_snapshot = _merge_profile(employee_snapshot, payslip.get("employee_profile") or {})
+    employee_snapshot["employee_id"] = payslip.get("employee_id", employee_snapshot.get("employee_id", ""))
 
     pdf_buffer = _build_pdf(employee_snapshot, payslip)
     return send_file(
@@ -558,3 +822,123 @@ def download_payslip(payslip_id):
         as_attachment=True,
         download_name=payslip.get("pdf_filename", f"Payslip_{payslip['employee_id']}.pdf"),
     )
+
+
+@payslip_bp.route("/<payslip_id>", methods=["PUT"])
+def update_payslip(payslip_id):
+    _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only admins can edit payslips"}), 403
+
+    try:
+        payslip = _collection().find_one({"_id": ObjectId(payslip_id)})
+    except Exception:
+        payslip = None
+
+    if not payslip:
+        return jsonify({"error": "Payslip not found"}), 404
+
+    payload = request.get_json() or {}
+    employee_id = _normalize_excel_identifier(payload.get("employee_id") or payslip.get("employee_id"))
+    month = _stringify_excel_value(payload.get("month") or payslip.get("month"))
+    year = _normalize_year(payload.get("year") or payslip.get("year"))
+
+    if not employee_id or not month or not year:
+        return jsonify({"error": "employee_id, month, and year are required"}), 400
+
+    user = _find_user_by_employee_id(employee_id)
+    if not user:
+        return jsonify({"error": f"Employee with employeeId '{employee_id}' not found in HRMS"}), 404
+
+    duplicate = _collection().find_one({
+        "_id": {"$ne": payslip["_id"]},
+        "employee_id": employee_id,
+        "month": month,
+        "year": year,
+    })
+    if duplicate:
+        return jsonify({"error": "Another payslip already exists for this employee and period"}), 409
+
+    merged_source = {
+        **(payslip.get("employee_profile") or {}),
+        **payslip,
+        **payload,
+    }
+    profile = _derive_employee_profile(merged_source)
+    earnings = _normalize_line_items(payload.get("earnings") or payslip.get("earnings") or [])
+    deductions = _normalize_line_items(payload.get("deductions") or payslip.get("deductions") or [])
+
+    if not earnings:
+        earnings = [
+            _money_line("BASIC", payload.get("basic", payslip.get("basic", 0)), "basic"),
+            _money_line("HOUSE RENT ALLOWENCE", payload.get("hra", payslip.get("hra", 0)), "hra"),
+            _money_line("CONV C CCA", payload.get("conveyance", payslip.get("conveyance", 0)), "conveyance"),
+        ]
+    if not deductions:
+        deductions = [
+            _money_line("PROVIDENT FUND", payload.get("pf_deduction", payslip.get("pf_deduction", 0)), "pf_deduction"),
+            _money_line("PROFESSIONAL TAX", payload.get("professional_tax", payslip.get("professional_tax", 0)), "professional_tax"),
+            _money_line("Income Tax", payload.get("income_tax", payslip.get("income_tax", 0)), "income_tax"),
+            _money_line("ESI", payload.get("esi", payslip.get("esi", 0)), "esi"),
+        ]
+
+    basic = next((item["amount"] for item in earnings if item.get("key") == "basic"), _parse_float(payload.get("basic", payslip.get("basic", 0))))
+    hra = next((item["amount"] for item in earnings if item.get("key") == "hra"), _parse_float(payload.get("hra", payslip.get("hra", 0))))
+    conveyance = next((item["amount"] for item in earnings if item.get("key") == "conveyance"), _parse_float(payload.get("conveyance", payslip.get("conveyance", 0))))
+    pf_deduction = next((item["amount"] for item in deductions if item.get("key") == "pf_deduction"), _parse_float(payload.get("pf_deduction", payslip.get("pf_deduction", 0))))
+    professional_tax = next((item["amount"] for item in deductions if item.get("key") == "professional_tax"), _parse_float(payload.get("professional_tax", payslip.get("professional_tax", 0))))
+    income_tax = next((item["amount"] for item in deductions if item.get("key") == "income_tax"), _parse_float(payload.get("income_tax", payslip.get("income_tax", 0))))
+    esi = next((item["amount"] for item in deductions if item.get("key") == "esi"), _parse_float(payload.get("esi", payslip.get("esi", 0))))
+    gross_earnings = sum(item["amount"] for item in earnings)
+    gross_deductions = sum(item["amount"] for item in deductions)
+    net_pay = gross_earnings - gross_deductions
+    month_number = _month_number(month)
+
+    update_fields = {
+        "employee_id": employee_id,
+        "employee_name": user.get("name") or profile.get("name") or payslip.get("employee_name", ""),
+        "month": month,
+        "month_number": month_number,
+        "year": year,
+        "period_key": f"{year}-{month_number:02d}" if month_number else f"{year}-{month}",
+        "lop_days": _parse_float(payload.get("lop_days", payslip.get("lop_days", 0))),
+        "std_days": _parse_float(payload.get("std_days", payslip.get("std_days", 30))),
+        "worked_days": _parse_float(payload.get("worked_days", payslip.get("worked_days", 30))),
+        "basic": basic,
+        "hra": hra,
+        "conveyance": conveyance,
+        "pf_deduction": pf_deduction,
+        "professional_tax": professional_tax,
+        "income_tax": income_tax,
+        "esi": esi,
+        "earnings": earnings,
+        "deductions": deductions,
+        "gross_earnings": gross_earnings,
+        "gross_deductions": gross_deductions,
+        "net_pay": net_pay,
+        "employee_profile": profile,
+        "pdf_filename": f"Payslip_{employee_id}_{month}_{year}.pdf",
+    }
+
+    _collection().update_one({"_id": payslip["_id"]}, {"$set": update_fields})
+    payslip.update(update_fields)
+    return jsonify({"success": True, "message": "Payslip updated successfully", "payslip": _serialize_doc(payslip)}), 200
+
+
+@payslip_bp.route("/<payslip_id>", methods=["DELETE"])
+def delete_payslip(payslip_id):
+    _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only admins can delete payslips"}), 403
+
+    try:
+        result = _collection().delete_one({"_id": ObjectId(payslip_id)})
+    except Exception:
+        result = None
+
+    if not result or result.deleted_count == 0:
+        return jsonify({"error": "Payslip not found"}), 404
+
+    return jsonify({"success": True, "message": "Payslip deleted successfully"}), 200

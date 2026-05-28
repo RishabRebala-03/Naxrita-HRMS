@@ -5,11 +5,14 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  Pencil,
   FileSpreadsheet,
   FileText,
   Filter,
   Search,
+  Trash2,
   Upload,
+  X,
   Users,
 } from "lucide-react";
 
@@ -226,6 +229,40 @@ const S = {
     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
     padding: 16,
   },
+  modalBackdrop: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(20, 22, 26, 0.45)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    zIndex: 1000,
+  },
+  modalCard: {
+    width: "min(920px, 100%)",
+    maxHeight: "90vh",
+    overflowY: "auto",
+    background: C.white,
+    borderRadius: 14,
+    border: `1px solid ${C.border}`,
+    boxShadow: "0 18px 50px rgba(0,0,0,0.18)",
+    padding: 18,
+  },
+  lineItemRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 140px", gap: 10, marginBottom: 10 },
+  dangerTextButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "9px 12px",
+    borderRadius: 8,
+    border: `1px solid ${C.redBorder}`,
+    background: C.redLight,
+    color: C.red,
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
+  },
   empty: { textAlign: "center", padding: "34px 16px", color: C.textMid },
 };
 
@@ -263,7 +300,42 @@ function Payslips({ user }) {
   const [selectedStorageStatus, setSelectedStorageStatus] = useState("all");
   const [sortBy, setSortBy] = useState("period_desc");
   const [expandedGroups, setExpandedGroups] = useState({});
+  const [editingPayslip, setEditingPayslip] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingPayslipId, setDeletingPayslipId] = useState("");
   const fileInputRef = useRef(null);
+
+  const openEditModal = (item) => {
+    const profile = item.employee_profile || {};
+    setEditingPayslip(item);
+    setEditForm({
+      employee_id: item.employee_id || "",
+      month: item.month || "",
+      year: item.year || "",
+      lop_days: String(item.lop_days ?? ""),
+      std_days: String(item.std_days ?? ""),
+      worked_days: String(item.worked_days ?? ""),
+      bank: profile.bank || item.bank || "",
+      bank_account_no: profile.bank_account_no || item.bank_account_no || "",
+      doj: profile.doj || item.doj || "",
+      pf_no: profile.pf_no || item.pf_no || "",
+      location: profile.location || item.location || "",
+      department: profile.department || item.department || "",
+      management_level: profile.management_level || item.management_level || "",
+      facility: profile.facility || item.facility || "",
+      entity: profile.entity || item.entity || "",
+      pf_uan: profile.pf_uan || item.pf_uan || "",
+      earnings: (item.earnings || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
+      deductions: (item.deductions || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
+    });
+  };
+
+  const closeEditModal = () => {
+    setEditingPayslip(null);
+    setEditForm(null);
+    setSavingEdit(false);
+  };
 
   const loadVisiblePayslips = async () => {
     if (!userId) return;
@@ -398,6 +470,70 @@ function Payslips({ user }) {
 
   const handleDownload = (payslipId) => {
     window.open(`${API_BASE}/payslips/download/${payslipId}?user_id=${encodeURIComponent(userId)}`, "_blank", "noopener,noreferrer");
+  };
+
+  const handleLineItemChange = (kind, index, field, value) => {
+    setEditForm((previous) => ({
+      ...previous,
+      [kind]: previous[kind].map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)),
+    }));
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingPayslip || !editForm) return;
+    setSavingEdit(true);
+    setMessage(null);
+    try {
+      const payload = {
+        employee_id: editForm.employee_id,
+        month: editForm.month,
+        year: editForm.year,
+        lop_days: Number(editForm.lop_days || 0),
+        std_days: Number(editForm.std_days || 0),
+        worked_days: Number(editForm.worked_days || 0),
+        employee_profile: {
+          name: editingPayslip.employee_name,
+          bank: editForm.bank,
+          bank_account_no: editForm.bank_account_no,
+          doj: editForm.doj,
+          pf_no: editForm.pf_no,
+          location: editForm.location,
+          department: editForm.department,
+          management_level: editForm.management_level,
+          facility: editForm.facility,
+          entity: editForm.entity,
+          pf_uan: editForm.pf_uan,
+        },
+        earnings: editForm.earnings.map((item) => ({ ...item, amount: Number(item.amount || 0) })),
+        deductions: editForm.deductions.map((item) => ({ ...item, amount: Number(item.amount || 0) })),
+      };
+      const result = await fetchJson(`/payslips/${editingPayslip._id}?user_id=${encodeURIComponent(userId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setMessage({ tone: "success", text: result.message || "Payslip updated successfully" });
+      closeEditModal();
+      await loadVisiblePayslips();
+    } catch (error) {
+      setMessage({ tone: "error", text: error.message });
+      setSavingEdit(false);
+    }
+  };
+
+  const handleDeletePayslip = async (item) => {
+    if (!window.confirm(`Delete payslip for ${item.employee_name} - ${item.month} ${item.year}?`)) return;
+    setDeletingPayslipId(item._id);
+    setMessage(null);
+    try {
+      const result = await fetchJson(`/payslips/${item._id}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
+      setMessage({ tone: "success", text: result.message || "Payslip deleted successfully" });
+      await loadVisiblePayslips();
+    } catch (error) {
+      setMessage({ tone: "error", text: error.message });
+    } finally {
+      setDeletingPayslipId("");
+    }
   };
 
   const filterOptions = useMemo(() => {
@@ -669,7 +805,7 @@ function Payslips({ user }) {
                             <td style={S.td}>{row.employee_id}</td>
                             <td style={S.td}>{row.name}</td>
                             <td style={S.td}>{row.month} {row.year}</td>
-                            <td style={S.td}>{currency(Number(row.basic || 0) + Number(row.hra || 0) + Number(row.conveyance || 0) - Number(row.pf_deduction || 0) - Number(row.professional_tax || 0) - Number(row.esi || 0))}</td>
+                            <td style={S.td}>{currency(row.net_pay ?? Number(row.basic || 0) + Number(row.hra || 0) + Number(row.conveyance || 0) - Number(row.pf_deduction || 0) - Number(row.professional_tax || 0) - Number(row.esi || 0))}</td>
                             <td style={S.td}>
                               <span style={S.badge}>
                                 {row.storage_status === "ready" ? "Ready to store" : row.storage_status === "stored" ? "Already stored" : "Needs attention"}
@@ -860,10 +996,29 @@ function Payslips({ user }) {
                                     {isAdmin ? <Users size={14} /> : <FileText size={14} />}
                                     Stored under {item.period_key || `${item.year}-${String(item.month_number || monthIndex(item.month)).padStart(2, "0")}`}
                                   </div>
-                                  <button type="button" style={{ ...S.btnPrimary, marginTop: 16 }} onClick={() => handleDownload(item._id)}>
-                                    <Download size={15} />
-                                    Download PDF
-                                  </button>
+                                  <div style={{ ...S.rowGap, marginTop: 16 }}>
+                                    {isAdmin ? (
+                                      <>
+                                        <button type="button" style={S.btnSecondary} onClick={() => openEditModal(item)}>
+                                          <Pencil size={15} />
+                                          Edit
+                                        </button>
+                                        <button
+                                          type="button"
+                                          style={{ ...S.dangerTextButton, ...(deletingPayslipId === item._id ? S.btnDisabled : {}) }}
+                                          disabled={deletingPayslipId === item._id}
+                                          onClick={() => handleDeletePayslip(item)}
+                                        >
+                                          <Trash2 size={15} />
+                                          {deletingPayslipId === item._id ? "Deleting..." : "Delete"}
+                                        </button>
+                                      </>
+                                    ) : null}
+                                    <button type="button" style={S.btnPrimary} onClick={() => handleDownload(item._id)}>
+                                      <Download size={15} />
+                                      Download PDF
+                                    </button>
+                                  </div>
                                 </div>
                               </article>
                             ))}
@@ -881,6 +1036,74 @@ function Payslips({ user }) {
               )}
             </div>
           </>
+        ) : null}
+
+        {isAdmin && editingPayslip && editForm ? (
+          <div style={S.modalBackdrop} onClick={closeEditModal}>
+            <div style={S.modalCard} onClick={(event) => event.stopPropagation()}>
+              <div style={S.rowBetween}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Edit Payslip</div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>{editingPayslip.employee_name} • {editingPayslip.employee_id}</div>
+                </div>
+                <button type="button" style={S.btnSecondary} onClick={closeEditModal}>
+                  <X size={15} />
+                  Close
+                </button>
+              </div>
+
+              <div style={{ ...S.formGrid, marginTop: 16 }}>
+                <div style={S.field}><label style={S.label}>Employee ID</label><input style={S.input} value={editForm.employee_id} onChange={(event) => setEditForm((previous) => ({ ...previous, employee_id: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Month</label><input style={S.input} value={editForm.month} onChange={(event) => setEditForm((previous) => ({ ...previous, month: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Year</label><input style={S.input} value={editForm.year} onChange={(event) => setEditForm((previous) => ({ ...previous, year: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>LOP Days</label><input style={S.input} value={editForm.lop_days} onChange={(event) => setEditForm((previous) => ({ ...previous, lop_days: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>STD Days</label><input style={S.input} value={editForm.std_days} onChange={(event) => setEditForm((previous) => ({ ...previous, std_days: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Worked Days</label><input style={S.input} value={editForm.worked_days} onChange={(event) => setEditForm((previous) => ({ ...previous, worked_days: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Bank</label><input style={S.input} value={editForm.bank} onChange={(event) => setEditForm((previous) => ({ ...previous, bank: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Bank A/c No</label><input style={S.input} value={editForm.bank_account_no} onChange={(event) => setEditForm((previous) => ({ ...previous, bank_account_no: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>DOJ</label><input style={S.input} value={editForm.doj} onChange={(event) => setEditForm((previous) => ({ ...previous, doj: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>PF NO</label><input style={S.input} value={editForm.pf_no} onChange={(event) => setEditForm((previous) => ({ ...previous, pf_no: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Location</label><input style={S.input} value={editForm.location} onChange={(event) => setEditForm((previous) => ({ ...previous, location: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Department</label><input style={S.input} value={editForm.department} onChange={(event) => setEditForm((previous) => ({ ...previous, department: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Management Level</label><input style={S.input} value={editForm.management_level} onChange={(event) => setEditForm((previous) => ({ ...previous, management_level: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Facility</label><input style={S.input} value={editForm.facility} onChange={(event) => setEditForm((previous) => ({ ...previous, facility: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Entity</label><input style={S.input} value={editForm.entity} onChange={(event) => setEditForm((previous) => ({ ...previous, entity: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>PF - UAN</label><input style={S.input} value={editForm.pf_uan} onChange={(event) => setEditForm((previous) => ({ ...previous, pf_uan: event.target.value }))} /></div>
+              </div>
+
+              <div style={{ ...S.formGrid, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Earnings</div>
+                  {editForm.earnings.map((item, index) => (
+                    <div key={`earning-${item.key || index}`} style={S.lineItemRow}>
+                      <input style={S.input} value={item.label} onChange={(event) => handleLineItemChange("earnings", index, "label", event.target.value)} />
+                      <input style={S.input} value={item.amount} onChange={(event) => handleLineItemChange("earnings", index, "amount", event.target.value)} />
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Deductions</div>
+                  {editForm.deductions.map((item, index) => (
+                    <div key={`deduction-${item.key || index}`} style={S.lineItemRow}>
+                      <input style={S.input} value={item.label} onChange={(event) => handleLineItemChange("deductions", index, "label", event.target.value)} />
+                      <input style={S.input} value={item.amount} onChange={(event) => handleLineItemChange("deductions", index, "amount", event.target.value)} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ ...S.rowBetween, marginTop: 18 }}>
+                <div style={{ fontSize: 12, color: C.textMid }}>Saving recalculates gross earnings, deductions, and net pay automatically.</div>
+                <div style={S.rowGap}>
+                  <button type="button" style={S.btnSecondary} onClick={closeEditModal}>Cancel</button>
+                  <button type="button" style={{ ...S.btnPrimary, ...(savingEdit ? S.btnDisabled : {}) }} disabled={savingEdit} onClick={handleSaveEdit}>
+                    <Pencil size={15} />
+                    {savingEdit ? "Saving..." : "Save Changes"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         ) : null}
       </div>
     </div>
