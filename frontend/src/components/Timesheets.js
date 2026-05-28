@@ -1999,18 +1999,6 @@ function TimesheetPage({
     }
   }, [rows, selectedRowId]);
 
-  const getTotalHours = () =>
-    rows.reduce((t, row) =>
-      t + row.entries.reduce((s, e) => {
-        const v = e.value !== undefined ? e.value : String(e.hours ?? '');
-        const n = parseFloat(v);
-        return s + (isNaN(n) ? 0 : n);
-      }, 0), 0)
-    + approvedLeaveEntries
-      .filter((leave) => !holidayByDate[leave.date])
-      .reduce((sum, leave) => sum + (leave.hours || 0), 0)
-    + holidays.reduce((sum, holiday) => sum + (holiday.hours || DAILY_WORK_HOUR_LIMIT), 0);
-
   const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
   const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
   const errors       = validationErrors;
@@ -2367,19 +2355,11 @@ function TimesheetPage({
   };
 
   const periodStartDate = selectedPeriodOption?.start ? parseISO(selectedPeriodOption.start) : null;
-  const periodEndDate = selectedPeriodOption?.end ? parseISO(selectedPeriodOption.end) : null;
-  const periodDayCount = periodStartDate && periodEndDate
-    ? eachDayOfInterval({ start: periodStartDate, end: periodEndDate }).length
-    : dates.length;
+  const periodAnchorLabel = periodStartDate ? format(periodStartDate, 'M/d/yyyy') : 'Select period';
 
   return (
     <div className={`mte-embedded-shell ${embedded ? 'is-embedded' : ''}`}>
       <div className="mte-date-toolbar mte-timesheet-submit-toolbar">
-        <div className="mte-timesheet-context">
-          <strong>Timesheet</strong>
-          <span>{selectedPeriodOption?.label || 'Current period'}</span>
-          <small>{formatTimesheetHoursWithSuffix(getTotalHours()) ? `Total working hours ${formatTimesheetHoursWithSuffix(getTotalHours())}` : 'Total working hours'}</small>
-        </div>
         <div className="mte-action-toolbar mte-action-toolbar-top">
           <button type="button" className="mte-tool-button" onClick={handleSaveDraft} disabled={isReadOnly || loading}>
             <Save size={18} />
@@ -2397,7 +2377,7 @@ function TimesheetPage({
           </button>
           <button type="button" className="mte-tool-button" onClick={handleAddRow} disabled={isReadOnly || loading}>
             <Plus size={18} />
-            <span>Add Row</span>
+            <span>New</span>
           </button>
           <button type="button" className="mte-tool-button">
             <CircleHelp size={18} />
@@ -2406,63 +2386,50 @@ function TimesheetPage({
         </div>
         <div className="mte-timesheet-submit-stack">
           <div className="mte-timesheet-period-tools">
-            <div className="mte-timesheet-tool-block">
-              <span className="mte-timesheet-tool-label">Calendar</span>
-              <div className="mte-date-picker-group mte-period-calendar-control">
-                <button
-                  type="button"
-                  className="mte-ghost-icon"
-                  aria-label="Previous period"
-                  onClick={() => movePeriod(1)}
-                  disabled={!canGoToPreviousPeriod}
+            <div className="mte-date-picker-group mte-period-calendar-control">
+              <button
+                type="button"
+                className="mte-ghost-icon mte-period-nav-button"
+                aria-label="Previous period"
+                onClick={() => movePeriod(1)}
+                disabled={!canGoToPreviousPeriod}
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <label className="mte-period-calendar-card">
+                <span className="mte-period-anchor-copy">{periodAnchorLabel}</span>
+                <span className="mte-period-calendar-chevron">
+                  <ChevronRight size={18} />
+                </span>
+                <span className="mte-period-calendar-icon">
+                  <Calendar size={18} />
+                </span>
+                <select
+                  className="mte-period-calendar-select"
+                  aria-label="Timesheet period"
+                  value={activePeriod}
+                  onChange={(event) => {
+                    saveDraftSilentlyRef.current?.();
+                    setActivePeriod(event.target.value);
+                    setTimesheetStatus('draft');
+                  }}
                 >
-                  <ChevronLeft size={16} />
-                </button>
-                <label className="mte-period-calendar-card">
-                  <Calendar size={16} />
-                  <span className="mte-period-date-tile">
-                    <small>{periodStartDate ? format(periodStartDate, 'MMM') : 'Start'}</small>
-                    <strong>{periodStartDate ? format(periodStartDate, 'd') : '--'}</strong>
-                  </span>
-                  <span className="mte-period-range-copy">
-                    <strong>
-                      {periodStartDate && periodEndDate
-                        ? `${format(periodStartDate, 'MMM d')} - ${format(periodEndDate, 'MMM d, yyyy')}`
-                        : selectedPeriodOption?.label || 'Current period'}
-                    </strong>
-                    <small>{periodDayCount} day{periodDayCount === 1 ? '' : 's'}</small>
-                  </span>
-                  <span className="mte-period-date-tile">
-                    <small>{periodEndDate ? format(periodEndDate, 'MMM') : 'End'}</small>
-                    <strong>{periodEndDate ? format(periodEndDate, 'd') : '--'}</strong>
-                  </span>
-                  <select
-                    className="mte-period-calendar-select"
-                    aria-label="Timesheet period"
-                    value={activePeriod}
-                    onChange={(event) => {
-                      saveDraftSilentlyRef.current?.();
-                      setActivePeriod(event.target.value);
-                      setTimesheetStatus('draft');
-                    }}
-                  >
-                    {availablePeriods.map((period) => (
-                      <option key={period.value} value={period.value}>
-                        {period.shortLabel || period.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  className="mte-ghost-icon"
-                  aria-label="Next period"
-                  onClick={() => movePeriod(-1)}
-                  disabled={!canGoToNextPeriod}
-                >
-                  <ChevronRight size={16} />
-                </button>
-              </div>
+                  {availablePeriods.map((period) => (
+                    <option key={period.value} value={period.value}>
+                      {period.shortLabel || period.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="mte-ghost-icon mte-period-nav-button"
+                aria-label="Next period"
+                onClick={() => movePeriod(-1)}
+                disabled={!canGoToNextPeriod}
+              >
+                <ChevronRight size={18} />
+              </button>
             </div>
           </div>
           <div className="mte-primary-actions">
@@ -2504,14 +2471,6 @@ function TimesheetPage({
       )}
 
       {statusMessage()}
-
-      <div className="mte-grid-caption">
-        <div>
-          <strong>Charge Codes</strong>
-          <span>Use your assigned codes and enter day-wise hours exactly as in the reference layout.</span>
-        </div>
-        {timesheetStatus !== 'draft' ? <StatusBadge status={timesheetStatus} /> : null}
-      </div>
 
       <TimesheetGrid
         dates={dates}
