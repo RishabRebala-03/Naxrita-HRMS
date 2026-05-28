@@ -914,14 +914,14 @@
 
 .mte-sheet-edit-cell:hover,
 .mte-sheet-edit-cell:focus-visible {
-  border-color: #b8c4d3;
-  background: #f6f9fc;
+  border-color: transparent;
+  background: transparent;
   outline: none;
 }
 
 .mte-sheet-edit-cell.has-value {
-  background: #eef5fb;
-  border-color: #d2e1ee;
+  background: transparent;
+  border-color: transparent;
   color: #1f3f5b;
 }
 

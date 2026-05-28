@@ -1093,9 +1093,10 @@ function TimesheetGrid({
   const formatHoursValue = (hours) => {
     const numericHours = Number(hours);
     if (!Number.isFinite(numericHours)) return '';
-    return Number.isInteger(numericHours)
-      ? String(numericHours)
-      : String(parseFloat(numericHours.toFixed(2)));
+    const roundedHours = Math.round(numericHours * 100) / 100;
+    return Number.isInteger(roundedHours * 10)
+      ? roundedHours.toFixed(1)
+      : roundedHours.toFixed(2);
   };
   const displayHours = (hours, showZero = false) => {
     if (!hours && showZero) return '';
@@ -1201,16 +1202,16 @@ function TimesheetGrid({
     );
   };
 
-  const weekendCellStyle = (dateStr) => (
-    isWeekendDate(dateStr)
+  const nonWorkingDayCellStyle = (dateStr) => (
+    isWeekendDate(dateStr) || isHoliday(dateStr)
       ? { background: '#e5e7eb', color: C.textMid }
       : {}
   );
   const thStyle = (isHol, isWeekend) => ({
     padding: '10px 8px', textAlign: 'center', fontSize: '12px', fontWeight: '600',
     minWidth: '90px', borderLeft: `1px solid ${C.borderLight}`,
-    background: isHol ? C.holiday : isWeekend ? '#e5e7eb' : C.headerBg,
-    color:      isHol ? C.holidayText : isWeekend ? '#4b5563' : C.text,
+    background: isHol || isWeekend ? '#e5e7eb' : C.headerBg,
+    color:      isHol || isWeekend ? '#4b5563' : C.text,
     position: 'relative', zIndex: 1,
   });
 
@@ -1246,11 +1247,10 @@ function TimesheetGrid({
                 return (
                   <th key={d} style={thStyle(isHol, isWeekend)} className="mte-sheet-date-head">
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
-                      <span style={{ fontSize: '11px', color: isHol ? C.holidayText : isWeekend ? '#4b5563' : C.textMid }}>
+                      <span style={{ fontSize: '11px', color: isHol || isWeekend ? '#4b5563' : C.textMid }}>
                         {format(parseISO(d), 'EEE')}
                       </span>
                       <span>{format(parseISO(d), 'MMM d')}</span>
-                      {isHol && <span style={{ fontSize: '10px' }}>PH</span>}
                     </div>
                   </th>
                 );
@@ -1279,7 +1279,7 @@ function TimesheetGrid({
                 <span className="mte-sheet-meta-link">Work Location</span>
               </td>
               {dates.map((d) => (
-                <td key={`work-location-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{workLocation}</td>
+                <td key={`work-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{workLocation}</td>
               ))}
               <td className="mte-sheet-meta-total" />
             </tr>
@@ -1295,7 +1295,7 @@ function TimesheetGrid({
                 Assigned Location
               </td>
               {dates.map((d) => (
-                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{assignedLocation}</td>
+                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{assignedLocation}</td>
               ))}
               <td className="mte-sheet-meta-total">{assignedLocation}</td>
             </tr>
@@ -1311,7 +1311,7 @@ function TimesheetGrid({
                 Company Code/Cost Center
               </td>
               {dates.map((d) => (
-                <td key={`cost-center-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{companyCostCenter}</td>
+                <td key={`cost-center-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{companyCostCenter}</td>
               ))}
               <td className="mte-sheet-meta-total">{companyCostCenter}</td>
             </tr>
@@ -1327,7 +1327,7 @@ function TimesheetGrid({
                 Employee Id
               </td>
               {dates.map((d) => (
-                <td key={`employee-id-${d}`} className="mte-sheet-meta-cell" style={weekendCellStyle(d)}>{employeeId}</td>
+                <td key={`employee-id-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{employeeId}</td>
               ))}
               <td className="mte-sheet-meta-total">{employeeId}</td>
             </tr>
@@ -1340,7 +1340,7 @@ function TimesheetGrid({
                 zIndex: 9,
                 borderRight: `1px solid ${C.borderLight}`,
               }} />
-              {dates.map((d) => <td key={`spacer-${d}`} style={weekendCellStyle(d)} />)}
+              {dates.map((d) => <td key={`spacer-${d}`} style={nonWorkingDayCellStyle(d)} />)}
               <td />
             </tr>
 
@@ -1404,9 +1404,9 @@ function TimesheetGrid({
                       <td key={d} style={{
                         padding: '8px', textAlign: 'center',
                         borderLeft: `1px solid ${C.borderLight}`,
-                        background: isHol ? '#fffbeb' : isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
+                        background: isHol || isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
                       }}>
-                        {isWeekend ? null : isHol || isFullDayLeave ? (
+                        {isHol || isWeekend ? null : isFullDayLeave ? (
                           <span
                             style={{
                               display: 'inline-flex',
@@ -1416,15 +1416,13 @@ function TimesheetGrid({
                               borderRadius: '999px',
                               fontSize: '11px',
                               fontWeight: '700',
-                              border: `1px solid ${isHol ? C.amberBorder : C.purpleBorder}`,
-                              background: isHol ? '#fff7d6' : C.white,
-                              color: isHol ? C.holidayText : C.purple,
+                              border: `1px solid ${C.purpleBorder}`,
+                              background: C.white,
+                              color: C.purple,
                             }}
-                            title={isHol
-                              ? `${holidayChargeCodeForDate(d).name} (${holidayChargeCodeForDate(d).code})`
-                              : `${leaveEntry.label}${leaveEntry.isHalfDay && leaveEntry.halfDayPeriod ? ` (${leaveEntry.halfDayPeriod})` : ''}`}
+                            title={`${leaveEntry.label}${leaveEntry.isHalfDay && leaveEntry.halfDayPeriod ? ` (${leaveEntry.halfDayPeriod})` : ''}`}
                           >
-                            {isHol ? 'PH' : leaveEntry.displayCode}
+                            {leaveEntry.displayCode}
                           </span>
                         ) : (() => {
                           const cellKey = `work-${row.id}-${d}`;
@@ -1536,7 +1534,7 @@ function TimesheetGrid({
                   const leaveCell = leave.leaveByDate[d];
                   const canCancelLeave = leaveCell && canEmployeeCancelApprovedLeave(leaveCell);
                   return (
-                    <td key={`leave-cell-${leave.key}-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                    <td key={`leave-cell-${leave.key}-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                       {leaveCell ? (
                         <span className="mte-sheet-leave-cell">
                           <span>{displayHours(leave.hoursByDate[d] || 0)}</span>
@@ -1575,7 +1573,7 @@ function TimesheetGrid({
                   </span>
                 </td>
                 {dates.map((d) => (
-                  <td key={`holiday-cell-${dateStr}-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                  <td key={`holiday-cell-${dateStr}-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                     {d === dateStr ? displayHours(WORKDAY_HOURS) : ''}
                   </td>
                 ))}
@@ -1595,7 +1593,7 @@ function TimesheetGrid({
                 Total working hours
               </td>
               {dates.map((d) => (
-                <td key={`total-hours-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                <td key={`total-hours-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                   {displayHours(totalHoursForDate(d))}
                 </td>
               ))}
@@ -1614,7 +1612,7 @@ function TimesheetGrid({
                 Work Schedule
               </td>
               {dates.map((d) => (
-                <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                   {displayHours(workScheduleForDate(d))}
                 </td>
               ))}
@@ -1633,7 +1631,7 @@ function TimesheetGrid({
                 Daily Overtime
               </td>
               {dates.map((d) => (
-                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                   {renderAdjustmentCell('daily_overtime', d, dailyOvertime, dailyOvertimeHoursForDate(d))}
                 </td>
               ))}
@@ -1654,7 +1652,7 @@ function TimesheetGrid({
                 Holiday Payout
               </td>
               {dates.map((d) => (
-                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell" style={weekendCellStyle(d)}>
+                <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
                   {renderAdjustmentCell('holiday_payout', d, holidayPayout, holidayPayoutHoursForDate(d))}
                 </td>
               ))}
@@ -1676,7 +1674,7 @@ function TimesheetGrid({
                   {label}
                 </td>
                 {dates.map((d) => (
-                  <td key={`${label}-${d}`} className="mte-sheet-checkbox-cell" style={weekendCellStyle(d)}>
+                  <td key={`${label}-${d}`} className="mte-sheet-checkbox-cell" style={nonWorkingDayCellStyle(d)}>
                     <input type="checkbox" className="mte-sheet-checkbox" disabled={readOnly || isWeekendDate(d)} />
                   </td>
                 ))}
