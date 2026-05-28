@@ -2390,7 +2390,7 @@ function TimesheetPage({
                 onClick={() => movePeriod(1)}
                 disabled={!canGoToPreviousPeriod}
               >
-                <ChevronLeft size={18} />
+                <ChevronLeft size={30} strokeWidth={2.4} />
               </button>
               <label className="mte-period-calendar-card">
                 <span className="mte-period-anchor-copy">{periodAnchorLabel}</span>
@@ -2424,7 +2424,7 @@ function TimesheetPage({
                 onClick={() => movePeriod(-1)}
                 disabled={!canGoToNextPeriod}
               >
-                <ChevronRight size={18} />
+                <ChevronRight size={30} strokeWidth={2.4} />
               </button>
             </div>
           </div>
