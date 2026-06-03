@@ -15,6 +15,7 @@ import {
   X,
   Users,
 } from "lucide-react";
+import ValueHelpSelect from "./ValueHelpSelect";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
@@ -196,6 +197,7 @@ const S = {
   },
   banner: { borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13 },
   group: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 },
+  archiveGroupGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginTop: 16, alignItems: "start" },
   uploadSummaryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 },
   miniCard: { background: "#fcfcfe", border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 },
   sectionHeader: {
@@ -543,6 +545,50 @@ function Payslips({ user }) {
     )).sort((a, b) => a.localeCompare(b));
     return { years, employees };
   }, [payslips]);
+
+  const yearValueHelpOptions = useMemo(
+    () => [
+      { value: "all", label: "All years", description: "Show payslips from every available year" },
+      ...filterOptions.years.map((item) => ({
+        value: String(item),
+        label: String(item),
+        description: `Show payslips from ${item}`,
+      })),
+    ],
+    [filterOptions.years]
+  );
+
+  const monthValueHelpOptions = useMemo(
+    () => [
+      { value: "all", label: "All months", description: "Show payslips across all months" },
+      ...MONTHS.map((item) => ({
+        value: item,
+        label: item,
+        description: `Show payslips for ${item}`,
+      })),
+    ],
+    []
+  );
+
+  const employeeValueHelpOptions = useMemo(
+    () => [
+      { value: "all", label: "All employees", description: "Show payslips for every employee" },
+      ...filterOptions.employees.map((item) => {
+        const [employeeId, employeeName] = item.split("||");
+        return {
+          value: item,
+          label: employeeName || employeeId,
+          description: employeeId ? `Employee ID: ${employeeId}` : "Employee",
+        };
+      }),
+    ],
+    [filterOptions.employees]
+  );
+
+  const sortValueHelpOptions = useMemo(
+    () => SORT_OPTIONS.map((item) => ({ value: item.value, label: item.label })),
+    []
+  );
 
   const filteredPayslips = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -898,33 +944,43 @@ function Payslips({ user }) {
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Year</label>
-                  <select style={S.input} value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}>
-                    <option value="all">All years</option>
-                    {filterOptions.years.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </select>
+                  <ValueHelpSelect
+                    value={selectedYear}
+                    onChange={setSelectedYear}
+                    options={yearValueHelpOptions}
+                    placeholder="All years"
+                    searchPlaceholder="Search years"
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Month</label>
-                  <select style={S.input} value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>
-                    <option value="all">All months</option>
-                    {MONTHS.map((item) => <option key={item} value={item}>{item}</option>)}
-                  </select>
+                  <ValueHelpSelect
+                    value={selectedMonth}
+                    onChange={setSelectedMonth}
+                    options={monthValueHelpOptions}
+                    placeholder="All months"
+                    searchPlaceholder="Search months"
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Employee</label>
-                  <select style={S.input} value={selectedEmployee} onChange={(event) => setSelectedEmployee(event.target.value)}>
-                    <option value="all">All employees</option>
-                    {filterOptions.employees.map((item) => {
-                      const [employeeId, employeeName] = item.split("||");
-                      return <option key={item} value={item}>{employeeName} ({employeeId})</option>;
-                    })}
-                  </select>
+                  <ValueHelpSelect
+                    value={selectedEmployee}
+                    onChange={setSelectedEmployee}
+                    options={employeeValueHelpOptions}
+                    placeholder="All employees"
+                    searchPlaceholder="Search employees or IDs"
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Sort</label>
-                  <select style={S.input} value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                    {SORT_OPTIONS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                  </select>
+                  <ValueHelpSelect
+                    value={sortBy}
+                    onChange={setSortBy}
+                    options={sortValueHelpOptions}
+                    placeholder="Select sort order"
+                    searchPlaceholder="Search sort options"
+                  />
                 </div>
               </div>
 
@@ -937,12 +993,12 @@ function Payslips({ user }) {
               {loadingPayslips ? (
                 <div style={S.empty}>Loading payslips...</div>
               ) : groupedPayslips.length ? (
-                <div style={{ display: "grid", gap: 14, marginTop: 16 }}>
+                <div style={S.archiveGroupGrid}>
                   {groupedPayslips.map((group) => {
                     const totalNet = group.items.reduce((sum, item) => sum + Number(item.net_pay || 0), 0);
                     const isExpanded = expandedGroups[group.key] !== false;
                     return (
-                      <div key={group.key}>
+                      <div key={group.key} style={{ minWidth: 0 }}>
                         <button type="button" style={S.sectionHeader} onClick={() => toggleGroup(group.key)}>
                           <div style={{ textAlign: "left" }}>
                             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
