@@ -19,6 +19,7 @@ export default function ValueHelpSelect({
   value,
   onChange,
   options = [],
+  multiple = false,
   placeholder = "Select value",
   searchPlaceholder = "Search available options",
   className = "",
@@ -36,9 +37,19 @@ export default function ValueHelpSelect({
   const [popoverStyle, setPopoverStyle] = useState({});
 
   const normalizedOptions = useMemo(() => options.map(normalizeOption), [options]);
-  const selected = String(value ?? "")
-    ? normalizedOptions.find((option) => option.value === String(value ?? ""))
+  const selectedValues = useMemo(() => {
+    if (multiple) {
+      return Array.isArray(value) ? value.map((item) => String(item)) : [];
+    }
+    return String(value ?? "") ? [String(value ?? "")] : [];
+  }, [multiple, value]);
+
+  const selected = selectedValues.length
+    ? normalizedOptions.find((option) => option.value === selectedValues[0])
     : null;
+  const selectedLabels = normalizedOptions
+    .filter((option) => selectedValues.includes(option.value))
+    .map((option) => option.label);
 
   const filteredOptions = useMemo(() => {
     const nextQuery = query.trim().toLowerCase();
@@ -111,6 +122,14 @@ export default function ValueHelpSelect({
   }, [open, tableHeaders.length]);
 
   const handleSelect = (nextValue) => {
+    if (multiple) {
+      const nextSelected = selectedValues.includes(nextValue)
+        ? selectedValues.filter((item) => item !== nextValue)
+        : [...selectedValues, nextValue];
+      onChange?.(nextSelected);
+      return;
+    }
+
     onChange?.(nextValue);
     setOpen(false);
     setQuery("");
@@ -128,7 +147,9 @@ export default function ValueHelpSelect({
         aria-expanded={open}
       >
         <span className={selected ? "value-help-label" : "value-help-placeholder"}>
-          {selected?.label || placeholder}
+          {multiple
+            ? (selectedLabels.length ? `${selectedLabels.length} selected` : placeholder)
+            : (selected?.label || placeholder)}
         </span>
         <ChevronDown size={16} />
       </button>
@@ -151,7 +172,7 @@ export default function ValueHelpSelect({
               ) : null}
             </div>
 
-            <div className="value-help-list" role="listbox">
+            <div className="value-help-list" role="listbox" aria-multiselectable={multiple || undefined}>
               {tableHeaders.length ? (
                 <div className="value-help-table-head" aria-hidden="true">
                   {tableHeaders.map((header) => <span key={header}>{header}</span>)}
@@ -159,7 +180,7 @@ export default function ValueHelpSelect({
               ) : null}
               {filteredOptions.length ? (
                 filteredOptions.map((option) => {
-                  const isSelected = option.value !== "" && option.value === String(value ?? "");
+                  const isSelected = option.value !== "" && selectedValues.includes(option.value);
                   return (
                     <button
                       type="button"

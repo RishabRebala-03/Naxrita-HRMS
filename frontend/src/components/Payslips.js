@@ -3,21 +3,19 @@ import {
   Plus,
   ArrowDownAZ,
   CalendarRange,
-  ChevronDown,
-  ChevronRight,
   Download,
   Eye,
   Pencil,
   FileSpreadsheet,
   FileText,
   Filter,
-  Search,
   Trash2,
   Upload,
   X,
   Users,
 } from "lucide-react";
 import ValueHelpSelect from "./ValueHelpSelect";
+import ValueHelpSearch from "./ValueHelpSearch";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
@@ -246,6 +244,7 @@ const S = {
   th: {
     padding: "12px 10px",
     borderBottom: `1px solid ${C.border}`,
+    borderRight: `1px solid ${C.border}`,
     textAlign: "left",
     fontSize: 12,
     color: C.text,
@@ -257,6 +256,7 @@ const S = {
   td: {
     padding: "12px 10px",
     borderBottom: `1px solid ${C.borderLight}`,
+    borderRight: `1px solid ${C.borderLight}`,
     fontSize: 13,
     color: C.text,
     verticalAlign: "top",
@@ -380,6 +380,30 @@ const getUploadNetPay = (row) =>
   Number(row.net_pay ?? Number(row.gross_earnings || 0) - Number(row.gross_deductions || 0));
 const getProfileValue = (row, key) => row?.employee_profile?.[key] ?? row?.[key] ?? "";
 const normalizeLabelToKey = (label) => String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+const buildSingleSelectOptions = (items, allLabel, allDescription, mapper) => [
+  { value: "all", label: allLabel, description: allDescription },
+  ...items.map(mapper),
+];
+
+const buildSearchSuggestions = (rows, fields) => {
+  const suggestions = [];
+  const add = (value, description) => {
+    const text = String(value || "").trim();
+    if (!text) return;
+    suggestions.push({ value: text, label: text, description });
+  };
+
+  rows.forEach((row) => {
+    add(row.employee_name || row.name, "Employee");
+    add(row.employee_id, "Employee ID");
+    add(row.month, "Month");
+    add(row.year, "Year");
+    add(row.period_key, "Period");
+    fields.forEach((field) => add(field.key in row ? row[field.key] : getProfileValue(row, field.key), field.label));
+  });
+
+  return suggestions;
+};
 
 const buildEditorForm = (item) => {
   const profile = item.employee_profile || {};
@@ -432,6 +456,7 @@ const fetchJson = async (path, options = {}) => {
 
 function Payslips({ user }) {
   const isAdmin = user?.role === "Admin";
+  const canFilterByEmployee = user?.role !== "Employee";
   const userId = user?._id || user?.id || "";
   const [activeTab, setActiveTab] = useState(isAdmin ? "upload" : "display");
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()]);
@@ -447,15 +472,13 @@ function Payslips({ user }) {
   const [message, setMessage] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedYear, setSelectedYear] = useState("all");
-  const [selectedMonth, setSelectedMonth] = useState("all");
+  const [selectedMonths, setSelectedMonths] = useState([]);
   const [selectedEmployee, setSelectedEmployee] = useState("all");
   const [selectedStorageStatus, setSelectedStorageStatus] = useState("all");
   const [uploadSearchTerm, setUploadSearchTerm] = useState("");
   const [uploadEmployeeFilter, setUploadEmployeeFilter] = useState("all");
   const [uploadColumnFilters, setUploadColumnFilters] = useState({});
   const [sortBy, setSortBy] = useState("period_desc");
-  const [expandedGroups, setExpandedGroups] = useState({});
-  const [selectedArchiveGroup, setSelectedArchiveGroup] = useState(null);
   const [displayColumnFilters, setDisplayColumnFilters] = useState({});
   const [editingContext, setEditingContext] = useState(null);
   const [editingPayslip, setEditingPayslip] = useState(null);
@@ -488,14 +511,6 @@ function Payslips({ user }) {
       const items = Array.isArray(payslipResult.payslips) ? payslipResult.payslips : [];
       setPayslips(items);
       setHistory(Array.isArray(historyResult.history) ? historyResult.history : []);
-      setExpandedGroups((previous) => {
-        const next = { ...previous };
-        items.forEach((item) => {
-          const key = item.period_key || `${item.year}-${String(item.month_number || monthIndex(item.month)).padStart(2, "0")}`;
-          if (!(key in next)) next[key] = false;
-        });
-        return next;
-      });
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
     } finally {
@@ -537,8 +552,40 @@ function Payslips({ user }) {
     return items;
   }, [uploadedRowsWithStatus]);
 
+  const uploadEmployeeValueHelpOptions = useMemo(
+    () => buildSingleSelectOptions(
+      uploadEmployeeOptions,
+      "All employees",
+      "Show uploaded rows for every employee",
+      (item) => {
+        const [employeeId, employeeName] = item.split("||");
+        return {
+          value: item,
+          label: employeeName || employeeId,
+          description: employeeId ? `Employee ID: ${employeeId}` : "Employee",
+        };
+      }
+    ),
+    [uploadEmployeeOptions]
+  );
+
+  const uploadStatusValueHelpOptions = useMemo(
+    () => [
+      { value: "all", label: "All rows", description: "Show every uploaded row" },
+      { value: "ready", label: "Ready to store", description: "Only rows ready for storage" },
+      { value: "stored", label: "Already stored", description: "Rows already present in payslips" },
+      { value: "invalid", label: "Needs attention", description: "Rows missing required employee details" },
+    ],
+    []
+  );
+
   const uploadColumnOptions = useMemo(
     () => collectDistinctOptions(uploadedRowsWithStatus, UPLOAD_FILTER_FIELDS),
+    [uploadedRowsWithStatus]
+  );
+
+  const uploadSearchSuggestions = useMemo(
+    () => buildSearchSuggestions(uploadedRowsWithStatus, UPLOAD_FILTER_FIELDS),
     [uploadedRowsWithStatus]
   );
 
@@ -829,27 +876,31 @@ function Payslips({ user }) {
     [payslips]
   );
 
+  const displaySearchSuggestions = useMemo(
+    () => buildSearchSuggestions(payslips, DISPLAY_FILTER_FIELDS),
+    [payslips]
+  );
+
   const yearValueHelpOptions = useMemo(
-    () => [
-      { value: "all", label: "All years", description: "Show payslips from every available year" },
-      ...filterOptions.years.map((item) => ({
+    () => buildSingleSelectOptions(
+      filterOptions.years,
+      "All years",
+      "Show payslips from every available year",
+      (item) => ({
         value: String(item),
         label: String(item),
         description: `Show payslips from ${item}`,
-      })),
-    ],
+      })
+    ),
     [filterOptions.years]
   );
 
   const monthValueHelpOptions = useMemo(
-    () => [
-      { value: "all", label: "All months", description: "Show payslips across all months" },
-      ...MONTHS.map((item) => ({
+    () => MONTHS.map((item) => ({
         value: item,
         label: item,
         description: `Show payslips for ${item}`,
       })),
-    ],
     []
   );
 
@@ -873,6 +924,44 @@ function Payslips({ user }) {
     []
   );
 
+  const uploadColumnValueHelpOptions = useMemo(
+    () => Object.fromEntries(
+      UPLOAD_FILTER_FIELDS.map((field) => [
+        field.key,
+        buildSingleSelectOptions(
+          uploadColumnOptions[field.key] || [],
+          `All ${field.label.toLowerCase()}`,
+          `Show rows across all ${field.label.toLowerCase()} values`,
+          (option) => ({
+            value: option,
+            label: option,
+            description: `${field.label}: ${option}`,
+          })
+        ),
+      ])
+    ),
+    [uploadColumnOptions]
+  );
+
+  const displayColumnValueHelpOptions = useMemo(
+    () => Object.fromEntries(
+      DISPLAY_FILTER_FIELDS.map((field) => [
+        field.key,
+        buildSingleSelectOptions(
+          displayColumnOptions[field.key] || [],
+          `All ${field.label.toLowerCase()}`,
+          `Show payslips across all ${field.label.toLowerCase()} values`,
+          (option) => ({
+            value: option,
+            label: option,
+            description: `${field.label}: ${option}`,
+          })
+        ),
+      ])
+    ),
+    [displayColumnOptions]
+  );
+
   const filteredPayslips = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     const filtered = payslips.filter((item) => {
@@ -885,9 +974,9 @@ function Payslips({ user }) {
       ].some((value) => String(value || "").toLowerCase().includes(normalizedSearch));
 
       const matchesYear = selectedYear === "all" || item.year === selectedYear;
-      const matchesMonth = selectedMonth === "all" || item.month === selectedMonth;
+      const matchesMonth = !selectedMonths.length || selectedMonths.includes(item.month);
       const employeeKey = `${item.employee_id}||${item.employee_name}`;
-      const matchesEmployee = selectedEmployee === "all" || employeeKey === selectedEmployee;
+      const matchesEmployee = !canFilterByEmployee || selectedEmployee === "all" || employeeKey === selectedEmployee;
       const matchesColumnFilters = DISPLAY_FILTER_FIELDS.every((field) => {
         const selectedValue = displayColumnFilters[field.key] || "all";
         if (selectedValue === "all") return true;
@@ -928,42 +1017,12 @@ function Payslips({ user }) {
     });
 
     return withPeriod;
-  }, [payslips, searchTerm, selectedYear, selectedMonth, selectedEmployee, sortBy, displayColumnFilters]);
+  }, [payslips, searchTerm, selectedYear, selectedMonths, selectedEmployee, sortBy, displayColumnFilters, canFilterByEmployee]);
 
-  const groupedPayslips = useMemo(() => {
-    const map = new Map();
-    filteredPayslips.forEach((item) => {
-      const key = item.period_key || `${item.year}-${String(item._sortMonth).padStart(2, "0")}`;
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          label: `${item.month} ${item.year}`,
-          year: item.year,
-          month: item.month,
-          monthNumber: item._sortMonth,
-          items: [],
-        });
-      }
-      map.get(key).items.push(item);
-    });
-    return Array.from(map.values()).sort((a, b) => Number(b.year) - Number(a.year) || b.monthNumber - a.monthNumber);
-  }, [filteredPayslips]);
-
-  useEffect(() => {
-    if (!groupedPayslips.some((group) => group.key === selectedArchiveGroup)) {
-      setSelectedArchiveGroup(null);
-    }
-  }, [groupedPayslips, selectedArchiveGroup]);
-
-  const activeArchiveGroup = useMemo(
-    () => groupedPayslips.find((group) => group.key === selectedArchiveGroup && expandedGroups[group.key] !== false) || null,
-    [groupedPayslips, selectedArchiveGroup, expandedGroups]
-  );
-
-  const activeArchiveColumns = useMemo(() => {
-    if (!activeArchiveGroup) return [];
+  const displayColumns = useMemo(() => {
+    if (!filteredPayslips.length) return [];
     const lineMap = new Map();
-    activeArchiveGroup.items.forEach((row) => {
+    filteredPayslips.forEach((row) => {
       [...(row.earnings || []), ...(row.deductions || [])].forEach((item) => {
         const columnKey = item.key || normalizeLabelToKey(item.label);
         if (!columnKey || lineMap.has(columnKey)) return;
@@ -993,13 +1052,13 @@ function Payslips({ user }) {
       { key: "net_pay", label: "Net Pay", getValue: (row) => row.net_pay, isAmount: true },
       { key: "generated_at", label: "Generated", getValue: (row) => row.generated_at ? new Date(row.generated_at).toLocaleDateString("en-IN") : "Unavailable" },
     ];
-  }, [activeArchiveGroup]);
+  }, [filteredPayslips]);
 
   const displaySummary = useMemo(() => ({
     visible: filteredPayslips.length,
     employees: new Set(filteredPayslips.map((item) => item.employee_id)).size,
-    periods: groupedPayslips.length,
-  }), [filteredPayslips, groupedPayslips]);
+    periods: new Set(filteredPayslips.map((item) => item.period_key || `${item.year}-${String(item.month_number || monthIndex(item.month)).padStart(2, "0")}`)).size,
+  }), [filteredPayslips]);
 
   const messageStyle =
     message?.tone === "success"
@@ -1007,18 +1066,6 @@ function Payslips({ user }) {
       : message?.tone === "error"
         ? { ...S.banner, background: C.redLight, border: `1px solid ${C.redBorder}`, color: C.red }
         : { ...S.banner, background: C.amberLight, border: `1px solid ${C.amberBorder}`, color: C.amber };
-
-  const toggleGroup = (key) => {
-    setExpandedGroups((previous) => {
-      const isOpening = previous[key] === false;
-      if (isOpening) {
-        setSelectedArchiveGroup(key);
-      } else if (selectedArchiveGroup === key) {
-        setSelectedArchiveGroup(null);
-      }
-      return { ...previous, [key]: isOpening };
-    });
-  };
 
   return (
     <div style={S.page}>
@@ -1152,48 +1199,43 @@ function Payslips({ user }) {
               <div style={{ ...S.filterGrid, marginTop: 14 }}>
                 <div style={S.field}>
                   <label style={S.label}>Search Uploaded Rows</label>
-                  <div style={S.searchWrap}>
-                    <Search size={16} style={S.searchIcon} />
-                    <input
-                      style={S.searchInput}
-                      value={uploadSearchTerm}
-                      onChange={(event) => setUploadSearchTerm(event.target.value)}
-                      placeholder="Search by employee, department, location..."
-                    />
-                  </div>
+                  <ValueHelpSearch
+                    value={uploadSearchTerm}
+                    onChange={setUploadSearchTerm}
+                    suggestions={uploadSearchSuggestions}
+                    placeholder="Search by employee, department, location..."
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Filter Uploaded Rows</label>
-                  <select style={S.input} value={selectedStorageStatus} onChange={(event) => setSelectedStorageStatus(event.target.value)}>
-                    <option value="all">All rows</option>
-                    <option value="ready">Ready to store</option>
-                    <option value="stored">Already stored</option>
-                    <option value="invalid">Needs attention</option>
-                  </select>
+                  <ValueHelpSelect
+                    value={selectedStorageStatus}
+                    onChange={setSelectedStorageStatus}
+                    options={uploadStatusValueHelpOptions}
+                    placeholder="All rows"
+                    searchPlaceholder="Search row statuses"
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Employee</label>
-                  <select style={S.input} value={uploadEmployeeFilter} onChange={(event) => setUploadEmployeeFilter(event.target.value)}>
-                    <option value="all">All employees</option>
-                    {uploadEmployeeOptions.map((item) => {
-                      const [employeeId, employeeName] = item.split("||");
-                      return <option key={item} value={item}>{employeeName || employeeId}</option>;
-                    })}
-                  </select>
+                  <ValueHelpSelect
+                    value={uploadEmployeeFilter}
+                    onChange={setUploadEmployeeFilter}
+                    options={uploadEmployeeValueHelpOptions}
+                    placeholder="All employees"
+                    searchPlaceholder="Search employees or IDs"
+                  />
                 </div>
                 {UPLOAD_FILTER_FIELDS.map((field) => (
                   <div key={field.key} style={S.field}>
                     <label style={S.label}>{field.label}</label>
-                    <select
-                      style={S.input}
+                    <ValueHelpSelect
                       value={uploadColumnFilters[field.key] || "all"}
-                      onChange={(event) => setUploadColumnFilters((previous) => ({ ...previous, [field.key]: event.target.value }))}
-                    >
-                      <option value="all">All {field.label.toLowerCase()}</option>
-                      {(uploadColumnOptions[field.key] || []).map((option) => (
-                        <option key={`${field.key}-${option}`} value={option}>{option}</option>
-                      ))}
-                    </select>
+                      onChange={(nextValue) => setUploadColumnFilters((previous) => ({ ...previous, [field.key]: nextValue }))}
+                      options={uploadColumnValueHelpOptions[field.key] || []}
+                      placeholder={`All ${field.label.toLowerCase()}`}
+                      searchPlaceholder={`Search ${field.label.toLowerCase()}`}
+                    />
                   </div>
                 ))}
               </div>
@@ -1299,28 +1341,6 @@ function Payslips({ user }) {
                   </div>
                 </div>
                 <div style={S.rowGap}>
-                  <button
-                    type="button"
-                    style={S.btnSecondary}
-                    onClick={() => {
-                      setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, true])));
-                      setSelectedArchiveGroup(null);
-                    }}
-                  >
-                    <ChevronDown size={15} />
-                    Expand All
-                  </button>
-                  <button
-                    type="button"
-                    style={S.btnSecondary}
-                    onClick={() => {
-                      setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, false])));
-                      setSelectedArchiveGroup(null);
-                    }}
-                  >
-                    <ChevronRight size={15} />
-                    Collapse All
-                  </button>
                   <button type="button" style={S.btnSecondary} onClick={loadVisiblePayslips}>
                     <CalendarRange size={15} />
                     Refresh
@@ -1331,15 +1351,12 @@ function Payslips({ user }) {
               <div style={{ ...S.filterGrid, marginTop: 16 }}>
                 <div style={S.field}>
                   <label style={S.label}>Search</label>
-                  <div style={S.searchWrap}>
-                    <Search size={16} style={S.searchIcon} />
-                    <input
-                      style={S.searchInput}
-                      value={searchTerm}
-                      onChange={(event) => setSearchTerm(event.target.value)}
-                      placeholder="Search by employee, ID, month, year..."
-                    />
-                  </div>
+                  <ValueHelpSearch
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    suggestions={displaySearchSuggestions}
+                    placeholder="Search by employee, ID, month, year..."
+                  />
                 </div>
                 <div style={S.field}>
                   <label style={S.label}>Year</label>
@@ -1354,23 +1371,26 @@ function Payslips({ user }) {
                 <div style={S.field}>
                   <label style={S.label}>Month</label>
                   <ValueHelpSelect
-                    value={selectedMonth}
-                    onChange={setSelectedMonth}
+                    value={selectedMonths}
+                    onChange={setSelectedMonths}
                     options={monthValueHelpOptions}
+                    multiple
                     placeholder="All months"
                     searchPlaceholder="Search months"
                   />
                 </div>
-                <div style={S.field}>
-                  <label style={S.label}>Employee</label>
-                  <ValueHelpSelect
-                    value={selectedEmployee}
-                    onChange={setSelectedEmployee}
-                    options={employeeValueHelpOptions}
-                    placeholder="All employees"
-                    searchPlaceholder="Search employees or IDs"
-                  />
-                </div>
+                {canFilterByEmployee ? (
+                  <div style={S.field}>
+                    <label style={S.label}>Employee</label>
+                    <ValueHelpSelect
+                      value={selectedEmployee}
+                      onChange={setSelectedEmployee}
+                      options={employeeValueHelpOptions}
+                      placeholder="All employees"
+                      searchPlaceholder="Search employees or IDs"
+                    />
+                  </div>
+                ) : null}
                 <div style={S.field}>
                   <label style={S.label}>Sort</label>
                   <ValueHelpSelect
@@ -1384,16 +1404,13 @@ function Payslips({ user }) {
                 {DISPLAY_FILTER_FIELDS.map((field) => (
                   <div key={field.key} style={S.field}>
                     <label style={S.label}>{field.label}</label>
-                    <select
-                      style={S.input}
+                    <ValueHelpSelect
                       value={displayColumnFilters[field.key] || "all"}
-                      onChange={(event) => setDisplayColumnFilters((previous) => ({ ...previous, [field.key]: event.target.value }))}
-                    >
-                      <option value="all">All {field.label.toLowerCase()}</option>
-                      {(displayColumnOptions[field.key] || []).map((option) => (
-                        <option key={`${field.key}-${option}`} value={option}>{option}</option>
-                      ))}
-                    </select>
+                      onChange={(nextValue) => setDisplayColumnFilters((previous) => ({ ...previous, [field.key]: nextValue }))}
+                      options={displayColumnValueHelpOptions[field.key] || []}
+                      placeholder={`All ${field.label.toLowerCase()}`}
+                      searchPlaceholder={`Search ${field.label.toLowerCase()}`}
+                    />
                   </div>
                 ))}
               </div>
@@ -1401,107 +1418,73 @@ function Payslips({ user }) {
               <div style={S.rowGap}>
                 <span style={S.badge}><Filter size={13} style={{ marginRight: 6 }} />{displaySummary.visible} filtered result{displaySummary.visible !== 1 ? "s" : ""}</span>
                 <span style={S.badge}><Users size={13} style={{ marginRight: 6 }} />{displaySummary.employees} employee{displaySummary.employees !== 1 ? "s" : ""}</span>
-                <span style={S.badge}><ArrowDownAZ size={13} style={{ marginRight: 6 }} />{groupedPayslips.length} month group{groupedPayslips.length !== 1 ? "s" : ""}</span>
+                <span style={S.badge}><ArrowDownAZ size={13} style={{ marginRight: 6 }} />{displaySummary.periods} month period{displaySummary.periods !== 1 ? "s" : ""}</span>
               </div>
 
               {loadingPayslips ? (
                 <div style={S.empty}>Loading payslips...</div>
-              ) : groupedPayslips.length ? (
-                <>
-                <div style={S.archiveGroupGrid}>
-                  {groupedPayslips.map((group) => {
-                    const totalNet = group.items.reduce((sum, item) => sum + Number(item.net_pay || 0), 0);
-                    const isExpanded = expandedGroups[group.key] !== false;
-                    return (
-                      <div key={group.key} style={{ minWidth: 0 }}>
-                        <button type="button" style={S.sectionHeader} onClick={() => { toggleGroup(group.key); setSelectedArchiveGroup(group.key); }}>
-                          <div style={{ textAlign: "left" }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                              {isExpanded ? <ChevronDown size={18} color={C.purpleDark} /> : <ChevronRight size={18} color={C.purpleDark} />}
-                              <strong style={{ fontSize: 16, color: C.text }}>{group.label}</strong>
-                              <span style={S.badge}>{group.items.length} payslip{group.items.length !== 1 ? "s" : ""}</span>
-                            </div>
-                            <div style={S.monthTileMeta}>
-                              <span>{new Set(group.items.map((item) => item.employee_id)).size} employee scope</span>
-                              <span>Total net pay: {currency(totalNet)}</span>
-                            </div>
-                          </div>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <span style={{ fontSize: 12, color: C.textMid }}>Period key: {group.key}</span>
-                            <span style={S.inlineBadge}>{isExpanded ? "Open" : "View"}</span>
-                          </div>
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-                {activeArchiveGroup ? (
-                  <div style={{ ...S.tableShell, marginTop: 16 }}>
-                    <div style={S.tableToolbar}>
-                      <div>
-                        <div style={S.tableToolbarTitle}>{activeArchiveGroup.label} Employee View</div>
-                        <div style={S.tableToolbarSub}>Blank by default, shown only when a month is opened. Full parsed sheet fields are visible here.</div>
-                      </div>
-                      <span style={S.inlineBadge}>{activeArchiveGroup.items.length} employee row{activeArchiveGroup.items.length !== 1 ? "s" : ""}</span>
+              ) : filteredPayslips.length ? (
+                <div style={{ ...S.tableShell, marginTop: 16 }}>
+                  <div style={S.tableToolbar}>
+                    <div>
+                      <div style={S.tableToolbarTitle}>Payslip Results</div>
+                      <div style={S.tableToolbarSub}>Use the filters above, including multi-month selection, to narrow the table directly.</div>
                     </div>
-                    <div style={S.tableWrap}>
-                      <table style={S.table}>
-                        <thead>
-                          <tr>
-                            {activeArchiveColumns.map((column) => (
-                              <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
-                            ))}
-                            <th style={{ ...S.th, textAlign: "right" }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {activeArchiveGroup.items.map((item) => (
-                            <tr key={item._id}>
-                              {activeArchiveColumns.map((column) => {
-                                const value = column.getValue(item);
-                                return (
-                                  <td key={column.key} style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}) }}>
-                                    {column.key === "name" ? <strong>{String(value ?? "")}</strong> : column.isAmount ? currency(value || 0) : String(value ?? "")}
-                                  </td>
-                                );
-                              })}
-                              <td style={{ ...S.td, ...S.stickyActionCell }}>
-                                <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
-                                  {isAdmin ? (
-                                    <>
-                                      <button type="button" style={S.btnSecondary} onClick={() => openEditModal(item, { mode: "display", payslipId: item._id })}>
-                                        <Pencil size={15} />
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        style={{ ...S.dangerTextButton, ...(deletingPayslipId === item._id ? S.btnDisabled : {}) }}
-                                        disabled={deletingPayslipId === item._id}
-                                        onClick={() => handleDeletePayslip(item)}
-                                      >
-                                        <Trash2 size={15} />
-                                        {deletingPayslipId === item._id ? "Deleting..." : "Delete"}
-                                      </button>
-                                    </>
-                                  ) : null}
-                                  <button type="button" style={S.btnPrimary} onClick={() => handleDownload(item._id)}>
-                                    <Download size={15} />
-                                    Download PDF
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
+                    <span style={S.inlineBadge}>{filteredPayslips.length} visible row{filteredPayslips.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  <div style={S.tableWrap}>
+                    <table style={S.table}>
+                      <thead>
+                        <tr>
+                          {displayColumns.map((column) => (
+                            <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
                           ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          <th style={{ ...S.th, textAlign: "right", borderRight: "none" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredPayslips.map((item) => (
+                          <tr key={item._id}>
+                            {displayColumns.map((column, index) => {
+                              const value = column.getValue(item);
+                              const isLastDataColumn = index === displayColumns.length - 1;
+                              return (
+                                <td key={column.key} style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}), ...(isLastDataColumn ? { borderRight: `1px solid ${C.borderLight}` } : {}) }}>
+                                  {column.key === "name" ? <strong>{String(value ?? "")}</strong> : column.isAmount ? currency(value || 0) : String(value ?? "")}
+                                </td>
+                              );
+                            })}
+                            <td style={{ ...S.td, ...S.stickyActionCell, borderRight: "none" }}>
+                              <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
+                                {isAdmin ? (
+                                  <>
+                                    <button type="button" style={S.btnSecondary} onClick={() => openEditModal(item, { mode: "display", payslipId: item._id })}>
+                                      <Pencil size={15} />
+                                      Edit
+                                    </button>
+                                    <button
+                                      type="button"
+                                      style={{ ...S.dangerTextButton, ...(deletingPayslipId === item._id ? S.btnDisabled : {}) }}
+                                      disabled={deletingPayslipId === item._id}
+                                      onClick={() => handleDeletePayslip(item)}
+                                    >
+                                      <Trash2 size={15} />
+                                      {deletingPayslipId === item._id ? "Deleting..." : "Delete"}
+                                    </button>
+                                  </>
+                                ) : null}
+                                <button type="button" style={S.btnPrimary} onClick={() => handleDownload(item._id)}>
+                                  <Download size={15} />
+                                  Download PDF
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                ) : (
-                  <div style={{ ...S.empty, border: `1px dashed ${C.border}`, borderRadius: 12, marginTop: 16 }}>
-                    Open a month to view its employee table.
-                  </div>
-                )}
-                </>
+                </div>
               ) : (
                 <div style={S.empty}>
                   <Eye size={30} style={{ marginBottom: 10 }} />
