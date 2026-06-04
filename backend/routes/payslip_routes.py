@@ -343,12 +343,24 @@ def _build_pdf(employee, payslip):
     grey_fill = colors.HexColor("#D9D9D9")
     purple_color = colors.HexColor("#7030A0")
     border_color = colors.black
+    y_position = height - 120
+    detail_table_height = 17 + 18 + (18 * 8)
+    detail_table_top = y_position - 180 + detail_table_height
+    logo_width = 135
+    logo_height = 20
+    logo_header_gap = 12
 
     if os.path.exists(LOGO_PATH):
         logo = ImageReader(LOGO_PATH)
-        pdf.drawImage(logo, left, height - 92, width=135, height=48, preserveAspectRatio=True, mask="auto")
-
-    y_position = height - 120
+        pdf.drawImage(
+            logo,
+            left,
+            detail_table_top + logo_header_gap,
+            width=logo_width,
+            height=logo_height,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
 
     table_data = [
         ["Naxrita Solutions Private Limited", "", "", ""],
@@ -442,7 +454,7 @@ def _build_pdf(employee, payslip):
         ("ALIGN", (0, 0), (0, -1), "LEFT"),
         ("ALIGN", (2, 0), (2, -1), "LEFT"),
         ("ALIGN", (0, net_row), (1, net_row), "RIGHT"),
-        ("ALIGN", (2, net_row), (3, net_row), "RIGHT"),
+        ("ALIGN", (2, net_row), (3, net_row), "LEFT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOX", (0, 0), (-1, -1), 0.5, border_color),
         ("INNERGRID", (0, 0), (-1, 0), 0.5, border_color),
