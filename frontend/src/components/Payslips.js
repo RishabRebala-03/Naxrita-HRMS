@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Plus,
   ArrowDownAZ,
   CalendarRange,
   ChevronDown,
   ChevronRight,
   Download,
+  Eye,
   Pencil,
   FileSpreadsheet,
   FileText,
@@ -59,6 +61,50 @@ const SORT_OPTIONS = [
   { value: "generated_asc", label: "Oldest stored first" },
 ];
 
+const PROFILE_FIELD_DEFS = [
+  { key: "bank", label: "Bank" },
+  { key: "bank_account_no", label: "Bank A/c No" },
+  { key: "doj", label: "DOJ" },
+  { key: "pf_no", label: "PF NO" },
+  { key: "location", label: "Location" },
+  { key: "department", label: "Department" },
+  { key: "management_level", label: "Management Level" },
+  { key: "facility", label: "Facility" },
+  { key: "entity", label: "Entity" },
+  { key: "pf_uan", label: "PF - UAN" },
+];
+
+const SHEET_BASE_FIELDS = [
+  { key: "employee_id", label: "Employee ID" },
+  { key: "name", label: "Name" },
+  { key: "month", label: "Month" },
+  { key: "year", label: "Year" },
+  { key: "lop_days", label: "LOP Days" },
+  { key: "std_days", label: "STD Days" },
+  { key: "worked_days", label: "Worked Days" },
+  ...PROFILE_FIELD_DEFS,
+];
+
+const UPLOAD_FILTER_FIELDS = [
+  { key: "month", label: "Month" },
+  { key: "year", label: "Year" },
+  { key: "department", label: "Department" },
+  { key: "location", label: "Location" },
+  { key: "entity", label: "Entity" },
+  { key: "facility", label: "Facility" },
+  { key: "management_level", label: "Management Level" },
+  { key: "bank", label: "Bank" },
+];
+
+const DISPLAY_FILTER_FIELDS = [
+  { key: "department", label: "Department" },
+  { key: "location", label: "Location" },
+  { key: "entity", label: "Entity" },
+  { key: "facility", label: "Facility" },
+  { key: "management_level", label: "Management Level" },
+  { key: "bank", label: "Bank" },
+];
+
 const S = {
   page: { background: C.bg, width: "100%", minWidth: 0, boxSizing: "border-box" },
   inner: { padding: "14px 12px" },
@@ -99,8 +145,8 @@ const S = {
   statValue: { fontSize: 24, color: C.text, fontWeight: 600, marginBottom: 4 },
   statSub: { fontSize: 12, color: C.textMid },
   info: {
-    background: C.amberLight,
-    border: `1px solid ${C.amberBorder}`,
+    background: "#eef4fb",
+    border: "1px solid #c8d6e5",
     borderRadius: 10,
     padding: 14,
     color: C.text,
@@ -178,15 +224,35 @@ const S = {
   },
   btnDisabled: { opacity: 0.55, cursor: "not-allowed" },
   tableWrap: { overflowX: "auto" },
-  table: { width: "100%", borderCollapse: "collapse" },
+  tableShell: {
+    border: `1px solid ${C.border}`,
+    borderRadius: 12,
+    overflow: "hidden",
+    background: C.white,
+  },
+  tableToolbar: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap",
+    alignItems: "center",
+    padding: "12px 14px",
+    background: "linear-gradient(180deg, #f9fbfc 0%, #f1f5f9 100%)",
+    borderBottom: `1px solid ${C.border}`,
+  },
+  tableToolbarTitle: { fontSize: 15, fontWeight: 700, color: C.text },
+  tableToolbarSub: { fontSize: 12, color: C.textMid, marginTop: 2 },
+  table: { width: "100%", borderCollapse: "separate", borderSpacing: 0 },
   th: {
     padding: "12px 10px",
     borderBottom: `1px solid ${C.border}`,
     textAlign: "left",
     fontSize: 12,
     color: C.text,
-    background: "#fafafa",
+    background: "#f5f8fb",
     whiteSpace: "nowrap",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
   td: {
     padding: "12px 10px",
@@ -197,7 +263,7 @@ const S = {
   },
   banner: { borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13 },
   group: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 },
-  archiveGroupGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 14, marginTop: 16, alignItems: "start" },
+  archiveGroupGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14, marginTop: 16, alignItems: "start" },
   uploadSummaryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 },
   miniCard: { background: "#fcfcfe", border: `1px solid ${C.border}`, borderRadius: 10, padding: 12 },
   sectionHeader: {
@@ -207,7 +273,7 @@ const S = {
     flexWrap: "wrap",
     alignItems: "center",
     padding: "14px 16px",
-    background: "linear-gradient(135deg, #faf8fd 0%, #ffffff 100%)",
+    background: "linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)",
     border: `1px solid ${C.border}`,
     borderRadius: 12,
     cursor: "pointer",
@@ -252,6 +318,7 @@ const S = {
     padding: 18,
   },
   lineItemRow: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 140px", gap: 10, marginBottom: 10 },
+  lineItemRowWithAction: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 140px auto", gap: 10, marginBottom: 10, alignItems: "center" },
   dangerTextButton: {
     display: "inline-flex",
     alignItems: "center",
@@ -265,6 +332,43 @@ const S = {
     fontSize: 13,
     fontWeight: 600,
   },
+  monthTileMeta: { display: "flex", gap: 12, flexWrap: "wrap", color: C.textMid, fontSize: 12, marginTop: 8 },
+  tableInput: {
+    width: "100%",
+    minWidth: 90,
+    border: `1px solid ${C.border}`,
+    borderRadius: 7,
+    padding: "7px 9px",
+    fontSize: 13,
+    color: C.text,
+    background: "#fff",
+    boxSizing: "border-box",
+  },
+  cellNumber: { textAlign: "right", fontVariantNumeric: "tabular-nums" },
+  stickyActionCell: { textAlign: "right", whiteSpace: "nowrap" },
+  inlineBadge: {
+    display: "inline-flex",
+    alignItems: "center",
+    padding: "3px 8px",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 700,
+    border: `1px solid ${C.border}`,
+    background: "#f8fafc",
+    color: C.text,
+  },
+  iconButton: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    border: `1px solid ${C.border}`,
+    background: C.white,
+    color: C.text,
+    cursor: "pointer",
+  },
   empty: { textAlign: "center", padding: "34px 16px", color: C.textMid },
 };
 
@@ -272,6 +376,52 @@ const currency = (value) =>
   new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 }).format(Number(value || 0));
 
 const monthIndex = (month) => MONTHS.findIndex((item) => item === month) + 1;
+const getUploadNetPay = (row) =>
+  Number(row.net_pay ?? Number(row.gross_earnings || 0) - Number(row.gross_deductions || 0));
+const getProfileValue = (row, key) => row?.employee_profile?.[key] ?? row?.[key] ?? "";
+const normalizeLabelToKey = (label) => String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+
+const buildEditorForm = (item) => {
+  const profile = item.employee_profile || {};
+  return {
+    employee_id: item.employee_id || "",
+    name: item.employee_name || item.name || profile.name || "",
+    month: item.month || "",
+    year: item.year || "",
+    lop_days: String(item.lop_days ?? ""),
+    std_days: String(item.std_days ?? ""),
+    worked_days: String(item.worked_days ?? ""),
+    bank: profile.bank || item.bank || "",
+    bank_account_no: profile.bank_account_no || item.bank_account_no || "",
+    doj: profile.doj || item.doj || "",
+    pf_no: profile.pf_no || item.pf_no || "",
+    location: profile.location || item.location || "",
+    department: profile.department || item.department || "",
+    management_level: profile.management_level || item.management_level || "",
+    facility: profile.facility || item.facility || "",
+    entity: profile.entity || item.entity || "",
+    pf_uan: profile.pf_uan || item.pf_uan || "",
+    earnings: (item.earnings || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
+    deductions: (item.deductions || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
+  };
+};
+
+const collectDistinctOptions = (rows, fields, nameAccessor = (row) => row) =>
+  Object.fromEntries(
+    fields.map((field) => {
+      const values = Array.from(
+        new Set(
+          rows
+            .map((row) => {
+              const source = nameAccessor(row);
+              return String(field.key in source ? source[field.key] : getProfileValue(source, field.key) || "").trim();
+            })
+            .filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+      return [field.key, values];
+    })
+  );
 
 const fetchJson = async (path, options = {}) => {
   const response = await fetch(`${API_BASE}${path}`, options);
@@ -300,40 +450,28 @@ function Payslips({ user }) {
   const [selectedMonth, setSelectedMonth] = useState("all");
   const [selectedEmployee, setSelectedEmployee] = useState("all");
   const [selectedStorageStatus, setSelectedStorageStatus] = useState("all");
+  const [uploadSearchTerm, setUploadSearchTerm] = useState("");
+  const [uploadEmployeeFilter, setUploadEmployeeFilter] = useState("all");
+  const [uploadColumnFilters, setUploadColumnFilters] = useState({});
   const [sortBy, setSortBy] = useState("period_desc");
   const [expandedGroups, setExpandedGroups] = useState({});
+  const [selectedArchiveGroup, setSelectedArchiveGroup] = useState(null);
+  const [displayColumnFilters, setDisplayColumnFilters] = useState({});
+  const [editingContext, setEditingContext] = useState(null);
   const [editingPayslip, setEditingPayslip] = useState(null);
   const [editForm, setEditForm] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingPayslipId, setDeletingPayslipId] = useState("");
   const fileInputRef = useRef(null);
 
-  const openEditModal = (item) => {
-    const profile = item.employee_profile || {};
+  const openEditModal = (item, context = { mode: "display" }) => {
+    setEditingContext(context);
     setEditingPayslip(item);
-    setEditForm({
-      employee_id: item.employee_id || "",
-      month: item.month || "",
-      year: item.year || "",
-      lop_days: String(item.lop_days ?? ""),
-      std_days: String(item.std_days ?? ""),
-      worked_days: String(item.worked_days ?? ""),
-      bank: profile.bank || item.bank || "",
-      bank_account_no: profile.bank_account_no || item.bank_account_no || "",
-      doj: profile.doj || item.doj || "",
-      pf_no: profile.pf_no || item.pf_no || "",
-      location: profile.location || item.location || "",
-      department: profile.department || item.department || "",
-      management_level: profile.management_level || item.management_level || "",
-      facility: profile.facility || item.facility || "",
-      entity: profile.entity || item.entity || "",
-      pf_uan: profile.pf_uan || item.pf_uan || "",
-      earnings: (item.earnings || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
-      deductions: (item.deductions || []).map((line) => ({ key: line.key || "", label: line.label || "", amount: String(line.amount ?? "") })),
-    });
+    setEditForm(buildEditorForm(item));
   };
 
   const closeEditModal = () => {
+    setEditingContext(null);
     setEditingPayslip(null);
     setEditForm(null);
     setSavingEdit(false);
@@ -354,7 +492,7 @@ function Payslips({ user }) {
         const next = { ...previous };
         items.forEach((item) => {
           const key = item.period_key || `${item.year}-${String(item.month_number || monthIndex(item.month)).padStart(2, "0")}`;
-          if (!(key in next)) next[key] = Object.keys(previous).length === 0;
+          if (!(key in next)) next[key] = false;
         });
         return next;
       });
@@ -388,12 +526,90 @@ function Payslips({ user }) {
     });
   }, [uploadedData, payslips]);
 
+  const uploadEmployeeOptions = useMemo(() => {
+    const items = Array.from(
+      new Set(
+        uploadedRowsWithStatus
+          .map((row) => `${row.employee_id || ""}||${row.name || ""}`)
+          .filter((value) => value !== "||")
+      )
+    ).sort((a, b) => a.localeCompare(b));
+    return items;
+  }, [uploadedRowsWithStatus]);
+
+  const uploadColumnOptions = useMemo(
+    () => collectDistinctOptions(uploadedRowsWithStatus, UPLOAD_FILTER_FIELDS),
+    [uploadedRowsWithStatus]
+  );
+
   const uploadSummary = useMemo(() => {
     const employees = new Set(uploadedRowsWithStatus.map((item) => item.employee_id).filter(Boolean)).size;
     const ready = uploadedRowsWithStatus.filter((item) => item.storage_status === "ready").length;
     const stored = uploadedRowsWithStatus.filter((item) => item.storage_status === "stored").length;
     const invalid = uploadedRowsWithStatus.filter((item) => item.storage_status === "invalid").length;
     return { employees, ready, stored, invalid };
+  }, [uploadedRowsWithStatus]);
+
+  const filteredUploadedRows = useMemo(() => {
+    const normalizedSearch = uploadSearchTerm.trim().toLowerCase();
+    return uploadedRowsWithStatus
+      .map((row, index) => ({ ...row, sourceIndex: index }))
+      .filter((row) => {
+        const matchesStatus = selectedStorageStatus === "all" || row.storage_status === selectedStorageStatus;
+        const employeeKey = `${row.employee_id || ""}||${row.name || ""}`;
+        const matchesEmployee = uploadEmployeeFilter === "all" || employeeKey === uploadEmployeeFilter;
+        const matchesSearch = !normalizedSearch || [
+          row.employee_id,
+          row.name,
+          row.month,
+          row.year,
+          row.department,
+          row.location,
+          row.entity,
+          row.facility,
+          row.management_level,
+          row.bank,
+        ].some((value) => String(value || "").toLowerCase().includes(normalizedSearch));
+        const matchesColumnFilters = UPLOAD_FILTER_FIELDS.every((field) => {
+          const selectedValue = uploadColumnFilters[field.key] || "all";
+          if (selectedValue === "all") return true;
+          const actualValue = String(field.key in row ? row[field.key] : getProfileValue(row, field.key) || "").trim();
+          return actualValue === selectedValue;
+        });
+        return matchesStatus && matchesEmployee && matchesSearch && matchesColumnFilters;
+      });
+  }, [uploadedRowsWithStatus, uploadSearchTerm, selectedStorageStatus, uploadEmployeeFilter, uploadColumnFilters]);
+
+  const dynamicUploadColumns = useMemo(() => {
+    const lineMap = new Map();
+    uploadedRowsWithStatus.forEach((row) => {
+      [...(row.earnings || []), ...(row.deductions || [])].forEach((item) => {
+        const columnKey = item.key || normalizeLabelToKey(item.label);
+        if (!columnKey || lineMap.has(columnKey)) return;
+        lineMap.set(columnKey, {
+          key: columnKey,
+          label: item.label || columnKey,
+          getValue: (currentRow) => {
+            const match = [...(currentRow.earnings || []), ...(currentRow.deductions || [])].find(
+              (line) => (line.key || normalizeLabelToKey(line.label)) === columnKey
+            );
+            return match ? match.amount : "";
+          },
+          isAmount: true,
+        });
+      });
+    });
+    return [
+      ...SHEET_BASE_FIELDS.map((field) => ({
+        key: field.key,
+        label: field.label,
+        getValue: (row) => field.key === "name" ? (row.name || row.employee_name || "") : field.key in row ? row[field.key] : getProfileValue(row, field.key),
+      })),
+      ...Array.from(lineMap.values()),
+      { key: "gross_earnings", label: "Gross Earnings", getValue: (row) => row.gross_earnings, isAmount: true },
+      { key: "gross_deductions", label: "Gross Deductions", getValue: (row) => row.gross_deductions, isAmount: true },
+      { key: "net_pay", label: "Net Pay", getValue: (row) => getUploadNetPay(row), isAmount: true },
+    ];
   }, [uploadedRowsWithStatus]);
 
   const handleFile = async (file) => {
@@ -408,14 +624,10 @@ function Payslips({ user }) {
       const result = await fetchJson("/payslips/upload-excel", { method: "POST", body: formData });
       const normalized = (result.data || []).map((row) => ({ ...row, month, year }));
       setUploadedData(normalized);
-      if (result.missing_users?.length) {
-        setMessage({
-          tone: "warn",
-          text: `Parsed ${normalized.length} rows. Missing HRMS employee IDs: ${result.missing_users.join(", ")}`,
-        });
-      } else {
-        setMessage({ tone: "success", text: `${result.message} (${month} ${year})` });
-      }
+      setUploadSearchTerm("");
+      setUploadEmployeeFilter("all");
+      setSelectedStorageStatus("all");
+      setUploadColumnFilters({});
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
     } finally {
@@ -460,7 +672,7 @@ function Payslips({ user }) {
       });
       setMessage({
         tone: result.failed_count ? "warn" : "success",
-        text: result.message,
+        text: result.failed_count ? result.message : "Submit complete. The uploaded payslips are now available in the display tab.",
       });
       await loadVisiblePayslips();
     } catch (error) {
@@ -481,6 +693,20 @@ function Payslips({ user }) {
     }));
   };
 
+  const handleAddLineItem = (kind) => {
+    setEditForm((previous) => ({
+      ...previous,
+      [kind]: [...previous[kind], { key: "", label: "", amount: "" }],
+    }));
+  };
+
+  const handleDeleteLineItem = (kind, index) => {
+    setEditForm((previous) => ({
+      ...previous,
+      [kind]: previous[kind].filter((_, itemIndex) => itemIndex !== index),
+    }));
+  };
+
   const handleSaveEdit = async () => {
     if (!editingPayslip || !editForm) return;
     setSavingEdit(true);
@@ -494,7 +720,7 @@ function Payslips({ user }) {
         std_days: Number(editForm.std_days || 0),
         worked_days: Number(editForm.worked_days || 0),
         employee_profile: {
-          name: editingPayslip.employee_name,
+          name: editForm.name,
           bank: editForm.bank,
           bank_account_no: editForm.bank_account_no,
           doj: editForm.doj,
@@ -506,9 +732,61 @@ function Payslips({ user }) {
           entity: editForm.entity,
           pf_uan: editForm.pf_uan,
         },
-        earnings: editForm.earnings.map((item) => ({ ...item, amount: Number(item.amount || 0) })),
-        deductions: editForm.deductions.map((item) => ({ ...item, amount: Number(item.amount || 0) })),
+        earnings: editForm.earnings.map((item) => ({ ...item, key: item.key || normalizeLabelToKey(item.label), amount: Number(item.amount || 0) })),
+        deductions: editForm.deductions.map((item) => ({ ...item, key: item.key || normalizeLabelToKey(item.label), amount: Number(item.amount || 0) })),
       };
+
+      if (editingContext?.mode === "upload") {
+        const grossEarnings = payload.earnings.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        const grossDeductions = payload.deductions.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        setUploadedData((previous) => previous.map((row, index) => (
+          index !== editingContext.sourceIndex
+            ? row
+            : {
+              ...row,
+              employee_id: payload.employee_id,
+              name: editForm.name,
+              month: payload.month,
+              year: payload.year,
+              lop_days: payload.lop_days,
+              std_days: payload.std_days,
+              worked_days: payload.worked_days,
+              bank: editForm.bank,
+              bank_account_no: editForm.bank_account_no,
+              doj: editForm.doj,
+              pf_no: editForm.pf_no,
+              location: editForm.location,
+              department: editForm.department,
+              management_level: editForm.management_level,
+              facility: editForm.facility,
+              entity: editForm.entity,
+              pf_uan: editForm.pf_uan,
+              employee_profile: {
+                ...(row.employee_profile || {}),
+                name: editForm.name,
+                bank: editForm.bank,
+                bank_account_no: editForm.bank_account_no,
+                doj: editForm.doj,
+                pf_no: editForm.pf_no,
+                location: editForm.location,
+                department: editForm.department,
+                management_level: editForm.management_level,
+                facility: editForm.facility,
+                entity: editForm.entity,
+                pf_uan: editForm.pf_uan,
+              },
+              earnings: payload.earnings.map((item) => ({ ...item, key: item.key || normalizeLabelToKey(item.label) })),
+              deductions: payload.deductions.map((item) => ({ ...item, key: item.key || normalizeLabelToKey(item.label) })),
+              gross_earnings: grossEarnings,
+              gross_deductions: grossDeductions,
+              net_pay: grossEarnings - grossDeductions,
+            }
+        )));
+        setMessage({ tone: "success", text: "Uploaded row updated. You can now store or generate the payslip with the edited values." });
+        closeEditModal();
+        return;
+      }
+
       const result = await fetchJson(`/payslips/${editingPayslip._id}?user_id=${encodeURIComponent(userId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -545,6 +823,11 @@ function Payslips({ user }) {
     )).sort((a, b) => a.localeCompare(b));
     return { years, employees };
   }, [payslips]);
+
+  const displayColumnOptions = useMemo(
+    () => collectDistinctOptions(payslips, DISPLAY_FILTER_FIELDS),
+    [payslips]
+  );
 
   const yearValueHelpOptions = useMemo(
     () => [
@@ -605,8 +888,14 @@ function Payslips({ user }) {
       const matchesMonth = selectedMonth === "all" || item.month === selectedMonth;
       const employeeKey = `${item.employee_id}||${item.employee_name}`;
       const matchesEmployee = selectedEmployee === "all" || employeeKey === selectedEmployee;
+      const matchesColumnFilters = DISPLAY_FILTER_FIELDS.every((field) => {
+        const selectedValue = displayColumnFilters[field.key] || "all";
+        if (selectedValue === "all") return true;
+        const actualValue = String(field.key in item ? item[field.key] : getProfileValue(item, field.key) || "").trim();
+        return actualValue === selectedValue;
+      });
 
-      return matchesSearch && matchesYear && matchesMonth && matchesEmployee;
+      return matchesSearch && matchesYear && matchesMonth && matchesEmployee && matchesColumnFilters;
     });
 
     const withPeriod = filtered.map((item) => ({
@@ -639,7 +928,7 @@ function Payslips({ user }) {
     });
 
     return withPeriod;
-  }, [payslips, searchTerm, selectedYear, selectedMonth, selectedEmployee, sortBy]);
+  }, [payslips, searchTerm, selectedYear, selectedMonth, selectedEmployee, sortBy, displayColumnFilters]);
 
   const groupedPayslips = useMemo(() => {
     const map = new Map();
@@ -660,6 +949,52 @@ function Payslips({ user }) {
     return Array.from(map.values()).sort((a, b) => Number(b.year) - Number(a.year) || b.monthNumber - a.monthNumber);
   }, [filteredPayslips]);
 
+  useEffect(() => {
+    if (!groupedPayslips.some((group) => group.key === selectedArchiveGroup)) {
+      setSelectedArchiveGroup(null);
+    }
+  }, [groupedPayslips, selectedArchiveGroup]);
+
+  const activeArchiveGroup = useMemo(
+    () => groupedPayslips.find((group) => group.key === selectedArchiveGroup && expandedGroups[group.key] !== false) || null,
+    [groupedPayslips, selectedArchiveGroup, expandedGroups]
+  );
+
+  const activeArchiveColumns = useMemo(() => {
+    if (!activeArchiveGroup) return [];
+    const lineMap = new Map();
+    activeArchiveGroup.items.forEach((row) => {
+      [...(row.earnings || []), ...(row.deductions || [])].forEach((item) => {
+        const columnKey = item.key || normalizeLabelToKey(item.label);
+        if (!columnKey || lineMap.has(columnKey)) return;
+        lineMap.set(columnKey, {
+          key: columnKey,
+          label: item.label || columnKey,
+          getValue: (currentRow) => {
+            const match = [...(currentRow.earnings || []), ...(currentRow.deductions || [])].find(
+              (line) => (line.key || normalizeLabelToKey(line.label)) === columnKey
+            );
+            return match ? match.amount : "";
+          },
+          isAmount: true,
+        });
+      });
+    });
+
+    return [
+      ...SHEET_BASE_FIELDS.map((field) => ({
+        key: field.key,
+        label: field.label,
+        getValue: (row) => field.key === "name" ? (row.employee_name || row.name || "") : field.key in row ? row[field.key] : getProfileValue(row, field.key),
+      })),
+      ...Array.from(lineMap.values()),
+      { key: "gross_earnings", label: "Gross Earnings", getValue: (row) => row.gross_earnings, isAmount: true },
+      { key: "gross_deductions", label: "Gross Deductions", getValue: (row) => row.gross_deductions, isAmount: true },
+      { key: "net_pay", label: "Net Pay", getValue: (row) => row.net_pay, isAmount: true },
+      { key: "generated_at", label: "Generated", getValue: (row) => row.generated_at ? new Date(row.generated_at).toLocaleDateString("en-IN") : "Unavailable" },
+    ];
+  }, [activeArchiveGroup]);
+
   const displaySummary = useMemo(() => ({
     visible: filteredPayslips.length,
     employees: new Set(filteredPayslips.map((item) => item.employee_id)).size,
@@ -674,7 +1009,15 @@ function Payslips({ user }) {
         : { ...S.banner, background: C.amberLight, border: `1px solid ${C.amberBorder}`, color: C.amber };
 
   const toggleGroup = (key) => {
-    setExpandedGroups((previous) => ({ ...previous, [key]: !previous[key] }));
+    setExpandedGroups((previous) => {
+      const isOpening = previous[key] === false;
+      if (isOpening) {
+        setSelectedArchiveGroup(key);
+      } else if (selectedArchiveGroup === key) {
+        setSelectedArchiveGroup(null);
+      }
+      return { ...previous, [key]: isOpening };
+    });
   };
 
   return (
@@ -720,14 +1063,6 @@ function Payslips({ user }) {
 
         {isAdmin && activeTab === "upload" ? (
           <>
-            <div style={S.info}>
-              <strong>Excel upload flow</strong>
-              <div style={{ marginTop: 8, lineHeight: 1.6 }}>
-                Upload stays the same as the attached plugin. The difference now is the admin can review the parsed rows first,
-                then use <strong>Add to Storage</strong> to persist the batch before it appears in the display archive.
-              </div>
-            </div>
-
             <div style={{ ...S.card, ...S.cardPad, marginBottom: 14 }}>
               <div style={S.formGrid}>
                 <div style={S.field}>
@@ -773,10 +1108,6 @@ function Payslips({ user }) {
               <div style={{ ...S.successInfo }}>
                 <div style={S.uploadSummaryGrid}>
                   <div style={S.miniCard}>
-                    <div style={S.statLabel}>Parsed Rows</div>
-                    <div style={{ ...S.statValue, fontSize: 20 }}>{uploadedRowsWithStatus.length}</div>
-                  </div>
-                  <div style={S.miniCard}>
                     <div style={S.statLabel}>Employees</div>
                     <div style={{ ...S.statValue, fontSize: 20 }}>{uploadSummary.employees}</div>
                   </div>
@@ -792,7 +1123,7 @@ function Payslips({ user }) {
 
                 <div style={S.rowBetween}>
                   <div style={{ fontSize: 13, color: C.textMid }}>
-                    Selected period: <strong style={{ color: C.text }}>{month} {year}</strong>. Only new rows will be added to storage.
+                    Selected period: <strong style={{ color: C.text }}>{month} {year}</strong>. Rows move to the display tab only after you submit the batch.
                   </div>
                   <button
                     type="button"
@@ -801,7 +1132,7 @@ function Payslips({ user }) {
                     onClick={handleStoreAll}
                   >
                     <FileText size={15} />
-                    {storingAll ? "Adding to Storage..." : "Add Payslips to Storage"}
+                    {storingAll ? "Submitting..." : "Submit"}
                   </button>
                 </div>
               </div>
@@ -820,6 +1151,18 @@ function Payslips({ user }) {
 
               <div style={{ ...S.filterGrid, marginTop: 14 }}>
                 <div style={S.field}>
+                  <label style={S.label}>Search Uploaded Rows</label>
+                  <div style={S.searchWrap}>
+                    <Search size={16} style={S.searchIcon} />
+                    <input
+                      style={S.searchInput}
+                      value={uploadSearchTerm}
+                      onChange={(event) => setUploadSearchTerm(event.target.value)}
+                      placeholder="Search by employee, department, location..."
+                    />
+                  </div>
+                </div>
+                <div style={S.field}>
                   <label style={S.label}>Filter Uploaded Rows</label>
                   <select style={S.input} value={selectedStorageStatus} onChange={(event) => setSelectedStorageStatus(event.target.value)}>
                     <option value="all">All rows</option>
@@ -828,55 +1171,97 @@ function Payslips({ user }) {
                     <option value="invalid">Needs attention</option>
                   </select>
                 </div>
+                <div style={S.field}>
+                  <label style={S.label}>Employee</label>
+                  <select style={S.input} value={uploadEmployeeFilter} onChange={(event) => setUploadEmployeeFilter(event.target.value)}>
+                    <option value="all">All employees</option>
+                    {uploadEmployeeOptions.map((item) => {
+                      const [employeeId, employeeName] = item.split("||");
+                      return <option key={item} value={item}>{employeeName || employeeId}</option>;
+                    })}
+                  </select>
+                </div>
+                {UPLOAD_FILTER_FIELDS.map((field) => (
+                  <div key={field.key} style={S.field}>
+                    <label style={S.label}>{field.label}</label>
+                    <select
+                      style={S.input}
+                      value={uploadColumnFilters[field.key] || "all"}
+                      onChange={(event) => setUploadColumnFilters((previous) => ({ ...previous, [field.key]: event.target.value }))}
+                    >
+                      <option value="all">All {field.label.toLowerCase()}</option>
+                      {(uploadColumnOptions[field.key] || []).map((option) => (
+                        <option key={`${field.key}-${option}`} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
               </div>
 
-              <div style={S.tableWrap}>
+              <div style={S.tableShell}>
+                <div style={S.tableToolbar}>
+                  <div>
+                    <div style={S.tableToolbarTitle}>Upload Preview Table</div>
+                    <div style={S.tableToolbarSub}>All parsed sheet fields are shown here. Use Edit to change row details and add or remove pay columns.</div>
+                  </div>
+                  <span style={S.inlineBadge}>{filteredUploadedRows.length} visible row{filteredUploadedRows.length !== 1 ? "s" : ""}</span>
+                </div>
+                <div style={S.tableWrap}>
                 <table style={S.table}>
                   <thead>
                     <tr>
-                      <th style={S.th}>Employee ID</th>
-                      <th style={S.th}>Name</th>
-                      <th style={S.th}>Period</th>
-                      <th style={S.th}>Net Pay</th>
+                      {dynamicUploadColumns.map((column) => (
+                        <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
+                      ))}
                       <th style={S.th}>Storage Status</th>
-                      <th style={S.th}>Action</th>
+                      <th style={{ ...S.th, textAlign: "right" }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {uploadedRowsWithStatus.filter((row) => selectedStorageStatus === "all" || row.storage_status === selectedStorageStatus).length
-                      ? uploadedRowsWithStatus
-                        .filter((row) => selectedStorageStatus === "all" || row.storage_status === selectedStorageStatus)
-                        .map((row, index) => (
-                          <tr key={`${row.row_key}-${index}`}>
-                            <td style={S.td}>{row.employee_id}</td>
-                            <td style={S.td}>{row.name}</td>
-                            <td style={S.td}>{row.month} {row.year}</td>
-                            <td style={S.td}>{currency(row.net_pay ?? Number(row.basic || 0) + Number(row.hra || 0) + Number(row.conveyance || 0) - Number(row.pf_deduction || 0) - Number(row.professional_tax || 0) - Number(row.esi || 0))}</td>
+                    {filteredUploadedRows.length
+                      ? filteredUploadedRows
+                        .map((row) => (
+                          <tr key={`${row.row_key}-${row.sourceIndex}`}>
+                            {dynamicUploadColumns.map((column) => {
+                              const value = column.getValue(row);
+                              return (
+                                <td key={column.key} style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}) }}>
+                                  {column.isAmount ? currency(value || 0) : String(value ?? "")}
+                                </td>
+                              );
+                            })}
                             <td style={S.td}>
                               <span style={S.badge}>
                                 {row.storage_status === "ready" ? "Ready to store" : row.storage_status === "stored" ? "Already stored" : "Needs attention"}
                               </span>
                             </td>
-                            <td style={S.td}>
+                              <td style={{ ...S.td, ...S.stickyActionCell }}>
+                              <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
+                              <button type="button" style={S.btnSecondary} onClick={() => openEditModal(row, { mode: "upload", sourceIndex: row.sourceIndex })}>
+                                <Pencil size={15} />
+                                Edit
+                              </button>
                               <button
                                 type="button"
-                                style={{ ...S.btnSecondary, ...(generatingRow === index ? S.btnDisabled : {}) }}
-                                disabled={generatingRow === index}
-                                onClick={() => handleGenerate(row, index)}
+                                style={{ ...S.btnSecondary, ...(generatingRow === row.sourceIndex ? S.btnDisabled : {}) }}
+                                disabled={generatingRow === row.sourceIndex}
+                                onClick={() => handleGenerate(row, row.sourceIndex)}
                               >
                                 <Download size={15} />
-                                {generatingRow === index ? "Working..." : row.alreadyStored ? "Open PDF" : "Store & Open PDF"}
+                                {generatingRow === row.sourceIndex ? "Working..." : row.alreadyStored ? "Open PDF" : "Store & Open PDF"}
                               </button>
+                              </div>
                             </td>
                           </tr>
                         ))
                       : (
                         <tr>
-                          <td style={S.td} colSpan={6}>Upload an Excel file to preview rows here.</td>
+                          <td style={S.td} colSpan={dynamicUploadColumns.length + 2}>Upload an Excel file to preview rows here.</td>
                         </tr>
                       )}
                   </tbody>
                 </table>
+                </div>
               </div>
             </div>
           </>
@@ -914,11 +1299,25 @@ function Payslips({ user }) {
                   </div>
                 </div>
                 <div style={S.rowGap}>
-                  <button type="button" style={S.btnSecondary} onClick={() => setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, true])))}>
+                  <button
+                    type="button"
+                    style={S.btnSecondary}
+                    onClick={() => {
+                      setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, true])));
+                      setSelectedArchiveGroup(null);
+                    }}
+                  >
                     <ChevronDown size={15} />
                     Expand All
                   </button>
-                  <button type="button" style={S.btnSecondary} onClick={() => setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, false])))}>
+                  <button
+                    type="button"
+                    style={S.btnSecondary}
+                    onClick={() => {
+                      setExpandedGroups(Object.fromEntries(groupedPayslips.map((group) => [group.key, false])));
+                      setSelectedArchiveGroup(null);
+                    }}
+                  >
                     <ChevronRight size={15} />
                     Collapse All
                   </button>
@@ -982,6 +1381,21 @@ function Payslips({ user }) {
                     searchPlaceholder="Search sort options"
                   />
                 </div>
+                {DISPLAY_FILTER_FIELDS.map((field) => (
+                  <div key={field.key} style={S.field}>
+                    <label style={S.label}>{field.label}</label>
+                    <select
+                      style={S.input}
+                      value={displayColumnFilters[field.key] || "all"}
+                      onChange={(event) => setDisplayColumnFilters((previous) => ({ ...previous, [field.key]: event.target.value }))}
+                    >
+                      <option value="all">All {field.label.toLowerCase()}</option>
+                      {(displayColumnOptions[field.key] || []).map((option) => (
+                        <option key={`${field.key}-${option}`} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
               </div>
 
               <div style={S.rowGap}>
@@ -993,100 +1407,104 @@ function Payslips({ user }) {
               {loadingPayslips ? (
                 <div style={S.empty}>Loading payslips...</div>
               ) : groupedPayslips.length ? (
+                <>
                 <div style={S.archiveGroupGrid}>
                   {groupedPayslips.map((group) => {
                     const totalNet = group.items.reduce((sum, item) => sum + Number(item.net_pay || 0), 0);
                     const isExpanded = expandedGroups[group.key] !== false;
                     return (
                       <div key={group.key} style={{ minWidth: 0 }}>
-                        <button type="button" style={S.sectionHeader} onClick={() => toggleGroup(group.key)}>
+                        <button type="button" style={S.sectionHeader} onClick={() => { toggleGroup(group.key); setSelectedArchiveGroup(group.key); }}>
                           <div style={{ textAlign: "left" }}>
                             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                               {isExpanded ? <ChevronDown size={18} color={C.purpleDark} /> : <ChevronRight size={18} color={C.purpleDark} />}
                               <strong style={{ fontSize: 16, color: C.text }}>{group.label}</strong>
                               <span style={S.badge}>{group.items.length} payslip{group.items.length !== 1 ? "s" : ""}</span>
                             </div>
-                            <div style={S.groupMeta}>
+                            <div style={S.monthTileMeta}>
                               <span>{new Set(group.items.map((item) => item.employee_id)).size} employee scope</span>
                               <span>Total net pay: {currency(totalNet)}</span>
                             </div>
                           </div>
-                          <div style={{ fontSize: 12, color: C.textMid }}>
-                            Period key: {group.key}
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <span style={{ fontSize: 12, color: C.textMid }}>Period key: {group.key}</span>
+                            <span style={S.inlineBadge}>{isExpanded ? "Open" : "View"}</span>
                           </div>
                         </button>
-
-                        {isExpanded ? (
-                          <div style={{ ...S.group, marginTop: 12 }}>
-                            {group.items.map((item) => (
-                              <article key={item._id} style={S.payslipCard}>
-                                <div style={S.rowBetween}>
-                                  <div>
-                                    <div style={{ fontSize: 16, color: C.text, fontWeight: 700 }}>{item.employee_name}</div>
-                                    <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>{item.employee_id}</div>
-                                  </div>
-                                  <div style={S.badge}>{item.month} {item.year}</div>
-                                </div>
-
-                                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 14 }}>
-                                  <div>
-                                    <div style={{ fontSize: 12, color: C.textMid }}>Net Pay</div>
-                                    <div style={{ fontSize: 16, color: C.text, fontWeight: 700 }}>{currency(item.net_pay)}</div>
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 12, color: C.textMid }}>Generated</div>
-                                    <div style={{ fontSize: 13, color: C.text }}>{item.generated_at ? new Date(item.generated_at).toLocaleDateString("en-IN") : "Unavailable"}</div>
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 12, color: C.textMid }}>Gross Earnings</div>
-                                    <div style={{ fontSize: 13, color: C.text }}>{currency(item.gross_earnings)}</div>
-                                  </div>
-                                  <div>
-                                    <div style={{ fontSize: 12, color: C.textMid }}>Deductions</div>
-                                    <div style={{ fontSize: 13, color: C.text }}>{currency(item.gross_deductions)}</div>
-                                  </div>
-                                </div>
-
-                                <div style={S.rowBetween}>
-                                  <div style={{ display: "inline-flex", alignItems: "center", gap: 8, color: C.textMid, fontSize: 12, marginTop: 16 }}>
-                                    {isAdmin ? <Users size={14} /> : <FileText size={14} />}
-                                    Stored under {item.period_key || `${item.year}-${String(item.month_number || monthIndex(item.month)).padStart(2, "0")}`}
-                                  </div>
-                                  <div style={{ ...S.rowGap, marginTop: 16 }}>
-                                    {isAdmin ? (
-                                      <>
-                                        <button type="button" style={S.btnSecondary} onClick={() => openEditModal(item)}>
-                                          <Pencil size={15} />
-                                          Edit
-                                        </button>
-                                        <button
-                                          type="button"
-                                          style={{ ...S.dangerTextButton, ...(deletingPayslipId === item._id ? S.btnDisabled : {}) }}
-                                          disabled={deletingPayslipId === item._id}
-                                          onClick={() => handleDeletePayslip(item)}
-                                        >
-                                          <Trash2 size={15} />
-                                          {deletingPayslipId === item._id ? "Deleting..." : "Delete"}
-                                        </button>
-                                      </>
-                                    ) : null}
-                                    <button type="button" style={S.btnPrimary} onClick={() => handleDownload(item._id)}>
-                                      <Download size={15} />
-                                      Download PDF
-                                    </button>
-                                  </div>
-                                </div>
-                              </article>
-                            ))}
-                          </div>
-                        ) : null}
                       </div>
                     );
                   })}
                 </div>
+                {activeArchiveGroup ? (
+                  <div style={{ ...S.tableShell, marginTop: 16 }}>
+                    <div style={S.tableToolbar}>
+                      <div>
+                        <div style={S.tableToolbarTitle}>{activeArchiveGroup.label} Employee View</div>
+                        <div style={S.tableToolbarSub}>Blank by default, shown only when a month is opened. Full parsed sheet fields are visible here.</div>
+                      </div>
+                      <span style={S.inlineBadge}>{activeArchiveGroup.items.length} employee row{activeArchiveGroup.items.length !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div style={S.tableWrap}>
+                      <table style={S.table}>
+                        <thead>
+                          <tr>
+                            {activeArchiveColumns.map((column) => (
+                              <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
+                            ))}
+                            <th style={{ ...S.th, textAlign: "right" }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeArchiveGroup.items.map((item) => (
+                            <tr key={item._id}>
+                              {activeArchiveColumns.map((column) => {
+                                const value = column.getValue(item);
+                                return (
+                                  <td key={column.key} style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}) }}>
+                                    {column.key === "name" ? <strong>{String(value ?? "")}</strong> : column.isAmount ? currency(value || 0) : String(value ?? "")}
+                                  </td>
+                                );
+                              })}
+                              <td style={{ ...S.td, ...S.stickyActionCell }}>
+                                <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
+                                  {isAdmin ? (
+                                    <>
+                                      <button type="button" style={S.btnSecondary} onClick={() => openEditModal(item, { mode: "display", payslipId: item._id })}>
+                                        <Pencil size={15} />
+                                        Edit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        style={{ ...S.dangerTextButton, ...(deletingPayslipId === item._id ? S.btnDisabled : {}) }}
+                                        disabled={deletingPayslipId === item._id}
+                                        onClick={() => handleDeletePayslip(item)}
+                                      >
+                                        <Trash2 size={15} />
+                                        {deletingPayslipId === item._id ? "Deleting..." : "Delete"}
+                                      </button>
+                                    </>
+                                  ) : null}
+                                  <button type="button" style={S.btnPrimary} onClick={() => handleDownload(item._id)}>
+                                    <Download size={15} />
+                                    Download PDF
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ ...S.empty, border: `1px dashed ${C.border}`, borderRadius: 12, marginTop: 16 }}>
+                    Open a month to view its employee table.
+                  </div>
+                )}
+                </>
               ) : (
                 <div style={S.empty}>
-                  <FileText size={30} style={{ marginBottom: 10 }} />
+                  <Eye size={30} style={{ marginBottom: 10 }} />
                   <div>No payslips match the current filters.</div>
                 </div>
               )}
@@ -1099,8 +1517,12 @@ function Payslips({ user }) {
             <div style={S.modalCard} onClick={(event) => event.stopPropagation()}>
               <div style={S.rowBetween}>
                 <div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Edit Payslip</div>
-                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>{editingPayslip.employee_name} • {editingPayslip.employee_id}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: C.text }}>
+                    {editingContext?.mode === "upload" ? "Edit Uploaded Row" : "Edit Payslip"}
+                  </div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>
+                    {(editingPayslip.employee_name || editingPayslip.name)} • {editingPayslip.employee_id}
+                  </div>
                 </div>
                 <button type="button" style={S.btnSecondary} onClick={closeEditModal}>
                   <X size={15} />
@@ -1110,6 +1532,7 @@ function Payslips({ user }) {
 
               <div style={{ ...S.formGrid, marginTop: 16 }}>
                 <div style={S.field}><label style={S.label}>Employee ID</label><input style={S.input} value={editForm.employee_id} onChange={(event) => setEditForm((previous) => ({ ...previous, employee_id: event.target.value }))} /></div>
+                <div style={S.field}><label style={S.label}>Name</label><input style={S.input} value={editForm.name} onChange={(event) => setEditForm((previous) => ({ ...previous, name: event.target.value }))} /></div>
                 <div style={S.field}><label style={S.label}>Month</label><input style={S.input} value={editForm.month} onChange={(event) => setEditForm((previous) => ({ ...previous, month: event.target.value }))} /></div>
                 <div style={S.field}><label style={S.label}>Year</label><input style={S.input} value={editForm.year} onChange={(event) => setEditForm((previous) => ({ ...previous, year: event.target.value }))} /></div>
                 <div style={S.field}><label style={S.label}>LOP Days</label><input style={S.input} value={editForm.lop_days} onChange={(event) => setEditForm((previous) => ({ ...previous, lop_days: event.target.value }))} /></div>
@@ -1129,27 +1552,47 @@ function Payslips({ user }) {
 
               <div style={{ ...S.formGrid, gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Earnings</div>
+                  <div style={S.rowBetween}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Earnings</div>
+                    <button type="button" style={S.btnSecondary} onClick={() => handleAddLineItem("earnings")}>
+                      <Plus size={14} />
+                      Add Column
+                    </button>
+                  </div>
                   {editForm.earnings.map((item, index) => (
-                    <div key={`earning-${item.key || index}`} style={S.lineItemRow}>
+                    <div key={`earning-${item.key || index}`} style={S.lineItemRowWithAction}>
                       <input style={S.input} value={item.label} onChange={(event) => handleLineItemChange("earnings", index, "label", event.target.value)} />
                       <input style={S.input} value={item.amount} onChange={(event) => handleLineItemChange("earnings", index, "amount", event.target.value)} />
+                      <button type="button" style={S.iconButton} onClick={() => handleDeleteLineItem("earnings", index)}>
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                   ))}
                 </div>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Deductions</div>
+                  <div style={S.rowBetween}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 10 }}>Deductions</div>
+                    <button type="button" style={S.btnSecondary} onClick={() => handleAddLineItem("deductions")}>
+                      <Plus size={14} />
+                      Add Column
+                    </button>
+                  </div>
                   {editForm.deductions.map((item, index) => (
-                    <div key={`deduction-${item.key || index}`} style={S.lineItemRow}>
+                    <div key={`deduction-${item.key || index}`} style={S.lineItemRowWithAction}>
                       <input style={S.input} value={item.label} onChange={(event) => handleLineItemChange("deductions", index, "label", event.target.value)} />
                       <input style={S.input} value={item.amount} onChange={(event) => handleLineItemChange("deductions", index, "amount", event.target.value)} />
+                      <button type="button" style={S.iconButton} onClick={() => handleDeleteLineItem("deductions", index)}>
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                   ))}
                 </div>
               </div>
 
               <div style={{ ...S.rowBetween, marginTop: 18 }}>
-                <div style={{ fontSize: 12, color: C.textMid }}>Saving recalculates gross earnings, deductions, and net pay automatically.</div>
+                <div style={{ fontSize: 12, color: C.textMid }}>
+                  Saving recalculates gross earnings, deductions, and net pay automatically. Added or removed pay columns will be used for storage and PDF generation.
+                </div>
                 <div style={S.rowGap}>
                   <button type="button" style={S.btnSecondary} onClick={closeEditModal}>Cancel</button>
                   <button type="button" style={{ ...S.btnPrimary, ...(savingEdit ? S.btnDisabled : {}) }} disabled={savingEdit} onClick={handleSaveEdit}>

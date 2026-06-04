@@ -177,9 +177,9 @@ def _derive_pay_components(row_dict):
             section = "deductions"
             continue
 
-        amount = _parse_float(value)
-        if not amount:
+        if value in (None, ""):
             continue
+        amount = _parse_float(value)
 
         if section == "deductions":
             deduction_items.append(_money_line(label, value))
@@ -441,8 +441,8 @@ def _build_pdf(employee, payslip):
         ("ALIGN", (3, 1), (3, -1), "RIGHT"),
         ("ALIGN", (0, 0), (0, -1), "LEFT"),
         ("ALIGN", (2, 0), (2, -1), "LEFT"),
-        ("ALIGN", (0, net_row), (1, net_row), "CENTER"),
-        ("ALIGN", (2, net_row), (2, net_row), "LEFT"),
+        ("ALIGN", (0, net_row), (1, net_row), "RIGHT"),
+        ("ALIGN", (2, net_row), (3, net_row), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("BOX", (0, 0), (-1, -1), 0.5, border_color),
         ("INNERGRID", (0, 0), (-1, 0), 0.5, border_color),
