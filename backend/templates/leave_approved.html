@@ -1,0 +1,24 @@
+{% extends "email_base.html" %}
+{% set title = "Leave approved" %}
+{% block content %}
+  {% if audience == "admin" %}
+    <h1>Long Leave Approved</h1>
+    <p>A leave request exceeding {{ threshold }} day(s) has been approved.</p>
+  {% else %}
+    <h1>Leave Approved</h1>
+    <p>Your leave request has been approved by {{ approver_name }}.</p>
+  {% endif %}
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
+    <tr><td class="label">Leave Type</td><td class="value"><span class="pill">{{ leave_type }}</span></td></tr>
+    <tr><td class="label">Approved Dates</td><td class="value">{{ approved_start_date|date_label }} to {{ approved_end_date|date_label }}</td></tr>
+    <tr><td class="label">Approved Duration</td><td class="value">{{ approved_days }} day(s)</td></tr>
+    <tr><td class="label">Original Request</td><td class="value">{{ start_date|date_label }} to {{ end_date|date_label }}</td></tr>
+    <tr><td class="label">Reason</td><td class="value">{{ reason }}</td></tr>
+  </table>
+
+  <div class="actions">
+    <a class="button" href="{{ approval_url }}">Open Request</a>
+  </div>
+{% endblock %}

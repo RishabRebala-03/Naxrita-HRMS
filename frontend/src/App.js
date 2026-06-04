@@ -25,6 +25,7 @@ import Policy from "./components/Policy";
 import Projects from "./components/Projects";
 import Timesheets from "./components/Timesheets";
 import Payslips from "./components/Payslips";
+import MailAdmin from "./components/MailAdmin";
 
 // Injects critical CSS to fix mobile scrolling
 const MobileScrollFix = () => (
@@ -390,6 +391,9 @@ function App() {
 
       case "logs":
         return role === "Admin" ? <AdminLogs user={currentUser} /> : <AccessDenied />;
+
+      case "mail":
+        return role === "Admin" ? <MailAdmin user={currentUser} /> : <AccessDenied />;
 
       case "employees":
         if (role === "Admin") {

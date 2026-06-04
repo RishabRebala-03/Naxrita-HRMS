@@ -1,0 +1,15 @@
+{% extends "email_base.html" %}
+{% set title = "SMTP test mail" %}
+{% block content %}
+  <h1>SMTP Test Successful</h1>
+  <p>This test email confirms that the Naxrita Labs HRMS SMTP configuration can send mail.</p>
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Recipient</td><td class="value">{{ recipient_email }}</td></tr>
+    <tr><td class="label">Sent At</td><td class="value">{{ sent_at }}</td></tr>
+  </table>
+
+  <div class="actions">
+    <a class="button" href="{{ portal_url }}">Open HRMS</a>
+  </div>
+{% endblock %}

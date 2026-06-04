@@ -1,14 +1,14 @@
 import os
 from email_service import EmailService  # provides the class
 
-# ---- Credentials (use env vars in prod) ----
-EMAIL_USERNAME = os.getenv("MAIL_USERNAME", "rishabrebala@naxrita.com")
-EMAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "Rishab@057203")  # MFA OFF -> regular password works
-EMAIL_SENDER   = os.getenv("MAIL_SENDER", EMAIL_USERNAME)
+# Legacy compatibility only. New leave mail uses services/mail_service.py.
+EMAIL_USERNAME = os.getenv("MAIL_USERNAME") or os.getenv("SMTP_USER", "")
+EMAIL_PASSWORD = os.getenv("MAIL_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
+EMAIL_SENDER   = os.getenv("MAIL_SENDER") or os.getenv("SMTP_FROM_EMAIL") or EMAIL_USERNAME
 
 # ---- Outlook SMTP ----
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT   = 587       # STARTTLS
+SMTP_SERVER = os.getenv("SMTP_HOST", "smtp.office365.com")
+SMTP_PORT   = int(os.getenv("SMTP_PORT", "587"))
 USE_TLS     = True
 USE_SSL     = False
 TIMEOUT_SEC = 30

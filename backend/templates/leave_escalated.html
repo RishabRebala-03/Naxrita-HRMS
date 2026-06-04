@@ -1,0 +1,19 @@
+{% extends "email_base.html" %}
+{% set title = "Leave approval escalated" %}
+{% block content %}
+  <h1>Escalated Leave Approval</h1>
+  <p>This pending leave request has been escalated to {{ approver_name }}.</p>
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
+    <tr><td class="label">Escalation Level</td><td class="value">{{ escalation_level }}</td></tr>
+    <tr><td class="label">Leave Type</td><td class="value"><span class="pill warn">{{ leave_type }}</span></td></tr>
+    <tr><td class="label">Dates</td><td class="value">{{ start_date|date_label }} to {{ end_date|date_label }}</td></tr>
+    <tr><td class="label">Duration</td><td class="value">{{ days }} day(s)</td></tr>
+    <tr><td class="label">Reason</td><td class="value">{{ reason }}</td></tr>
+  </table>
+
+  <div class="actions">
+    <a class="button" href="{{ approval_url }}">Review Request</a>
+  </div>
+{% endblock %}

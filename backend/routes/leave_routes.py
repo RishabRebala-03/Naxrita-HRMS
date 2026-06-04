@@ -3,10 +3,17 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime, timedelta
 from config.db import mongo
-from config_email import email_service
 from utils.log_utils import log_leave_action, trim_leave
 from utils.leave_accrual import accrue_monthly_leaves
 from utils.recalculate_balances import recalculate_all_balances
+from services.mail_service import (
+    queue_leave_applied_emails,
+    queue_leave_cancelled_email,
+    queue_leave_escalated_email,
+    queue_leave_modified_email,
+    queue_leave_status_email,
+    send_pending_leave_reminders,
+)
 
 leave_bp = Blueprint("leave_bp", __name__)
 
@@ -355,6 +362,11 @@ def escalate_leave_request(leave_id):
             performed_by="System",
             remarks=f"Auto-escalated to {next_approver['name']} (Level {new_level}) after timeout"
         )
+
+        try:
+            queue_leave_escalated_email(leave_id, next_approver=next_approver)
+        except Exception as mail_error:
+            print(f"   ⚠️ Escalation mail queue failed: {str(mail_error)}")
         
         print(f"✅ Leave {leave_id} escalated successfully to {next_approver['name']} (Level {new_level})")
         return True
@@ -458,22 +470,10 @@ def escalate_leave(leave_id):
                 related_leave_id=leave_id
             )
             
-            # Send email
             try:
-                email_service.send_leave_escalation_email(
-                    to_email=next_approver["email"],
-                    approver_name=next_approver["name"],
-                    employee_name=employee_name,
-                    leave_type=leave_type,
-                    start_date=start_date,
-                    end_date=end_date,
-                    days=days,
-                    reason=leave.get("reason", "No reason provided"),
-                    escalation_level=new_level
-                )
-                print(f"   ✅ Escalation email sent to {next_approver['email']}")
+                queue_leave_escalated_email(leave_id, next_approver=next_approver)
             except Exception as email_err:
-                print(f"   ⚠️ Escalation email failed: {str(email_err)}")
+                print(f"   ⚠️ Escalation email queue failed: {str(email_err)}")
             
             log_leave_action(
                 leave_id=leave_id,
@@ -1017,25 +1017,10 @@ def apply_leave():
                         related_leave_id=result.inserted_id
                     )
                     
-                    # Send email
-                    if manager.get("email"):
-                        manager_email = manager.get("email")
-                        manager_name = manager.get("name", "Manager")
-                        
-                        try:
-                            email_service.send_leave_request_email(
-                                to_email=manager_email,
-                                manager_name=manager_name,
-                                employee_name=employee.get("name", "Unknown"),
-                                leave_type=leave_desc,
-                                start_date=start_date,
-                                end_date=end_date,
-                                days=days,
-                                reason=reason or "No reason provided"
-                            )
-                            print(f"   ✅ Email sent successfully to {manager_email}")
-                        except Exception as email_err:
-                            print(f"   ⚠️ Email sending failed: {str(email_err)}")
+                    try:
+                        queue_leave_applied_emails(str(result.inserted_id))
+                    except Exception as email_err:
+                        print(f"   ⚠️ Leave application email queue failed: {str(email_err)}")
             except Exception as mgr_err:
                 print(f"   ❌ Error fetching manager: {str(mgr_err)}")
 
@@ -1207,6 +1192,7 @@ def update_leave(leave_id):
                 "is_half_day": is_half_day,
                 "half_day_period": half_day_period if is_half_day else "",
                 "days": days,
+                "modified_on": datetime.utcnow(),
             }
         }
     )
@@ -1221,6 +1207,11 @@ def update_leave(leave_id):
         old_data=trim_leave(old_data),
         new_data=trim_leave(new_data)
     )
+
+    try:
+        queue_leave_modified_email(leave_id)
+    except Exception as mail_error:
+        print(f"⚠️ Leave modified email queue failed: {str(mail_error)}")
 
     return jsonify({"message": "Leave updated successfully"}), 200
 
@@ -1278,6 +1269,15 @@ def cancel_leave(leave_id):
                     related_leave_id=leave_id
                 )
 
+            try:
+                queue_leave_cancelled_email(
+                    leave_id,
+                    cancelled_by_role="employee",
+                    reason=data.get("reason", ""),
+                )
+            except Exception as mail_error:
+                print(f"⚠️ Leave cancellation email queue failed: {str(mail_error)}")
+
             print("✅ Approved leave cancelled by employee")
             return jsonify({
                 "message": "Approved leave cancelled successfully",
@@ -1313,6 +1313,15 @@ def cancel_leave(leave_id):
                 message=notification_message,
                 related_leave_id=leave_id
             )
+
+        try:
+            queue_leave_cancelled_email(
+                leave_id,
+                cancelled_by_role="employee",
+                reason=data.get("reason", ""),
+            )
+        except Exception as mail_error:
+            print(f"⚠️ Leave cancellation email queue failed: {str(mail_error)}")
 
         print("✅ Leave cancelled successfully")
         return jsonify({"message": "Leave cancelled successfully"}), 200
@@ -1379,6 +1388,15 @@ def cancel_leave_by_lead(leave_id):
             ),
             related_leave_id=leave_id
         )
+
+        try:
+            queue_leave_cancelled_email(
+                leave_id,
+                cancelled_by_role="lead",
+                reason=reason,
+            )
+        except Exception as mail_error:
+            print(f"⚠️ Lead cancellation email queue failed: {str(mail_error)}")
 
         return jsonify({
             "message": "Approved leave cancelled by lead successfully",
@@ -1658,6 +1676,16 @@ def update_leave_status(leave_id):
             except Exception as sync_error:
                 print(f"⚠️ Could not sync timesheets for approved leave {leave_id}: {sync_error}")
 
+        try:
+            queue_leave_status_email(
+                leave_id,
+                status=status,
+                remarks=rejection_reason,
+                approver_name=approved_by,
+            )
+        except Exception as mail_error:
+            print(f"⚠️ Leave status email queue failed: {str(mail_error)}")
+
         response_message = f"Leave {status.lower()} successfully!"
         if status == "Approved" and removed_orders:
             response_message += f" {removed_orders} tea/coffee order(s) were discarded for the approved leave dates."
@@ -1686,6 +1714,22 @@ def trigger_recalculate_balances():
         result = recalculate_all_balances()
         return jsonify(result), 200
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@leave_bp.route("/send-reminder", methods=["POST"])
+def send_leave_reminder():
+    try:
+        data = request.get_json(silent=True) or {}
+        result = send_pending_leave_reminders(
+            tenant_id=data.get("tenant_id"),
+            leave_id=data.get("leave_id"),
+            force=bool(data.get("force", True)),
+            reminder_hours=data.get("hours"),
+        )
+        return jsonify(result), 200
+    except Exception as e:
+        print(f"❌ Error sending leave reminders: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

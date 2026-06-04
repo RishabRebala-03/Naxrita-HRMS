@@ -1,0 +1,25 @@
+{% extends "email_base.html" %}
+{% set title = "Daily leave summary" %}
+{% block content %}
+  <h1>Daily Leave Summary</h1>
+  <p>Summary for {{ summary_date|date_label }}.</p>
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Pending Approvals</td><td class="value">{{ pending_count }}</td></tr>
+    <tr><td class="label">Approved Today</td><td class="value">{{ approved_today_count }}</td></tr>
+    <tr><td class="label">On Leave Today</td><td class="value">{{ on_leave_today_count }}</td></tr>
+  </table>
+
+  {% if on_leave_today %}
+    <p><strong>Employees on leave today</strong></p>
+    <table class="summary" role="presentation">
+      {% for item in on_leave_today %}
+        <tr><td class="label">{{ item.employee_name }}</td><td class="value">{{ item.leave_type }}: {{ item.start_date|date_label }} to {{ item.end_date|date_label }}</td></tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+
+  <div class="actions">
+    <a class="button" href="{{ portal_url }}">Open HRMS</a>
+  </div>
+{% endblock %}

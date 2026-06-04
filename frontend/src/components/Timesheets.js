@@ -878,6 +878,67 @@ const createEmptyWorkRow = (id, dates, lockedDateSet = new Set(), defaultHoursBy
   entries: createEmptyWorkEntries(dates, lockedDateSet, defaultHoursByDate),
 });
 
+const LOCATION_STORAGE_EVENT = 'mte-locations-updated';
+
+const getLocationStorageKey = (userId, periodValue) => `mte_locations_${userId}_${periodValue}`;
+
+const normalizeLocationMap = (locations = {}, dates = []) => {
+  const validDates = dates.length ? new Set(dates) : null;
+  return Object.fromEntries(
+    Object.entries(locations || {})
+      .map(([date, location]) => [normalizeDateKey(date), String(location || '').trim()])
+      .filter(([date, location]) => date && location && (!validDates || validDates.has(date)))
+  );
+};
+
+const areLocationMapsEqual = (first = {}, second = {}) => {
+  const firstKeys = Object.keys(first || {}).sort();
+  const secondKeys = Object.keys(second || {}).sort();
+  if (firstKeys.length !== secondKeys.length) return false;
+  return firstKeys.every((key, index) => key === secondKeys[index] && first[key] === second[key]);
+};
+
+const getTimesheetWorkLocationsByDate = (source = {}, dates = []) =>
+  normalizeLocationMap(
+    source.employee_work_locations_by_date
+    || source.work_locations_by_date
+    || source.daily_locations,
+    dates
+  );
+
+const getTimesheetAssignedLocationsByDate = (source = {}, dates = []) =>
+  normalizeLocationMap(
+    source.employee_assigned_locations_by_date
+    || source.assigned_locations_by_date,
+    dates
+  );
+
+const readSavedPeriodLocations = (userId, periodValue, dates = []) => {
+  if (!userId || !periodValue || typeof localStorage === 'undefined') {
+    return { dailyLocations: {}, assignedLocations: {} };
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(getLocationStorageKey(userId, periodValue)) || '{}') || {};
+    return {
+      ...saved,
+      dailyLocations: normalizeLocationMap(saved.dailyLocations, dates),
+      assignedLocations: normalizeLocationMap(saved.assignedLocations, dates),
+    };
+  } catch (_) {
+    return { dailyLocations: {}, assignedLocations: {} };
+  }
+};
+
+const writeSavedPeriodLocations = (userId, periodValue, payload) => {
+  if (!userId || !periodValue || typeof localStorage === 'undefined') return;
+  localStorage.setItem(getLocationStorageKey(userId, periodValue), JSON.stringify(payload || {}));
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(LOCATION_STORAGE_EVENT, {
+      detail: { userId, periodValue, locations: payload || {} },
+    }));
+  }
+};
+
 const CHARGE_CODE_DISPLAY_EVENT = 'mte-charge-code-display-change';
 
 const getChargeCodeDisplayStorageKey = (userId) => `mte_charge_code_display_${userId}`;
@@ -1044,6 +1105,8 @@ function TimesheetGrid({
   dates, rows, chargeCodes, onRowUpdate,
   readOnly = false, approvedLeaves = [], holidays = [],
   assignmentMeta = {},
+  workLocationsByDate = {},
+  assignedLocationsByDate = {},
   dailyOvertime = {},
   holidayPayout = {},
   onAdjustmentChange,
@@ -1231,6 +1294,8 @@ function TimesheetGrid({
     companyCostCenter = 'Not assigned',
     employeeId = 'Not assigned',
   } = assignmentMeta;
+  const workLocationForDate = (dateStr) => workLocationsByDate[dateStr] || workLocation;
+  const assignedLocationForDate = (dateStr) => assignedLocationsByDate[dateStr] || assignedLocation;
   const selectedChargeCodeIds = rows.map((row) => row.chargeCodeId).filter(Boolean);
 
   return (
@@ -1279,7 +1344,7 @@ function TimesheetGrid({
                 <span className="mte-sheet-meta-link">Work Location</span>
               </td>
               {dates.map((d) => (
-                <td key={`work-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{workLocation}</td>
+                <td key={`work-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{workLocationForDate(d)}</td>
               ))}
               <td className="mte-sheet-meta-total" />
             </tr>
@@ -1295,7 +1360,7 @@ function TimesheetGrid({
                 Assigned Location
               </td>
               {dates.map((d) => (
-                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{assignedLocation}</td>
+                <td key={`assigned-location-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{assignedLocationForDate(d)}</td>
               ))}
               <td className="mte-sheet-meta-total">{assignedLocation}</td>
             </tr>
@@ -1711,6 +1776,12 @@ function TimesheetPage({
   const [holidays, setHolidays]                 = useState([]);
   const [loading, setLoading]                   = useState(false);
   const [profile, setProfile]                   = useState(user || {});
+  const [periodLocations, setPeriodLocations]   = useState({ dailyLocations: {}, assignedLocations: {} });
+  const [timesheetLocationMaps, setTimesheetLocationMaps] = useState({
+    workLocationsByDate: {},
+    assignedLocationsByDate: {},
+  });
+  const [hasSavedCurrentDraft, setHasSavedCurrentDraft] = useState(false);
   const [sheetLoaded, setSheetLoaded]           = useState(false);
   // FIX 2: reload trigger — incrementing forces the timesheet data useEffect to re-run
   const [reloadTrigger, setReloadTrigger]       = useState(0);
@@ -1725,6 +1796,8 @@ function TimesheetPage({
     setSelectedRowId('');
     setDailyOvertime({});
     setHolidayPayout({});
+    setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
+    setHasSavedCurrentDraft(false);
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
   const selectedPeriodOption = availablePeriods.find((period) => period.value === activePeriod) || availablePeriods[0];
@@ -1753,6 +1826,50 @@ function TimesheetPage({
       end:   parseISO(period.end),
     }).map((d) => format(d, 'yyyy-MM-dd'));
   }, [activePeriod, availablePeriods]);
+
+  const loadPeriodLocations = useCallback(() => {
+    setPeriodLocations(readSavedPeriodLocations(userId, activePeriod, dates));
+  }, [activePeriod, dates, userId]);
+
+  useEffect(() => {
+    loadPeriodLocations();
+  }, [loadPeriodLocations]);
+
+  useEffect(() => {
+    if (!userId || !activePeriod || typeof window === 'undefined') return undefined;
+
+    const refreshLocations = (event) => {
+      if (event.type === 'storage' && event.key !== getLocationStorageKey(userId, activePeriod)) return;
+      if (event.type === LOCATION_STORAGE_EVENT) {
+        if (event.detail?.userId !== userId || event.detail?.periodValue !== activePeriod) return;
+      }
+      loadPeriodLocations();
+      setHasSavedCurrentDraft(false);
+    };
+
+    window.addEventListener('storage', refreshLocations);
+    window.addEventListener(LOCATION_STORAGE_EVENT, refreshLocations);
+    return () => {
+      window.removeEventListener('storage', refreshLocations);
+      window.removeEventListener(LOCATION_STORAGE_EVENT, refreshLocations);
+    };
+  }, [activePeriod, loadPeriodLocations, userId]);
+
+  const periodWorkLocationsByDate = useMemo(() => ({
+    ...normalizeLocationMap(timesheetLocationMaps.workLocationsByDate, dates),
+    ...normalizeLocationMap(periodLocations.dailyLocations, dates),
+  }), [dates, periodLocations.dailyLocations, timesheetLocationMaps.workLocationsByDate]);
+
+  const periodAssignedLocationsByDate = useMemo(() => ({
+    ...normalizeLocationMap(timesheetLocationMaps.assignedLocationsByDate, dates),
+    ...normalizeLocationMap(periodLocations.assignedLocations, dates),
+  }), [dates, periodLocations.assignedLocations, timesheetLocationMaps.assignedLocationsByDate]);
+
+  const buildLocationPayload = useCallback(() => ({
+    employee_work_locations_by_date: periodWorkLocationsByDate,
+    employee_assigned_locations_by_date: periodAssignedLocationsByDate,
+  }), [periodAssignedLocationsByDate, periodWorkLocationsByDate]);
+
   const approvedLeaveEntries = useMemo(
     () => buildApprovedLeaveEntries(approvedLeaves, dates),
     [approvedLeaves, dates]
@@ -1861,9 +1978,29 @@ function TimesheetPage({
           : null;
 
         if (match) {
+          const matchedWorkLocationsByDate = getTimesheetWorkLocationsByDate(match, dates);
+          const matchedAssignedLocationsByDate = getTimesheetAssignedLocationsByDate(match, dates);
+          const savedPeriodLocations = readSavedPeriodLocations(userId, activePeriod, dates);
+          const localWorkLocationsByDate = normalizeLocationMap(savedPeriodLocations.dailyLocations, dates);
+          const localAssignedLocationsByDate = normalizeLocationMap(savedPeriodLocations.assignedLocations, dates);
+          const hasUnsavedLocationChanges = (
+            Object.keys(localWorkLocationsByDate).length > 0
+            && !areLocationMapsEqual(localWorkLocationsByDate, matchedWorkLocationsByDate)
+          ) || (
+            Object.keys(localAssignedLocationsByDate).length > 0
+            && !areLocationMapsEqual(localAssignedLocationsByDate, matchedAssignedLocationsByDate)
+          );
           setTimesheetStatus(match.status || 'draft');
           setDailyOvertime(match.daily_overtime || {});
           setHolidayPayout(match.holiday_payout || {});
+          setTimesheetLocationMaps({
+            workLocationsByDate: matchedWorkLocationsByDate,
+            assignedLocationsByDate: matchedAssignedLocationsByDate,
+          });
+          setHasSavedCurrentDraft(
+            ['draft', 'rejected_by_lead', 'rejected_by_manager'].includes(match.status || 'draft')
+            && !hasUnsavedLocationChanges
+          );
 
           // FIX 3: Build ccMap keyed by charge_code_id (or charge_code as fallback)
           // Store the full label (code + name) alongside entries
@@ -1922,20 +2059,28 @@ function TimesheetPage({
           setTimesheetStatus('draft');
           setDailyOvertime({});
           setHolidayPayout({});
+          setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
+          setHasSavedCurrentDraft(false);
           setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
         }
       })
       .catch(() => {
         setDailyOvertime({});
         setHolidayPayout({});
+        setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
+        setHasSavedCurrentDraft(false);
         setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
       })
       .finally(() => setSheetLoaded(true));
-  }, [userId, dates, chargeCodes, reloadTrigger, lockedDateSet, halfDayWorkDefaultsByDate]); // FIX 2: reloadTrigger added
+  }, [userId, activePeriod, dates, chargeCodes, reloadTrigger, lockedDateSet, halfDayWorkDefaultsByDate]); // FIX 2: reloadTrigger added
 
   const validate = useCallback(() => {
     const errors = [];
     const hasSystemEntries = approvedLeaveEntries.length > 0 || holidays.length > 0;
+    const isEditableSubmitStatus = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
+    if (isEditableSubmitStatus && !hasSavedCurrentDraft) {
+      errors.push('Save the timesheet before submitting');
+    }
     const rowsWithHours = rows.filter((row) =>
       row.entries.some((entry) => {
         const rawValue = entry?.value !== undefined ? entry.value : String(entry?.hours ?? '');
@@ -1985,7 +2130,16 @@ function TimesheetPage({
       }
     });
     return errors;
-  }, [rows, dates, approvedLeaveEntries.length, holidays.length, approvedLeaveByDate, holidayByDate]);
+  }, [
+    rows,
+    dates,
+    approvedLeaveEntries.length,
+    holidays.length,
+    approvedLeaveByDate,
+    holidayByDate,
+    hasSavedCurrentDraft,
+    timesheetStatus,
+  ]);
 
   useEffect(() => { setValidationErrors(validate()); }, [rows, validate]);
 
@@ -2092,6 +2246,8 @@ function TimesheetPage({
       employee_external_id: profile.employeeId || '',
       employee_work_location: profile.workLocation || '',
       employee_assigned_location: profile.assignedLocation || profile.costCenter || profile.workLocation || '',
+      employee_work_locations_by_date: periodWorkLocationsByDate,
+      employee_assigned_locations_by_date: periodAssignedLocationsByDate,
       employee_company_code: profile.companyCode || '',
       employee_cost_center: profile.costCenter || '',
     });
@@ -2102,6 +2258,8 @@ function TimesheetPage({
     holidayPayout,
     liveSummaryEntries,
     onSheetSnapshotChange,
+    periodAssignedLocationsByDate,
+    periodWorkLocationsByDate,
     profile,
     sheetLoaded,
     timesheetStatus,
@@ -2123,6 +2281,7 @@ function TimesheetPage({
           entries,
           daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
           holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+          ...buildLocationPayload(),
         }),
       });
       if (!hasSelectedRowsWithoutHours()) {
@@ -2131,7 +2290,7 @@ function TimesheetPage({
     } catch (_) {
       // Silent autosave should never interrupt typing or replace validation.
     }
-  }, [buildWorkEntries, dailyOvertime, dates, hasSelectedRowsWithoutHours, holidayPayout, isReadOnly, userId]);
+  }, [buildLocationPayload, buildWorkEntries, dailyOvertime, dates, hasSelectedRowsWithoutHours, holidayPayout, isReadOnly, userId]);
 
   useEffect(() => {
     if (!hasLocalTimesheetEditsRef.current || isReadOnly) return undefined;
@@ -2210,6 +2369,7 @@ function TimesheetPage({
             entries,
             daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
             holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+            ...buildLocationPayload(),
           }),
         });
         await fetchAPI(`/timesheets/submit/${existingId}`, { method: 'PUT' });
@@ -2223,6 +2383,7 @@ function TimesheetPage({
             entries,
             daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
             holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+            ...buildLocationPayload(),
           }),
         });
       }
@@ -2251,9 +2412,11 @@ function TimesheetPage({
           entries,
           daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
           holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+          ...buildLocationPayload(),
         }),
       });
       setTimesheetStatus('draft');
+      setHasSavedCurrentDraft(true);
       if (hasSelectedRowsWithoutHours()) {
         hasLocalTimesheetEditsRef.current = true;
       } else {
@@ -2272,6 +2435,7 @@ function TimesheetPage({
     if (isReadOnly) return;
     const nextRow = createEmptyWorkRow(`row${Date.now()}`, dates, lockedDateSet);
     hasLocalTimesheetEditsRef.current = true;
+    setHasSavedCurrentDraft(false);
     setRows((previous) => [...previous, nextRow]);
     setSelectedRowId(nextRow.id);
   };
@@ -2283,6 +2447,7 @@ function TimesheetPage({
       return;
     }
     hasLocalTimesheetEditsRef.current = true;
+    setHasSavedCurrentDraft(false);
     setRows((previous) => previous.filter((row) => row.id !== selectedRowId));
     setSelectedRowId('');
     notify('Charge code row removed.', 'success');
@@ -2290,6 +2455,7 @@ function TimesheetPage({
 
   const handleAdjustmentChange = (kind, dateStr, value) => {
     hasLocalTimesheetEditsRef.current = true;
+    setHasSavedCurrentDraft(false);
     const setter = kind === 'daily_overtime' ? setDailyOvertime : setHolidayPayout;
     setter((previous) => ({
       ...previous,
@@ -2474,6 +2640,7 @@ function TimesheetPage({
         chargeCodes={chargeCodes}
         onRowUpdate={(id, u) => {
           hasLocalTimesheetEditsRef.current = true;
+          setHasSavedCurrentDraft(false);
           setSelectedRowId(id);
           setRows((p) => p.map((r) => r.id === id ? { ...r, ...u } : r));
         }}
@@ -2481,6 +2648,8 @@ function TimesheetPage({
         approvedLeaves={approvedLeaves}
         holidays={holidays}
         assignmentMeta={assignmentMeta}
+        workLocationsByDate={periodWorkLocationsByDate}
+        assignedLocationsByDate={periodAssignedLocationsByDate}
         dailyOvertime={dailyOvertime}
         holidayPayout={holidayPayout}
         onAdjustmentChange={handleAdjustmentChange}
@@ -2579,6 +2748,8 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
   const { chargeCodeMap, holidaysByDate } = buildChargeCodeMap(timesheet.entries, ccLookup);
   const chargeCodeRows = Object.entries(chargeCodeMap);
   const assignmentMeta = getTimesheetAssignmentMeta(timesheet);
+  const detailWorkLocationsByDate = getTimesheetWorkLocationsByDate(timesheet, allDates);
+  const detailAssignedLocationsByDate = getTimesheetAssignedLocationsByDate(timesheet, allDates);
 
   const getDateTotal = (date) =>
     chargeCodeRows.reduce((s, [, cc]) => s + (cc.byDate[date]?.hours || 0), 0);
@@ -2700,7 +2871,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                     <span className="mte-sheet-meta-link">Work Location</span>
                   </td>
                   {allDates.map((date) => (
-                    <td key={`detail-work-location-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.workLocation}</td>
+                    <td key={`detail-work-location-${date}`} className="mte-sheet-meta-cell">{detailWorkLocationsByDate[date] || assignmentMeta.workLocation}</td>
                   ))}
                   <td className="mte-sheet-meta-total" />
                 </tr>
@@ -2709,7 +2880,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                     Assigned Location
                   </td>
                   {allDates.map((date) => (
-                    <td key={`detail-assigned-location-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.assignedLocation}</td>
+                    <td key={`detail-assigned-location-${date}`} className="mte-sheet-meta-cell">{detailAssignedLocationsByDate[date] || assignmentMeta.assignedLocation}</td>
                   ))}
                   <td className="mte-sheet-meta-total">{assignmentMeta.assignedLocation}</td>
                 </tr>
@@ -2873,6 +3044,8 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
   const { chargeCodeMap, holidaysByDate } = buildChargeCodeMap(timesheet.entries, ccLookup);
   const chargeCodeRows = Object.entries(chargeCodeMap);
   const assignmentMeta = getTimesheetAssignmentMeta(timesheet);
+  const fullWorkLocationsByDate = getTimesheetWorkLocationsByDate(timesheet, allDates);
+  const fullAssignedLocationsByDate = getTimesheetAssignedLocationsByDate(timesheet, allDates);
 
   const getDateTotal = (date) =>
     chargeCodeRows.reduce((s, [, cc]) => s + (cc.byDate[date]?.hours || 0), 0);
@@ -2996,7 +3169,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                       <span className="mte-sheet-meta-link">Work Location</span>
                     </td>
                     {allDates.map((date) => (
-                      <td key={`full-work-location-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.workLocation}</td>
+                      <td key={`full-work-location-${date}`} className="mte-sheet-meta-cell">{fullWorkLocationsByDate[date] || assignmentMeta.workLocation}</td>
                     ))}
                     <td className="mte-sheet-meta-total" />
                   </tr>
@@ -3005,7 +3178,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                       Assigned Location
                     </td>
                     {allDates.map((date) => (
-                      <td key={`full-assigned-location-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.assignedLocation}</td>
+                      <td key={`full-assigned-location-${date}`} className="mte-sheet-meta-cell">{fullAssignedLocationsByDate[date] || assignmentMeta.assignedLocation}</td>
                     ))}
                     <td className="mte-sheet-meta-total">{assignmentMeta.assignedLocation}</td>
                   </tr>
@@ -6451,10 +6624,14 @@ function LocationsPanel({
   const [dailyLocations, setDailyLocations] = useState({});
   const [selectedDates, setSelectedDates] = useState([]);
   const [loading, setLoading] = useState(false);
-  const period = periods.find((item) => item.value === selectedPeriod) || periods[0];
-  const dates = period
-    ? eachDayOfInterval({ start: parseISO(period.start), end: parseISO(period.end) })
-    : [];
+  const period = useMemo(
+    () => periods.find((item) => item.value === selectedPeriod) || periods[0],
+    [periods, selectedPeriod]
+  );
+  const dates = useMemo(
+    () => (period ? eachDayOfInterval({ start: parseISO(period.start), end: parseISO(period.end) }) : []),
+    [period]
+  );
   const assignmentMeta = getTimesheetAssignmentMeta(profile);
 
   useEffect(() => {
@@ -6471,17 +6648,17 @@ function LocationsPanel({
 
   useEffect(() => {
     if (!userId || !period) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem(`mte_locations_${userId}_${period.value}`) || '{}');
-      setDailyLocations(saved.dailyLocations || {});
-      setSelectedDates([]);
-      if (saved.country) setCountry(saved.country);
-      if (saved.locationOne) setLocationOne(saved.locationOne);
-      if (saved.locationTwo) setLocationTwo(saved.locationTwo);
-    } catch (_) {
-      setDailyLocations({});
-    }
-  }, [period, userId]);
+    const saved = readSavedPeriodLocations(
+      userId,
+      period.value,
+      dates.map((day) => format(day, 'yyyy-MM-dd'))
+    );
+    setDailyLocations(saved.dailyLocations || {});
+    setSelectedDates([]);
+    if (saved.country) setCountry(saved.country);
+    if (saved.locationOne) setLocationOne(saved.locationOne);
+    if (saved.locationTwo) setLocationTwo(saved.locationTwo);
+  }, [dates, period, userId]);
 
   const locationOptions = useMemo(() => {
     const values = [
@@ -6516,12 +6693,13 @@ function LocationsPanel({
 
     setLoading(true);
     try {
-      localStorage.setItem(`mte_locations_${userId}_${period.value}`, JSON.stringify({
+      writeSavedPeriodLocations(userId, period.value, {
         country,
         locationOne,
         locationTwo,
         dailyLocations: nextDailyLocations,
-      }));
+        assignedLocations: {},
+      });
       await fetchAPI(`/users/update_user/${userId}`, {
         method: 'PUT',
         body: JSON.stringify({

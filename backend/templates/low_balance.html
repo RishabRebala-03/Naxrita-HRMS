@@ -1,0 +1,18 @@
+{% extends "email_base.html" %}
+{% set title = "Leave balance alert" %}
+{% block content %}
+  <h1>Leave Balance Alert</h1>
+  <p>Your available paid leave balance is at or below the configured threshold.</p>
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Employee</td><td class="value">{{ employee_name }}</td></tr>
+    <tr><td class="label">Paid Balance</td><td class="value"><span class="pill warn">{{ paid_balance }} day(s)</span></td></tr>
+    <tr><td class="label">Threshold</td><td class="value">{{ threshold }} day(s)</td></tr>
+    <tr><td class="label">Sick Leave</td><td class="value">{{ leave_balance.sick|default(0) }} day(s)</td></tr>
+    <tr><td class="label">Planned Leave</td><td class="value">{{ leave_balance.planned|default(0) }} day(s)</td></tr>
+  </table>
+
+  <div class="actions">
+    <a class="button" href="{{ portal_url }}">Open HRMS</a>
+  </div>
+{% endblock %}

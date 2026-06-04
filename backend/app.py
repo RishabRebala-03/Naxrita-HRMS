@@ -17,7 +17,16 @@ from routes.timesheet_routes import timesheet_bp  # ⭐ NEW
 from routes.charge_code_routes import charge_code_bp  # ⭐ NEW
 from routes.expense_routes import expense_bp
 from routes.payslip_routes import payslip_bp
+from routes.mail_routes import mail_bp
+from services.queue_service import ensure_mail_indexes
+from services.mail_service import (
+    send_daily_leave_summary,
+    send_low_balance_alerts,
+    send_pending_leave_reminders,
+)
+from workers.mail_worker import process_mail_queue_once, start_mail_worker
 import requests
+import os
 
 app = Flask(__name__, static_url_path="/static", static_folder="static")
 
@@ -80,6 +89,18 @@ app.register_blueprint(timesheet_bp, url_prefix="/api/timesheets")  # ⭐ NEW
 app.register_blueprint(charge_code_bp, url_prefix="/api/charge_codes")  # ⭐ NEW
 app.register_blueprint(expense_bp, url_prefix="/api/expenses")
 app.register_blueprint(payslip_bp, url_prefix="/api/payslips")
+app.register_blueprint(mail_bp, url_prefix="/api/mail")
+app.register_blueprint(mail_bp, url_prefix="/mail", name="mail_public_bp")
+
+
+@app.route("/leave/send-reminder", methods=["POST"])
+def send_leave_reminder_public_alias():
+    from routes.leave_routes import send_leave_reminder
+    return send_leave_reminder()
+
+with app.app_context():
+    ensure_mail_indexes()
+    start_mail_worker(app)
 
 # ✅ UPDATED ESCALATION FUNCTION - USE LOCALHOST
 def check_leave_escalations():
@@ -101,6 +122,45 @@ def check_leave_escalations():
             
     except Exception as e:
         print(f"❌ Escalation check error: {str(e)}")
+
+
+def process_mail_queue_job():
+    """Process queued emails without blocking leave workflow requests."""
+    try:
+        with app.app_context():
+            process_mail_queue_once()
+    except Exception as e:
+        print(f"❌ Mail queue processor error: {str(e)}")
+
+
+def send_leave_reminder_emails_job():
+    """Queue reminder emails for pending leave approvals."""
+    try:
+        with app.app_context():
+            result = send_pending_leave_reminders(force=False)
+            print(f"✅ Leave reminder mail job completed: {result}")
+    except Exception as e:
+        print(f"❌ Leave reminder mail job error: {str(e)}")
+
+
+def send_low_balance_alerts_job():
+    """Queue low leave balance alerts for employees."""
+    try:
+        with app.app_context():
+            result = send_low_balance_alerts(force=False)
+            print(f"✅ Low balance mail job completed: {result}")
+    except Exception as e:
+        print(f"❌ Low balance mail job error: {str(e)}")
+
+
+def send_daily_leave_summary_job():
+    """Queue daily leave summary for admins."""
+    try:
+        with app.app_context():
+            result = send_daily_leave_summary()
+            print(f"✅ Daily leave summary mail job completed: {result}")
+    except Exception as e:
+        print(f"❌ Daily leave summary mail job error: {str(e)}")
 
 # =============================================================================
 # INITIALIZE SCHEDULER WITH ALL JOBS
@@ -137,11 +197,45 @@ scheduler.add_job(
     id="daily_escalation"
 )
 
+# 4. Mail queue processor
+scheduler.add_job(
+    func=process_mail_queue_job,
+    trigger="interval",
+    seconds=int(os.getenv("MAIL_QUEUE_POLL_SECONDS", "60")),
+    id="mail_queue_processor"
+)
+
+# 5. Pending leave approval reminders
+scheduler.add_job(
+    func=send_leave_reminder_emails_job,
+    trigger="interval",
+    hours=int(os.getenv("LEAVE_REMINDER_INTERVAL_HOURS", "24")),
+    id="leave_mail_reminders"
+)
+
+# 6. Low balance alerts
+scheduler.add_job(
+    func=send_low_balance_alerts_job,
+    trigger="cron",
+    hour=int(os.getenv("LOW_BALANCE_ALERT_HOUR", "10")),
+    minute=0,
+    id="low_balance_mail_alerts"
+)
+
+# 7. Daily leave summary
+scheduler.add_job(
+    func=send_daily_leave_summary_job,
+    trigger="cron",
+    hour=int(os.getenv("DAILY_LEAVE_SUMMARY_HOUR", "18")),
+    minute=0,
+    id="daily_leave_summary_mail"
+)
+
 # Start the scheduler
 scheduler.start()
 
 print("\n" + "="*80)
-print("✅ SCHEDULER STARTED WITH 3 AUTOMATED JOBS")
+print("✅ SCHEDULER STARTED WITH 7 AUTOMATED JOBS")
 print("="*80)
 print("\n📋 SCHEDULED JOBS:")
 print("-" * 80)
@@ -159,6 +253,22 @@ print("    Function: Escalate pending leaves after 2-day timeout")
 print("    Logic:")
 print("      - Level 0 (Manager): Wait 2 days → Escalate to Admin")
 print("      - Level 1 (Admin): Final approval (no further escalation)")
+print()
+print("4️⃣  MAIL QUEUE PROCESSOR")
+print("    Schedule: Every MAIL_QUEUE_POLL_SECONDS seconds")
+print("    Function: Send queued emails with retry/backoff")
+print()
+print("5️⃣  PENDING APPROVAL REMINDERS")
+print("    Schedule: Every LEAVE_REMINDER_INTERVAL_HOURS hours")
+print("    Function: Queue reminder emails for pending approvals")
+print()
+print("6️⃣  LOW BALANCE ALERTS")
+print("    Schedule: Daily at LOW_BALANCE_ALERT_HOUR")
+print("    Function: Queue employee low leave balance alerts")
+print()
+print("7️⃣  DAILY LEAVE SUMMARY")
+print("    Schedule: Daily at DAILY_LEAVE_SUMMARY_HOUR")
+print("    Function: Queue daily admin leave summary")
 print("-" * 80)
 print()
 

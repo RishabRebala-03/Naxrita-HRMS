@@ -1,0 +1,30 @@
+{% extends "email_base.html" %}
+{% set title = "Leave request submitted" %}
+{% block content %}
+  {% if audience == "manager" %}
+    <h1>Leave Approval Request</h1>
+    <p>{{ employee_name }} has submitted a leave request that needs your review.</p>
+  {% else %}
+    <h1>Leave Request Received</h1>
+    <p>Your leave request has been submitted and routed to {{ manager_name }} for approval.</p>
+  {% endif %}
+
+  <table class="summary" role="presentation">
+    <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
+    <tr><td class="label">Email</td><td class="value">{{ employee_email }}</td></tr>
+    <tr><td class="label">Department</td><td class="value">{{ employee_department or "N/A" }}</td></tr>
+    <tr><td class="label">Leave Type</td><td class="value"><span class="pill warn">{{ leave_type }}</span></td></tr>
+    <tr><td class="label">Dates</td><td class="value">{{ start_date|date_label }} to {{ end_date|date_label }}</td></tr>
+    <tr><td class="label">Duration</td><td class="value">{{ days }} day(s){% if is_half_day %}, {{ half_day_period }} half{% endif %}</td></tr>
+    <tr><td class="label">Reason</td><td class="value">{{ reason }}</td></tr>
+  </table>
+
+  <div class="actions">
+    {% if audience == "manager" %}
+      <a class="button" href="{{ approval_url }}">Review Request</a>
+      <a class="button secondary" href="{{ portal_url }}">Open HRMS</a>
+    {% else %}
+      <a class="button" href="{{ approval_url }}">View Request</a>
+    {% endif %}
+  </div>
+{% endblock %}

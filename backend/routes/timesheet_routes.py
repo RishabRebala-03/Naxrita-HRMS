@@ -263,6 +263,23 @@ def normalize_daily_adjustments(adjustments, period_start, period_end, field_lab
     return normalized, None
 
 
+def normalize_location_map(locations, period_start, period_end):
+    """Normalize optional date-keyed location metadata for a timesheet period."""
+    if not isinstance(locations, dict):
+        return {}
+
+    valid_dates = set(daterange_keys(period_start, period_end))
+    normalized = {}
+    for raw_date, raw_location in locations.items():
+        date_key = normalize_date_key(raw_date)
+        if date_key not in valid_dates:
+            continue
+        location = str(raw_location or "").strip()
+        if location:
+            normalized[date_key] = location
+    return normalized
+
+
 def normalize_absence_label(value):
     return " ".join(
         str(value or "")
@@ -308,7 +325,7 @@ def build_system_generated_entries(employee_id, period_start, period_end):
     """Generate locked holiday/leave entries for a timesheet period."""
     holiday_docs = list(mongo.db.holidays.find({
         "date": {"$gte": period_start, "$lte": period_end},
-        "type": {"$in": ["public", "company"]},
+        "type": "company",
     }))
     holiday_entries = []
     locked_dates = {}
@@ -675,6 +692,20 @@ def create_timesheet():
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_locations_by_date = normalize_location_map(
+            data.get("employee_work_locations_by_date")
+            or data.get("work_locations_by_date")
+            or data.get("daily_locations"),
+            period_start,
+            period_end,
+        )
+        assigned_locations_by_date = normalize_location_map(
+            data.get("employee_assigned_locations_by_date")
+            or data.get("assigned_locations_by_date"),
+            period_start,
+            period_end,
+        )
+
         try:
             emp_obj_id = ObjectId(employee_id)
         except Exception:
@@ -715,6 +746,8 @@ def create_timesheet():
             "entries":             validated_entries,
             "daily_overtime":      daily_overtime,
             "holiday_payout":      holiday_payout,
+            "employee_work_locations_by_date": work_locations_by_date,
+            "employee_assigned_locations_by_date": assigned_locations_by_date,
             "total_hours":         total_hours,
             "work_hours":          get_work_hours_total(validated_entries),
             "status":              "pending_lead",
@@ -808,16 +841,42 @@ def update_timesheet(timesheet_id):
         if entry_error:
             return jsonify({"error": entry_error}), 400
 
+        update_data = {
+            "entries":        validated_entries,
+            "daily_overtime": daily_overtime,
+            "holiday_payout": holiday_payout,
+            "total_hours":    total_hours,
+            "work_hours":     get_work_hours_total(validated_entries),
+            "updated_at":     datetime.utcnow(),
+        }
+        work_location_keys = (
+            "employee_work_locations_by_date",
+            "work_locations_by_date",
+            "daily_locations",
+        )
+        if any(key in data for key in work_location_keys):
+            update_data["employee_work_locations_by_date"] = normalize_location_map(
+                data.get("employee_work_locations_by_date")
+                or data.get("work_locations_by_date")
+                or data.get("daily_locations"),
+                ts.get("period_start"),
+                ts.get("period_end"),
+            )
+        if "employee_assigned_locations_by_date" in data or "assigned_locations_by_date" in data:
+            update_data["employee_assigned_locations_by_date"] = normalize_location_map(
+                data.get("employee_assigned_locations_by_date")
+                or data.get("assigned_locations_by_date"),
+                ts.get("period_start"),
+                ts.get("period_end"),
+            )
+
+        employee = mongo.db.users.find_one({"_id": ts["employee_id"]})
+        if employee:
+            apply_employee_assignment_snapshot(update_data, employee)
+
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
-            {"$set": {
-                "entries":        validated_entries,
-                "daily_overtime": daily_overtime,
-                "holiday_payout": holiday_payout,
-                "total_hours":    total_hours,
-                "work_hours":     get_work_hours_total(validated_entries),
-                "updated_at":     datetime.utcnow(),
-            }}
+            {"$set": update_data}
         )
         return jsonify({"message": "Timesheet updated", "total_hours": total_hours}), 200
 
@@ -855,6 +914,20 @@ def save_timesheet_draft():
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_locations_by_date = normalize_location_map(
+            data.get("employee_work_locations_by_date")
+            or data.get("work_locations_by_date")
+            or data.get("daily_locations"),
+            period_start,
+            period_end,
+        )
+        assigned_locations_by_date = normalize_location_map(
+            data.get("employee_assigned_locations_by_date")
+            or data.get("assigned_locations_by_date"),
+            period_start,
+            period_end,
+        )
+
         try:
             emp_obj_id = ObjectId(employee_id)
         except Exception:
@@ -888,6 +961,8 @@ def save_timesheet_draft():
             "entries": validated_entries,
             "daily_overtime": daily_overtime,
             "holiday_payout": holiday_payout,
+            "employee_work_locations_by_date": work_locations_by_date,
+            "employee_assigned_locations_by_date": assigned_locations_by_date,
             "total_hours": total_hours,
             "work_hours": get_work_hours_total(validated_entries),
             "status": "draft",
@@ -986,18 +1061,23 @@ def submit_timesheet(timesheet_id):
             return jsonify({"error": entry_error}), 400
 
         now = datetime.utcnow()
+        update_data = {
+            "entries":       validated_entries,
+            "daily_overtime": daily_overtime,
+            "holiday_payout": holiday_payout,
+            "total_hours":   total_hours,
+            "work_hours":    get_work_hours_total(validated_entries),
+            "status":       "pending_lead",
+            "submitted_at": now,
+            "updated_at":   now,
+        }
+        employee = mongo.db.users.find_one({"_id": ts["employee_id"]})
+        if employee:
+            apply_employee_assignment_snapshot(update_data, employee)
+
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
-            {"$set": {
-                "entries":       validated_entries,
-                "daily_overtime": daily_overtime,
-                "holiday_payout": holiday_payout,
-                "total_hours":   total_hours,
-                "work_hours":    get_work_hours_total(validated_entries),
-                "status":       "pending_lead",
-                "submitted_at": now,
-                "updated_at":   now,
-            }}
+            {"$set": update_data}
         )
 
         # Notify reporting lead
@@ -1431,7 +1511,7 @@ def populate_holidays():
 
         holidays = list(mongo.db.holidays.find({
             "date": {"$gte": period_start, "$lte": period_end},
-            "type": {"$in": ["public", "company"]},
+            "type": "company",
         }))
 
         public_holiday = ABSENCE_CHARGE_CODES["public_holiday"]
