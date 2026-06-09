@@ -1,5 +1,11 @@
 # Naxrita - Human Resource Management System
 
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
+![JavaScript](https://img.shields.io/badge/JavaScript-ES6+-F7DF1E?logo=javascript)
+![Flask](https://img.shields.io/badge/Flask-Python-black?logo=flask)
+![MongoDB](https://img.shields.io/badge/MongoDB-Database-47A248?logo=mongodb)
+![Docker](https://img.shields.io/badge/Docker-Deployment-2496ED?logo=docker)
+
 Enterprise-grade HRMS platform designed to centralize workforce management, employee operations, leave workflows, timesheets, payroll administration, policy management, and internal office services.
 
 ---
