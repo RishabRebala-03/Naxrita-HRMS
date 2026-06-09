@@ -1,4 +1,4 @@
-# NaxHR - Human Resource Management System
+# Naxrita - Human Resource Management System
 
 Enterprise-grade HRMS platform designed to centralize workforce management, employee operations, leave workflows, timesheets, payroll administration, policy management, and internal office services.
 
