@@ -32,6 +32,8 @@ import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 
 const chartPalette = ["#0a6ed1", "#5b738b", "#8fb5d9", "#d1e3f8", "#0f2742", "#91c8f6"];
+const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Early Logout", "LWP"];
+const lopAliases = new Set(["lop", "lwp", "leave without pay", "leave with loss of pay"]);
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -79,6 +81,25 @@ const formatDateTime = (value) => {
 const shortLabel = (value, max = 12) => {
   if (!value) return "Unassigned";
   return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+};
+
+const normalizeLeaveTypeFilter = (value) => {
+  const normalized = String(value || "").trim();
+  return lopAliases.has(normalized.toLowerCase()) ? "LWP" : normalized;
+};
+
+const getLeaveTypeDisplayLabel = (value, fallback = "Leave") => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return fallback;
+  return lopAliases.has(normalized.toLowerCase()) ? "LOP" : normalized;
+};
+
+const matchesLeaveTypeFilter = (leaveType, selectedType) => {
+  if (selectedType === "all") return true;
+  return (
+    normalizeLeaveTypeFilter(leaveType).toLowerCase() ===
+    normalizeLeaveTypeFilter(selectedType).toLowerCase()
+  );
 };
 
 const dayDiff = (start, end) => {
@@ -264,8 +285,17 @@ const AdminLeaves = ({ user }) => {
   }, [allLeaves]);
 
   const availableTypes = useMemo(() => {
-    const values = new Set(allLeaves.map((leave) => leave.leave_type).filter(Boolean));
-    return ["all", ...Array.from(values).sort((first, second) => first.localeCompare(second))];
+    const values = new Set(defaultLeaveTypeFilters);
+    allLeaves.forEach((leave) => {
+      const type = normalizeLeaveTypeFilter(leave.leave_type);
+      if (type) values.add(type);
+    });
+    return [
+      "all",
+      ...Array.from(values).sort((first, second) =>
+        getLeaveTypeDisplayLabel(first).localeCompare(getLeaveTypeDisplayLabel(second))
+      ),
+    ];
   }, [allLeaves]);
 
   const filteredLeaves = useMemo(() => {
@@ -282,6 +312,7 @@ const AdminLeaves = ({ user }) => {
             leave.employee_designation,
             leave.employee_department,
             leave.leave_type,
+            getLeaveTypeDisplayLabel(leave.leave_type),
             leave.approved_by,
           ]
             .filter(Boolean)
@@ -292,7 +323,7 @@ const AdminLeaves = ({ user }) => {
 
         if (statusFilter !== "all" && leave.status !== statusFilter) return false;
         if (departmentFilter !== "all" && leave.employee_department !== departmentFilter) return false;
-        if (typeFilter !== "all" && leave.leave_type !== typeFilter) return false;
+        if (!matchesLeaveTypeFilter(leave.leave_type, typeFilter)) return false;
         if (!leaveOverlapsRange(leave, dateRange)) return false;
 
         return true;
@@ -346,7 +377,7 @@ const AdminLeaves = ({ user }) => {
 
   const leaveTypeData = useMemo(() => {
     const counts = allLeaves.reduce((accumulator, leave) => {
-      const key = leave.leave_type || "Other";
+      const key = leave.leave_type ? getLeaveTypeDisplayLabel(leave.leave_type) : "Other";
       accumulator[key] = (accumulator[key] || 0) + 1;
       return accumulator;
     }, {});
@@ -430,7 +461,7 @@ const AdminLeaves = ({ user }) => {
           employeeId: leave.employee_id,
           employeeName: leave.employee_name || "Unknown employee",
           employeeDepartment: leave.employee_department || "Unassigned",
-          leaveType: leave.leave_type || "Leave",
+          leaveType: getLeaveTypeDisplayLabel(leave.leave_type),
           requestedFrom: leave.start_date,
           requestedTo: leave.end_date,
           appliedOn: leave.applied_on,
@@ -489,7 +520,7 @@ const AdminLeaves = ({ user }) => {
       const resolvedOn = new Date(leave.approved_on || leave.rejected_on || "");
       if (Number.isNaN(appliedOn.getTime()) || Number.isNaN(resolvedOn.getTime())) return;
 
-      const key = leave.leave_type || "Other";
+      const key = leave.leave_type ? getLeaveTypeDisplayLabel(leave.leave_type) : "Other";
       grouped[key] = grouped[key] || { totalDays: 0, count: 0 };
       grouped[key].totalDays += Math.max(0, (resolvedOn - appliedOn) / (1000 * 60 * 60 * 24));
       grouped[key].count += 1;
@@ -874,7 +905,7 @@ const AdminLeaves = ({ user }) => {
                   searchPlaceholder="Search leave types"
                   options={availableTypes.map((type) => ({
                     value: type,
-                    label: type === "all" ? "All leave types" : type,
+                    label: type === "all" ? "All leave types" : getLeaveTypeDisplayLabel(type),
                   }))}
                 />
               </label>
@@ -974,7 +1005,7 @@ const AdminLeaves = ({ user }) => {
                           </td>
                           <td>
                             <div className="fiori-primary-cell">
-                              <strong>{leave.leave_type || "Leave"}</strong>
+                              <strong>{getLeaveTypeDisplayLabel(leave.leave_type)}</strong>
                               <span>{getDaysLabel(leave)}</span>
                               {escalationCount > 0 ? <span>{escalationCount} escalation event(s)</span> : null}
                             </div>

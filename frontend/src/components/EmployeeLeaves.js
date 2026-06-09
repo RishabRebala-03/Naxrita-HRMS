@@ -121,6 +121,22 @@ const leaveOverlapsRange = (item, dateRange) => {
   return true;
 };
 
+const normalizeLeaveTypeFilter = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["lop", "lwp", "leave without pay", "leave with loss of pay"].includes(normalized)
+    ? "lop"
+    : normalized;
+};
+
+const getLeaveTypeDisplayLabel = (value, fallback = "Leave") => {
+  const normalized = String(value || "").trim();
+  if (!normalized) return fallback;
+  return normalizeLeaveTypeFilter(normalized) === "lop" ? "LOP" : normalized;
+};
+
+const matchesLeaveTypeFilter = (leaveType, selectedType) =>
+  selectedType === "all" || normalizeLeaveTypeFilter(leaveType) === normalizeLeaveTypeFilter(selectedType);
+
 const buildSuggestions = (items, fields) => {
   const seen = new Set();
   return items.flatMap((item) =>
@@ -617,11 +633,13 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       let filtered = [...leaves];
 
       if (historySearchTerm.trim()) {
+        const normalizedHistorySearch = historySearchTerm.toLowerCase();
         filtered = filtered.filter(
           (item) =>
-            (item.leave_type || "").toLowerCase().includes(historySearchTerm.toLowerCase()) ||
-            (item.reason || "").toLowerCase().includes(historySearchTerm.toLowerCase()) ||
-            (item.status || "").toLowerCase().includes(historySearchTerm.toLowerCase())
+            (item.leave_type || "").toLowerCase().includes(normalizedHistorySearch) ||
+            getLeaveTypeDisplayLabel(item.leave_type).toLowerCase().includes(normalizedHistorySearch) ||
+            (item.reason || "").toLowerCase().includes(normalizedHistorySearch) ||
+            (item.status || "").toLowerCase().includes(normalizedHistorySearch)
         );
       }
 
@@ -632,9 +650,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       }
 
       if (historyFilterType !== "all") {
-        filtered = filtered.filter(
-          (item) => item.leave_type?.toLowerCase() === historyFilterType.toLowerCase()
-        );
+        filtered = filtered.filter((item) => matchesLeaveTypeFilter(item.leave_type, historyFilterType));
       }
 
       filtered = filtered.filter((item) => leaveOverlapsRange(item, historyDateRange));
@@ -1179,7 +1195,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                       >
                         <td className="employee-history-type-cell">
                           <div className="fiori-primary-cell employee-history-primary">
-                            <strong>{item.leave_type}</strong>
+                            <strong>{getLeaveTypeDisplayLabel(item.leave_type)}</strong>
                             <span className="employee-history-reason">{item.reason || "No reason shared"}</span>
                             {item.is_half_day ? <span>Half day: {item.half_day_period}</span> : null}
                           </div>
@@ -1204,18 +1220,28 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                           {item.status === "Pending" || canEmployeeCancelApprovedLeave(item) ? (
                             <div className="employee-table-actions">
                               {item.status === "Pending" ? (
-                                <button className="fiori-button secondary" onClick={() => setEditingLeave(item)}>
-                                  Edit
+                                <button
+                                  className="fiori-button secondary"
+                                  title="Edit leave request"
+                                  onClick={() => setEditingLeave(item)}
+                                >
+                                  Edit request
                                 </button>
                               ) : null}
-                              <button className="fiori-button secondary danger" onClick={() => cancelLeave(item._id)}>
-                                Cancel
+                              <button
+                                className="fiori-button secondary danger"
+                                title="Cancel leave request"
+                                onClick={() => cancelLeave(item._id)}
+                              >
+                                Cancel leave
                               </button>
                             </div>
                           ) : item.status === "Approved" ? (
-                            <span className="fiori-stat-note">Lead cancellation after {getCancellationCutoffLabel(item)}</span>
+                            <span className="fiori-stat-note employee-history-action-note">
+                              Lead can cancel after {getCancellationCutoffLabel(item)}
+                            </span>
                           ) : (
-                            <span className="fiori-stat-note">No actions</span>
+                            <span className="fiori-stat-note employee-history-action-note">No actions available</span>
                           )}
                         </td>
                       </tr>

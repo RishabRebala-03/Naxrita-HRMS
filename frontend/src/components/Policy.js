@@ -126,9 +126,6 @@ const statusToneMap = {
 
 const POLICY_SCROLL_OFFSET = 118;
 
-const getPolicyScrollContainer = () =>
-  document.querySelector(".main") || document.scrollingElement || document.documentElement;
-
 const isWindowScrollContainer = (container) =>
   container === document.scrollingElement ||
   container === document.documentElement ||
@@ -143,6 +140,79 @@ const getSectionTopWithinContainer = (element, container) => {
   return element.getBoundingClientRect().top - containerRect.top + container.scrollTop;
 };
 
+const getPolicyScrollTargets = (element) => {
+  const targets = [];
+  let current = element?.parentElement;
+
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const canScroll = current.scrollHeight > current.clientHeight + 1;
+    const hasScrollableOverflow = ["auto", "scroll", "overlay"].includes(style.overflowY);
+
+    if (canScroll && hasScrollableOverflow) {
+      targets.push(current);
+    }
+
+    current = current.parentElement;
+  }
+
+  const documentScroller = document.scrollingElement || document.documentElement;
+  if (documentScroller && documentScroller.scrollHeight > documentScroller.clientHeight + 1) {
+    targets.push(documentScroller);
+  }
+
+  return Array.from(new Set(targets));
+};
+
+const scrollPolicyElementIntoView = (element, behavior = "smooth") => {
+  if (!element) return;
+
+  const targets = getPolicyScrollTargets(element);
+
+  if (!targets.length) {
+    element.scrollIntoView({ behavior, block: "start", inline: "nearest" });
+    return;
+  }
+
+  targets.forEach((target) => {
+    const targetTop = getSectionTopWithinContainer(element, target) - POLICY_SCROLL_OFFSET;
+
+    if (isWindowScrollContainer(target)) {
+      window.scrollTo({ top: Math.max(targetTop, 0), behavior });
+    } else {
+      target.scrollTo({ top: Math.max(targetTop, 0), behavior });
+    }
+  });
+
+  window.requestAnimationFrame(() => {
+    element.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+  });
+};
+
+const getPolicySectionElement = (root, section) => {
+  if (!root || !section) return null;
+
+  const sectionId = String(section.id || "").trim();
+  const exactMatch = sectionId ? root.ownerDocument.getElementById(sectionId) : null;
+
+  if (exactMatch && root.contains(exactMatch)) {
+    return exactMatch;
+  }
+
+  const sectionTitle = String(section.title || "").trim().toLowerCase();
+  if (!sectionTitle) return null;
+
+  const headingMatch = Array.from(root.querySelectorAll("h2, h3")).find(
+    (heading) => heading.textContent.trim().toLowerCase() === sectionTitle
+  );
+
+  if (headingMatch && sectionId && !headingMatch.id) {
+    headingMatch.id = sectionId;
+  }
+
+  return headingMatch || null;
+};
+
 const categoryDescriptions = {
   HR: "People practices, leave, and workplace guidelines",
   Finance: "Expense, payroll, and reimbursement rules",
@@ -152,7 +222,7 @@ const categoryDescriptions = {
   Security: "Access, data handling, and protection measures",
 };
 
-const Policy = () => {
+const Policy = ({ user }) => {
   const [policies, setPolicies] = useState(initialPolicies);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -164,6 +234,7 @@ const Policy = () => {
   const [editForm, setEditForm] = useState(null);
   const contentRootRef = useRef(null);
   const contentRefs = useRef({});
+  const canUpdatePolicies = user?.role === "Admin";
 
   const policySearchSuggestions = useMemo(
     () =>
@@ -208,7 +279,7 @@ const Policy = () => {
       const nextRefs = {};
 
       selectedPolicy.sections.forEach((section) => {
-        const element = contentRootRef.current?.querySelector(`#${section.id}`);
+        const element = getPolicySectionElement(contentRootRef.current, section);
         if (element) {
           nextRefs[section.id] = element;
         }
@@ -222,15 +293,7 @@ const Policy = () => {
         setActiveSection(matchingHashSection.id);
 
         window.requestAnimationFrame(() => {
-          const element = nextRefs[matchingHashSection.id];
-          const scrollContainer = getPolicyScrollContainer();
-          const targetTop = getSectionTopWithinContainer(element, scrollContainer) - POLICY_SCROLL_OFFSET;
-
-          if (isWindowScrollContainer(scrollContainer)) {
-            window.scrollTo({ top: Math.max(targetTop, 0), behavior: "auto" });
-          } else {
-            scrollContainer.scrollTo({ top: Math.max(targetTop, 0), behavior: "auto" });
-          }
+          scrollPolicyElementIntoView(nextRefs[matchingHashSection.id], "auto");
         });
       } else {
         setActiveSection(selectedPolicy.sections[0]?.id || null);
@@ -245,19 +308,13 @@ const Policy = () => {
       return undefined;
     }
 
-    const scrollContainer = getPolicyScrollContainer();
-
     const handleScroll = () => {
       const scrollPosition = POLICY_SCROLL_OFFSET + 24;
       let currentSection = selectedPolicy.sections[0]?.id || null;
 
       selectedPolicy.sections.forEach((section) => {
         const element = contentRefs.current[section.id];
-        const elementTop = element
-          ? isWindowScrollContainer(scrollContainer)
-            ? element.getBoundingClientRect().top
-            : element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
-          : null;
+        const elementTop = element ? element.getBoundingClientRect().top : null;
 
         if (element && typeof elementTop === "number" && elementTop <= scrollPosition) {
           currentSection = section.id;
@@ -267,10 +324,15 @@ const Policy = () => {
       setActiveSection(currentSection);
     };
 
-    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
+    const scrollTargets = [
+      window,
+      ...getPolicyScrollTargets(contentRootRef.current),
+    ];
+
+    scrollTargets.forEach((target) => target.addEventListener("scroll", handleScroll, { passive: true }));
     handleScroll();
 
-    return () => scrollContainer.removeEventListener("scroll", handleScroll);
+    return () => scrollTargets.forEach((target) => target.removeEventListener("scroll", handleScroll));
   }, [selectedPolicy]);
 
   const openPolicy = (policyId) => {
@@ -287,9 +349,10 @@ const Policy = () => {
   const scrollToSection = (sectionId) => {
     setActiveSection(sectionId);
 
+    const section = selectedPolicy?.sections.find((item) => item.id === sectionId) || { id: sectionId };
     const element =
       contentRefs.current[sectionId] ||
-      contentRootRef.current?.querySelector(`#${sectionId}`);
+      getPolicySectionElement(contentRootRef.current, section);
 
     if (!element) {
       return;
@@ -301,18 +364,11 @@ const Policy = () => {
     element.setAttribute("tabindex", "-1");
     element.focus({ preventScroll: true });
 
-    const scrollContainer = getPolicyScrollContainer();
-    const targetTop = getSectionTopWithinContainer(element, scrollContainer) - POLICY_SCROLL_OFFSET;
-
-    if (isWindowScrollContainer(scrollContainer)) {
-      window.scrollTo({ top: Math.max(targetTop, 0), behavior: "smooth" });
-    } else {
-      scrollContainer.scrollTo({ top: Math.max(targetTop, 0), behavior: "smooth" });
-    }
+    scrollPolicyElementIntoView(element, "smooth");
   };
 
   const openEditModal = () => {
-    if (!selectedPolicy) {
+    if (!canUpdatePolicies || !selectedPolicy) {
       return;
     }
 
@@ -339,7 +395,7 @@ const Policy = () => {
   };
 
   const savePolicyUpdates = () => {
-    if (!selectedPolicy || !editForm) {
+    if (!canUpdatePolicies || !selectedPolicy || !editForm) {
       return;
     }
 
@@ -376,12 +432,14 @@ const Policy = () => {
             <h1>{selectedPolicy.title}</h1>
             <p>{selectedPolicy.description}</p>
 
-            <div className="policy-detail-actions">
-              <button className="fiori-button primary" onClick={openEditModal}>
-                <Edit3 size={16} />
-                <span>Update policy</span>
-              </button>
-            </div>
+            {canUpdatePolicies ? (
+              <div className="policy-detail-actions">
+                <button className="fiori-button primary" onClick={openEditModal}>
+                  <Edit3 size={16} />
+                  <span>Update policy</span>
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="admin-hero-meta">
@@ -498,7 +556,7 @@ const Policy = () => {
           </div>
         </div>
 
-        {isEditModalOpen && editForm ? (
+        {canUpdatePolicies && isEditModalOpen && editForm ? (
           <div className="admin-modal-overlay" onClick={closeEditModal}>
             <div className="admin-modal admin-modal-wide" onClick={(event) => event.stopPropagation()}>
               <div className="admin-modal-header">
