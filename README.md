@@ -6,6 +6,10 @@
 ![MongoDB](https://img.shields.io/badge/MongoDB-Database-47A248?logo=mongodb)
 ![Docker](https://img.shields.io/badge/Docker-Deployment-2496ED?logo=docker)
 
+![Status](https://img.shields.io/badge/Status-Production_Ready-success)
+![Architecture](https://img.shields.io/badge/Architecture-Full_Stack-blue)
+![Type](https://img.shields.io/badge/Project-Enterprise_Software-purple)
+
 Enterprise-grade HRMS platform designed to centralize workforce management, employee operations, leave workflows, timesheets, payroll administration, policy management, and internal office services.
 
 ---
