@@ -209,7 +209,7 @@ const EmployeeDashboard = ({ user, setSection }) => {
 
   const totalBalance = useMemo(() => {
     if (!leaveBalance) return 0;
-    return (leaveBalance.sick || 0) + (leaveBalance.planned || 0) + (leaveBalance.optional || 0);
+    return (leaveBalance.sick || 0) + (leaveBalance.planned || 0);
   }, [leaveBalance]);
 
   const todayLabel = useMemo(
@@ -238,12 +238,6 @@ const EmployeeDashboard = ({ user, setSection }) => {
         value: leaveBalance.planned || 0,
         note: `${leaveBalance.plannedTotal || 12} allocated`,
         payload: { source: "dashboard-balance", historyFilterType: "planned" },
-      },
-      {
-        label: "Optional balance",
-        value: leaveBalance.optional || 0,
-        note: `${leaveBalance.optionalTotal || 2} allocated`,
-        payload: { source: "dashboard-balance", historyFilterType: "optional" },
       },
       {
         label: "LOP used",
@@ -411,40 +405,9 @@ const EmployeeDashboard = ({ user, setSection }) => {
             <span className="employee-hero-kicker-pill">{todayLabel}</span>
           </div>
           <h1>
-            <span className="employee-hero-greeting">{getTimeBasedGreeting()},</span>
+            <span className="employee-hero-greeting">{getTimeBasedGreeting()},</span>{" "}
             <span className="employee-hero-name">{user?.name?.split(" ")[0] || "there"}</span>
           </h1>
-
-          <div className="employee-hero-actions">
-            <button
-              className="fiori-button primary"
-              onClick={() => openSection("calendar", { focusYear: new Date().getFullYear() })}
-            >
-              Open calendar
-            </button>
-            <button className="fiori-button secondary" onClick={() => openSection("profile")}>
-              View profile
-            </button>
-          </div>
-        </div>
-
-        <div className="admin-hero-meta">
-          <div className="admin-hero-meta-item">
-            <span>Today</span>
-            <strong>{todayLabel}</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Total balance</span>
-            <strong>{totalBalance} days available</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Team visibility</span>
-            <strong>
-              {stats.totalTeamMembers > 0
-                ? `${stats.totalTeamMembers} direct reportees`
-                : "Individual contributor"}
-            </strong>
-          </div>
         </div>
       </header>
 

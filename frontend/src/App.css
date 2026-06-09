@@ -4682,23 +4682,26 @@ button:hover:not(:disabled) {
 
 .employee-dashboard-hero h1 {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
   margin: 0;
 }
 
 .employee-hero-greeting {
-  font-size: 0.95rem;
+  font-size: clamp(1.45rem, 2.6vw, 2rem);
   font-weight: 600;
   color: #53708d;
+  white-space: nowrap;
 }
 
 .employee-hero-name {
   font-size: clamp(1.7rem, 3vw, 2.25rem);
-  line-height: 1;
+  line-height: 1.05;
   font-weight: 700;
   letter-spacing: 0;
   color: #12324f;
+  white-space: nowrap;
 }
 
 .employee-dashboard-hero p {

@@ -611,26 +611,10 @@ const Policy = () => {
     <section className="policy-workspace">
       <header className="admin-hero">
         <div className="admin-hero-copy">
-          <div className="admin-section-overline">Knowledge Hub</div>
           <h1>Policies</h1>
           <p>
             Manage, browse, and read policy documents from one clear workspace.
           </p>
-        </div>
-
-        <div className="admin-hero-meta">
-          <div className="admin-hero-meta-item">
-            <span>Primary View</span>
-            <strong>Library and reader</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Built For</span>
-            <strong>Policy maintenance</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Outcome</span>
-            <strong>Clear documentation access</strong>
-          </div>
         </div>
       </header>
 

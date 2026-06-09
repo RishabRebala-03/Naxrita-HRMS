@@ -796,10 +796,6 @@ const EmployeeLeaves = ({ user, navigationState }) => {
             <span>Pending requests</span>
             <strong>{history.filter((item) => item.status === "Pending").length} awaiting decisions</strong>
           </div>
-          <div className="admin-hero-meta-item">
-            <span>Manager queue</span>
-            <strong>{hasReportees ? `${teamPendingLeaves.length} requests to review` : "No reportees assigned"}</strong>
-          </div>
         </div>
       </header>
 

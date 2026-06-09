@@ -2657,13 +2657,6 @@ function TimesheetPage({
         selectedRowId={selectedRowId}
         onRowSelect={setSelectedRowId}
       />
-
-      <div className="mte-bottom-note">
-        <div>
-          <strong>Portal behaviour</strong>
-          <span>Select a charge code, enter hours, and submit for your reporting lead. Approved periods stay locked.</span>
-        </div>
-      </div>
     </div>
   );
 }
