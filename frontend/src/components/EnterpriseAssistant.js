@@ -4,18 +4,16 @@ import {
   Bot,
   BriefcaseBusiness,
   ChevronDown,
+  Minimize2,
   MessageSquareText,
   ShieldCheck,
-  Sparkles,
   UserRound,
   UsersRound,
 } from "lucide-react";
 
 const ROLE_CONFIG = {
   Admin: {
-    badge: "Admin orchestration",
     title: "Naxrita HRMS AI Assistant",
-    subtitle: "Handle approvals, payroll context, policy questions, people operations tasks, and cross-portal actions with a plain-language request.",
     accentClass: "enterprise-assistant--admin",
     icon: ShieldCheck,
     suggestions: [
@@ -25,9 +23,7 @@ const ROLE_CONFIG = {
     ],
   },
   Manager: {
-    badge: "Manager enablement",
     title: "Naxrita HRMS AI Assistant",
-    subtitle: "Move faster through team approvals, people information, calendars, and timesheet follow-ups with natural language.",
     accentClass: "enterprise-assistant--manager",
     icon: UsersRound,
     suggestions: [
@@ -37,9 +33,7 @@ const ROLE_CONFIG = {
     ],
   },
   Employee: {
-    badge: "Employee self-service",
     title: "Naxrita HRMS AI Assistant",
-    subtitle: "Get help with leaves, payslips, profile details, policy lookup, and everyday HR tasks using plain language.",
     accentClass: "enterprise-assistant--employee",
     icon: UserRound,
     suggestions: [
@@ -91,19 +85,7 @@ const EnterpriseAssistant = ({ user }) => {
 
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [messages, setMessages] = useState(() => [
-    {
-      id: "welcome",
-      type: "assistant",
-      tone: "highlight",
-      text: `${config.title} is ready${user?.name ? ` for ${user.name.split(" ")[0]}` : ""}.`,
-    },
-    {
-      id: "context",
-      type: "assistant",
-      text: config.subtitle,
-    },
-  ]);
+  const [messages, setMessages] = useState([]);
   const listRef = useRef(null);
 
   useEffect(() => {
@@ -161,19 +143,26 @@ const EnterpriseAssistant = ({ user }) => {
 
       {isOpen && (
         <section className="enterprise-assistant-panel" aria-label="AI assistant">
-          <div className="enterprise-assistant-panel__hero">
-            <div className="enterprise-assistant-panel__orb">
-              <AccentIcon size={20} strokeWidth={2} />
+          <div className="enterprise-assistant-panel__topbar">
+            <div className="enterprise-assistant-panel__identity">
+              <div className="enterprise-assistant-panel__orb">
+                <AccentIcon size={18} strokeWidth={2} />
+              </div>
+
+              <div className="enterprise-assistant-panel__identity-copy">
+                <h3>Assistant</h3>
+                <span>{role} workspace</span>
+              </div>
             </div>
 
-            <div className="enterprise-assistant-panel__hero-copy">
-              <div className="enterprise-assistant-panel__badge">
-                <Sparkles size={14} />
-                <span>{config.badge}</span>
-              </div>
-              <h3>{config.title}</h3>
-              <p>{config.subtitle}</p>
-            </div>
+            <button
+              type="button"
+              className="enterprise-assistant-panel__collapse"
+              onClick={() => setIsOpen(false)}
+              aria-label="Collapse assistant"
+            >
+              <Minimize2 size={16} strokeWidth={2.1} />
+            </button>
           </div>
 
           <div className="enterprise-assistant-panel__suggestions">
@@ -190,7 +179,14 @@ const EnterpriseAssistant = ({ user }) => {
             ))}
           </div>
 
-          <div className="enterprise-assistant-thread" ref={listRef}>
+          <div className={`enterprise-assistant-thread ${messages.length === 0 ? "is-empty" : ""}`} ref={listRef}>
+            {messages.length === 0 && (
+              <div className="enterprise-assistant-thread__empty">
+                <Bot size={18} strokeWidth={2} />
+                <p>Ask about payslips, leave, approvals, timesheets, or policy.</p>
+              </div>
+            )}
+
             {messages.map((message) => (
               <article
                 key={message.id}
