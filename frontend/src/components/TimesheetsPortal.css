@@ -1463,6 +1463,7 @@
   justify-content: flex-end;
   gap: 6px;
   margin-top: 7px;
+  flex-wrap: wrap;
 }
 
 .mte-chargecodes-add-actions button,
@@ -1476,10 +1477,13 @@
   border-radius: 5px;
   background: #fff;
   color: #32363a;
-  padding: 0 10px;
+  padding: 6px 10px;
   font-size: 11.5px;
   font-weight: 700;
   cursor: pointer !important;
+  white-space: normal;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .mte-chargecodes-add-actions button svg,
@@ -1607,7 +1611,7 @@
 .mte-chargecodes-assign-card.is-display-preferences-card .mte-chargecodes-actions {
   width: auto;
   margin-top: 0;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .mte-chargecodes-table-wrap {
@@ -1664,13 +1668,15 @@
 
 .mte-chargecodes-table th:nth-child(1),
 .mte-chargecodes-table td:nth-child(1) {
-  width: 4.5%;
+  width: 88px;
+  min-width: 88px;
   text-align: center;
 }
 
 .mte-chargecodes-table th:nth-child(2),
 .mte-chargecodes-table td:nth-child(2) {
-  width: 6%;
+  width: 76px;
+  min-width: 76px;
   text-align: center;
 }
 
@@ -1720,6 +1726,14 @@
   width: 13px;
   height: 13px;
   accent-color: #6f54b6;
+}
+
+.mte-chargecodes-header-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .mte-chargecodes-info {

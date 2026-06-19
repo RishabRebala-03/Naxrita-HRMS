@@ -5090,6 +5090,12 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     if (filter === 'Selected') return normalized.filter((row) => selectedRows.includes(row.id));
     return normalized;
   }, [codes, displayRows, filter, selectedRows]);
+  const allRows = useMemo(() => codes.map(getChargeCodeGridRow), [codes]);
+  const visibleRowIds = useMemo(() => rows.map((row) => row.id), [rows]);
+  const allVisibleRowsSelected = useMemo(
+    () => visibleRowIds.length > 0 && visibleRowIds.every((rowId) => selectedRows.includes(rowId)),
+    [selectedRows, visibleRowIds]
+  );
   const departmentOptions = useMemo(
     () => Array.from(new Set(employees.map((employee) => employee.department || 'Unassigned')))
       .sort((first, second) => first.localeCompare(second)),
@@ -5148,6 +5154,19 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         ? previous.filter((id) => id !== rowId)
         : [...previous, rowId]
     );
+  };
+  const toggleSelectAllVisibleRows = () => {
+    if (visibleRowIds.length === 0) {
+      notify('No charge codes found for the current view.', 'warning');
+      return;
+    }
+
+    setSelectedRows((previous) => {
+      if (visibleRowIds.every((rowId) => previous.includes(rowId))) {
+        return previous.filter((rowId) => !visibleRowIds.includes(rowId));
+      }
+      return Array.from(new Set([...previous, ...visibleRowIds]));
+    });
   };
 
   const toggleDisplayRow = (row) => {
@@ -5233,7 +5252,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
 
     setLoading(true);
     try {
-      const selectedCodes = rows
+      const selectedCodes = allRows
         .filter((row) => selectedRows.includes(row.id))
         .map((row) => row.raw._id || row.raw.charge_code_id)
         .filter(Boolean);
@@ -5459,6 +5478,10 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                 <Building2 size={13} />
                 <span>Select Group</span>
               </button>
+              <button type="button" onClick={toggleSelectAllVisibleRows}>
+                <CheckCircle size={13} />
+                <span>{allVisibleRowsSelected ? 'Clear Charge Codes' : 'Select All Charge Codes'}</span>
+              </button>
               <span>{assignmentScopedEmployees.length} employee{assignmentScopedEmployees.length === 1 ? '' : 's'} match</span>
             </div>
           ) : null}
@@ -5494,6 +5517,10 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
                 </select>
               </label>
             ) : null}
+            <button type="button" onClick={toggleSelectAllVisibleRows}>
+              <CheckCircle size={14} />
+              <span>{allVisibleRowsSelected ? 'Clear Charge Codes' : 'Select All Charge Codes'}</span>
+            </button>
             <button type="button" onClick={() => {
               setChargeCodeForm(emptyChargeCodeForm);
               setSelectedRows([]);
@@ -5517,7 +5544,17 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         <table className="mte-chargecodes-table">
           <thead>
             <tr>
-              <th>Select</th>
+              <th>
+                <label className="mte-chargecodes-header-select">
+                  <input
+                    type="checkbox"
+                    checked={allVisibleRowsSelected}
+                    onChange={toggleSelectAllVisibleRows}
+                    aria-label={allVisibleRowsSelected ? 'Clear visible charge codes' : 'Select all visible charge codes'}
+                  />
+                  <span>Select</span>
+                </label>
+              </th>
               <th>Display <span className="mte-chargecodes-info">i</span></th>
               <th>Type</th>
               <th>SubType</th>

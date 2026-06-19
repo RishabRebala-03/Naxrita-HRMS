@@ -1092,11 +1092,13 @@ function Payslips({ user, adminView = false }) {
             <div style={S.statValue}>{displaySummary.visible || payslips.length}</div>
             <div style={S.statSub}>Records matching current filters</div>
           </div>
-          <div style={S.stat}>
-            <div style={S.statLabel}>Covered Employees</div>
-            <div style={S.statValue}>{displaySummary.employees || new Set(payslips.map((item) => item.employee_id)).size}</div>
-            <div style={S.statSub}>Unique employees in the archive view</div>
-          </div>
+          {effectiveUser?.role !== "Employee" ? (
+            <div style={S.stat}>
+              <div style={S.statLabel}>Covered Employees</div>
+              <div style={S.statValue}>{displaySummary.employees || new Set(payslips.map((item) => item.employee_id)).size}</div>
+              <div style={S.statSub}>Unique employees in the archive view</div>
+            </div>
+          ) : null}
           <div style={S.stat}>
             <div style={S.statLabel}>Stored Periods</div>
             <div style={S.statValue}>{displaySummary.periods || new Set(payslips.map((item) => item.period_key)).size}</div>
