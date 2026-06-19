@@ -26,7 +26,7 @@ import Projects from "./components/Projects";
 import Timesheets from "./components/Timesheets";
 import Payslips from "./components/Payslips";
 import MailAdmin from "./components/MailAdmin";
-import EnterpriseAssistant from "./components/EnterpriseAssistant";
+// import EnterpriseAssistant from "./components/EnterpriseAssistant";
 import AccessManagement from "./components/AccessManagement";
 import { canAccessSection, hasAdminMenuAccess } from "./utils/accessControl";
 
@@ -550,7 +550,7 @@ function App() {
             isSidebarCollapsed={isSidebarCollapsed}
           />
           <div className="content">{renderSection()}</div>
-          <EnterpriseAssistant user={currentUser} />
+          {/* <EnterpriseAssistant user={currentUser} /> */}
         </div>
       </div>
       <div className="portal-alert-stack" aria-live="polite" aria-atomic="true">

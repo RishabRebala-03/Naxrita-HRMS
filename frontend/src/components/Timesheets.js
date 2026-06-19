@@ -2154,6 +2154,7 @@ function TimesheetPage({
   const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
   const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
   const errors       = validationErrors;
+  const submitDisabled = loading || errors.length > 0 || !hasSavedCurrentDraft;
   const rowHasPositiveHours = useCallback((row) =>
     row.entries.some((entry) => {
       const rawValue = entry?.value !== undefined ? entry.value : String(entry?.hours ?? '');
@@ -2602,7 +2603,8 @@ function TimesheetPage({
                 type="button"
                 className="mte-submit-button"
                 onClick={handleSubmit}
-                disabled={errors.length > 0 || loading}
+                disabled={submitDisabled}
+                title={!hasSavedCurrentDraft ? 'Save the timesheet before submitting.' : undefined}
               >
                 {loading ? 'Submitting' : 'Submit'}
               </button>
