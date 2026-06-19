@@ -6822,9 +6822,9 @@ function LocationsPanel({
       <div className="mte-locations-body">
         <aside className="mte-locations-card">
           <label>
-            <span>Country</span>
+            <span>Work Location</span>
             <select value={country} onChange={(event) => setCountry(event.target.value)}>
-              <option value="">Select a country/region</option>
+              <option value="">Select a work location</option>
               <option>India</option>
               <option>Italy</option>
               <option>United States</option>
@@ -6834,17 +6834,17 @@ function LocationsPanel({
           </label>
 
           <label>
-            <span>Location One</span>
+            <span>Assigned Location</span>
             <select value={locationOne} onChange={(event) => setLocationOne(event.target.value)}>
-              <option value="">Select a location</option>
+              <option value="">Select an assigned location</option>
               {locationOptions.map((option) => <option key={option}>{option}</option>)}
             </select>
           </label>
 
           <label>
-            <span>Location Two</span>
+            <span>Company Code/ Cost Center</span>
             <select value={locationTwo} onChange={(event) => setLocationTwo(event.target.value)}>
-              <option value="">Select a secondary location</option>
+              <option value="">Select a company code/cost center</option>
               {locationOptions.map((option) => <option key={option}>{option}</option>)}
             </select>
           </label>
