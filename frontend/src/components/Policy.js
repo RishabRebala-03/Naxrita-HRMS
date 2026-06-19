@@ -127,11 +127,31 @@ const statusToneMap = {
 const POLICY_SCROLL_OFFSET = 118;
 
 const isWindowScrollContainer = (container) =>
+  !container ||
+  container === window ||
   container === document.scrollingElement ||
   container === document.documentElement ||
   container === document.body;
 
-const getSectionTopWithinContainer = (element, container) => {
+const getNearestScrollContainer = (element) => {
+  let current = element?.parentElement;
+
+  while (current && current !== document.body) {
+    const style = window.getComputedStyle(current);
+    const canScroll = current.scrollHeight > current.clientHeight + 1;
+    const overflowY = style.overflowY;
+
+    if (canScroll && ["auto", "scroll", "overlay"].includes(overflowY)) {
+      return current;
+    }
+
+    current = current.parentElement;
+  }
+
+  return document.scrollingElement || window;
+};
+
+const getElementTopWithinContainer = (element, container) => {
   if (isWindowScrollContainer(container)) {
     return element.getBoundingClientRect().top + window.scrollY;
   }
@@ -140,53 +160,18 @@ const getSectionTopWithinContainer = (element, container) => {
   return element.getBoundingClientRect().top - containerRect.top + container.scrollTop;
 };
 
-const getPolicyScrollTargets = (element) => {
-  const targets = [];
-  let current = element?.parentElement;
-
-  while (current && current !== document.body) {
-    const style = window.getComputedStyle(current);
-    const canScroll = current.scrollHeight > current.clientHeight + 1;
-    const hasScrollableOverflow = ["auto", "scroll", "overlay"].includes(style.overflowY);
-
-    if (canScroll && hasScrollableOverflow) {
-      targets.push(current);
-    }
-
-    current = current.parentElement;
-  }
-
-  const documentScroller = document.scrollingElement || document.documentElement;
-  if (documentScroller && documentScroller.scrollHeight > documentScroller.clientHeight + 1) {
-    targets.push(documentScroller);
-  }
-
-  return Array.from(new Set(targets));
-};
-
-const scrollPolicyElementIntoView = (element, behavior = "smooth") => {
+const scrollPolicyElementIntoView = (element, container, behavior = "smooth") => {
   if (!element) return;
 
-  const targets = getPolicyScrollTargets(element);
+  const scrollContainer = container || getNearestScrollContainer(element);
+  const targetTop = getElementTopWithinContainer(element, scrollContainer) - POLICY_SCROLL_OFFSET;
 
-  if (!targets.length) {
-    element.scrollIntoView({ behavior, block: "start", inline: "nearest" });
+  if (isWindowScrollContainer(scrollContainer)) {
+    window.scrollTo({ top: Math.max(targetTop, 0), behavior });
     return;
   }
 
-  targets.forEach((target) => {
-    const targetTop = getSectionTopWithinContainer(element, target) - POLICY_SCROLL_OFFSET;
-
-    if (isWindowScrollContainer(target)) {
-      window.scrollTo({ top: Math.max(targetTop, 0), behavior });
-    } else {
-      target.scrollTo({ top: Math.max(targetTop, 0), behavior });
-    }
-  });
-
-  window.requestAnimationFrame(() => {
-    element.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
-  });
+  scrollContainer.scrollTo({ top: Math.max(targetTop, 0), behavior });
 };
 
 const getPolicySectionElement = (root, section) => {
@@ -234,6 +219,7 @@ const Policy = ({ user }) => {
   const [editForm, setEditForm] = useState(null);
   const contentRootRef = useRef(null);
   const contentRefs = useRef({});
+  const scrollContainerRef = useRef(null);
   const canUpdatePolicies = user?.role === "Admin";
 
   const policySearchSuggestions = useMemo(
@@ -272,11 +258,13 @@ const Policy = ({ user }) => {
   useEffect(() => {
     if (!selectedPolicy || !contentRootRef.current) {
       contentRefs.current = {};
+      scrollContainerRef.current = null;
       return;
     }
 
     const frameId = window.requestAnimationFrame(() => {
       const nextRefs = {};
+      scrollContainerRef.current = getNearestScrollContainer(contentRootRef.current);
 
       selectedPolicy.sections.forEach((section) => {
         const element = getPolicySectionElement(contentRootRef.current, section);
@@ -293,7 +281,11 @@ const Policy = ({ user }) => {
         setActiveSection(matchingHashSection.id);
 
         window.requestAnimationFrame(() => {
-          scrollPolicyElementIntoView(nextRefs[matchingHashSection.id], "auto");
+          scrollPolicyElementIntoView(
+            nextRefs[matchingHashSection.id],
+            scrollContainerRef.current,
+            "auto"
+          );
         });
       } else {
         setActiveSection(selectedPolicy.sections[0]?.id || null);
@@ -310,11 +302,21 @@ const Policy = ({ user }) => {
 
     const handleScroll = () => {
       const scrollPosition = POLICY_SCROLL_OFFSET + 24;
+      const scrollContainer = scrollContainerRef.current || getNearestScrollContainer(contentRootRef.current);
       let currentSection = selectedPolicy.sections[0]?.id || null;
 
       selectedPolicy.sections.forEach((section) => {
         const element = contentRefs.current[section.id];
-        const elementTop = element ? element.getBoundingClientRect().top : null;
+        let elementTop = null;
+
+        if (element) {
+          if (isWindowScrollContainer(scrollContainer)) {
+            elementTop = element.getBoundingClientRect().top;
+          } else {
+            elementTop =
+              element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top;
+          }
+        }
 
         if (element && typeof elementTop === "number" && elementTop <= scrollPosition) {
           currentSection = section.id;
@@ -324,15 +326,13 @@ const Policy = ({ user }) => {
       setActiveSection(currentSection);
     };
 
-    const scrollTargets = [
-      window,
-      ...getPolicyScrollTargets(contentRootRef.current),
-    ];
+    const scrollContainer = scrollContainerRef.current || getNearestScrollContainer(contentRootRef.current);
+    const scrollTarget = isWindowScrollContainer(scrollContainer) ? window : scrollContainer;
 
-    scrollTargets.forEach((target) => target.addEventListener("scroll", handleScroll, { passive: true }));
+    scrollTarget.addEventListener("scroll", handleScroll, { passive: true });
     handleScroll();
 
-    return () => scrollTargets.forEach((target) => target.removeEventListener("scroll", handleScroll));
+    return () => scrollTarget.removeEventListener("scroll", handleScroll);
   }, [selectedPolicy]);
 
   const openPolicy = (policyId) => {
@@ -364,7 +364,7 @@ const Policy = ({ user }) => {
     element.setAttribute("tabindex", "-1");
     element.focus({ preventScroll: true });
 
-    scrollPolicyElementIntoView(element, "smooth");
+    scrollPolicyElementIntoView(element, scrollContainerRef.current, "smooth");
   };
 
   const openEditModal = () => {

@@ -117,10 +117,14 @@ const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
 
   return (
     <section className="delegated-leaves-workspace">
-      <div className="leave-tab-strip" role="tablist" aria-label="Delegated leave workspace tabs">
+      <nav
+        className="page-subtab-strip delegated-leaves-tab-strip"
+        role="tablist"
+        aria-label="Delegated leave workspace tabs"
+      >
         <button
           type="button"
-          className={`leave-tab-button ${activeTab === "personal" ? "active" : ""}`}
+          className={`page-subtab-button delegated-leaves-tab-button ${activeTab === "personal" ? "is-active" : ""}`}
           onClick={() => setActiveTab("personal")}
           role="tab"
           aria-selected={activeTab === "personal"}
@@ -129,14 +133,14 @@ const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
         </button>
         <button
           type="button"
-          className={`leave-tab-button ${activeTab === "admin" ? "active" : ""}`}
+          className={`page-subtab-button delegated-leaves-tab-button ${activeTab === "admin" ? "is-active" : ""}`}
           onClick={() => setActiveTab("admin")}
           role="tab"
           aria-selected={activeTab === "admin"}
         >
           Admin Leaves
         </button>
-      </div>
+      </nav>
 
       {activeTab === "personal"
         ? baseRole === "Manager"

@@ -816,22 +816,30 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       </header>
 
       {hasReportees ? (
-        <div className="leave-tab-strip">
+        <nav
+          className="page-subtab-strip employee-leave-tab-strip"
+          role="tablist"
+          aria-label="Employee leave tabs"
+        >
           <button
             type="button"
-            className={`leave-tab-button ${activeTab === "my-leaves" ? "active" : ""}`}
+            className={`page-subtab-button employee-leave-tab-button ${activeTab === "my-leaves" ? "is-active" : ""}`}
             onClick={() => setActiveTab("my-leaves")}
+            role="tab"
+            aria-selected={activeTab === "my-leaves"}
           >
             My Leaves
           </button>
           <button
             type="button"
-            className={`leave-tab-button ${activeTab === "team-leaves" ? "active" : ""}`}
+            className={`page-subtab-button employee-leave-tab-button ${activeTab === "team-leaves" ? "is-active" : ""}`}
             onClick={() => setActiveTab("team-leaves")}
+            role="tab"
+            aria-selected={activeTab === "team-leaves"}
           >
             Team Leaves {teamPendingLeaves.length ? `(${teamPendingLeaves.length})` : ""}
           </button>
-        </div>
+        </nav>
       ) : null}
 
       {message ? <div className={`admin-toast ${messageTone(message)}`}>{message}</div> : null}

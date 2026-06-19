@@ -105,14 +105,14 @@ const AccessManagement = ({ user }) => {
 
   return (
     <section className="access-management-workspace">
-      <header className="admin-hero">
+      <header className="admin-hero access-management-hero">
         <div className="admin-hero-copy">
           <div className="admin-section-overline">Security Administration</div>
           <h1>Access Management</h1>
           <p>Grant individual admin sidebar workspaces without turning someone into a full admin.</p>
         </div>
 
-        <div className="admin-hero-meta">
+        <div className="admin-hero-meta access-management-hero-meta">
           <div className="admin-hero-meta-item">
             <span>Eligible people</span>
             <strong>{stats.people}</strong>
@@ -128,7 +128,7 @@ const AccessManagement = ({ user }) => {
         </div>
       </header>
 
-      <section className="employee-directory-summary">
+      <section className="employee-directory-summary access-management-summary">
         <article className="fiori-stat-card">
           <div className="fiori-stat-topline">
             <span className="fiori-stat-label">Security model</span>
@@ -157,7 +157,7 @@ const AccessManagement = ({ user }) => {
         </article>
       </section>
 
-      <section className="fiori-panel employee-filter-panel">
+      <section className="fiori-panel employee-filter-panel access-management-filter-panel">
         <div className="fiori-panel-header employee-filter-panel-header">
           <div>
             <h3>Assigned Menus</h3>
@@ -182,7 +182,7 @@ const AccessManagement = ({ user }) => {
         </div>
       </section>
 
-      <section className="fiori-panel">
+      <section className="fiori-panel access-management-matrix-panel">
         <div className="fiori-panel-header">
           <div>
             <h3>Delegated Access Matrix</h3>
@@ -190,7 +190,7 @@ const AccessManagement = ({ user }) => {
           </div>
         </div>
 
-        <div className="fiori-table-shell">
+        <div className="fiori-table-shell access-management-table-shell">
           <table className="fiori-table">
             <thead>
               <tr>

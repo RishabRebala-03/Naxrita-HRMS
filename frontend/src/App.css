@@ -3342,6 +3342,41 @@ button:hover:not(:disabled) {
   color: var(--primary);
 }
 
+.delegated-leaves-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.delegated-leaves-tab-strip {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 7px;
+  border-radius: 16px;
+  box-shadow: 0 10px 24px rgba(34, 53, 72, 0.06);
+}
+
+.delegated-leaves-tab-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #223548;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.delegated-leaves-tab-button:hover,
+.delegated-leaves-tab-button.is-active {
+  border-color: #9fc7ec;
+  color: #0a4f94;
+}
+
 .projects-card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -8360,6 +8395,51 @@ button:hover:not(:disabled) {
 }
 
 /* Employee Leave Management: compact apply + history workspace */
+.employee-workspace .employee-leave-tab-strip {
+  width: fit-content;
+  max-width: 100%;
+  align-self: flex-start;
+  margin: 2px 0 10px;
+  padding: 7px;
+  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(34, 53, 72, 0.06);
+}
+
+.employee-workspace .employee-leave-tab-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: #223548;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.employee-workspace .employee-leave-tab-button:hover,
+.employee-workspace .employee-leave-tab-button.is-active {
+  border-color: #9fc7ec;
+  color: #0a4f94;
+}
+
+.delegated-leaves-workspace .leave-workspace > .fiori-panel:first-of-type {
+  padding: 18px 20px;
+}
+
+.delegated-leaves-workspace .leave-workspace > .fiori-panel:first-of-type .leave-tab-strip {
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.delegated-leaves-workspace .leave-workspace > .fiori-panel:first-of-type .leave-tab-button {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 12px;
+}
+
 .employee-workspace .employee-leave-layout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -9101,4 +9181,103 @@ button:hover:not(:disabled) {
 .access-management-toggle input {
   width: 16px;
   height: 16px;
+}
+
+.access-management-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: 112px;
+}
+
+.access-management-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(260px, 340px);
+  align-items: start;
+  gap: 20px;
+}
+
+.access-management-hero .admin-hero-copy {
+  max-width: 860px;
+}
+
+.access-management-hero .admin-hero-copy p {
+  max-width: 60ch;
+}
+
+.access-management-hero-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-self: start;
+}
+
+.access-management-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+}
+
+.access-management-summary .fiori-stat-card,
+.access-management-matrix-panel,
+.access-management-filter-panel {
+  min-width: 0;
+}
+
+.access-management-filter-panel .employee-directory-filters {
+  grid-template-columns: minmax(0, min(720px, 100%));
+}
+
+.access-management-filter-panel .employee-filter-search {
+  min-width: 0;
+}
+
+.access-management-table-shell {
+  width: 100%;
+}
+
+.access-management-table-shell .fiori-table {
+  min-width: 1080px;
+}
+
+.access-management-table-shell th:first-child,
+.access-management-table-shell td:first-child {
+  min-width: 180px;
+}
+
+.access-management-table-shell th:nth-child(2),
+.access-management-table-shell td:nth-child(2) {
+  min-width: 160px;
+}
+
+@media (max-width: 1200px) {
+  .access-management-hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .access-management-hero-meta {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .access-management-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .access-management-hero-meta {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .access-management-workspace {
+    padding-bottom: 148px;
+  }
+
+  .access-management-hero {
+    gap: 16px;
+  }
+
+  .access-management-table-shell .fiori-table {
+    min-width: 920px;
+  }
 }
