@@ -4,6 +4,15 @@ from bson import ObjectId
 from datetime import datetime, timedelta
 from config.db import mongo
 import os
+from utils.access_control import (
+    get_admin_menu_options,
+    has_admin_menu_access,
+    is_full_admin,
+    normalize_admin_menu_access,
+    require_admin,
+    require_admin_menu_access,
+    resolve_requester,
+)
 
 def serialize_all(obj):
     if isinstance(obj, list):
@@ -296,9 +305,28 @@ def _employee_sort_value(employee, sort_by):
 
     return (employee.get("name") or "").lower()
 
+
+def _serialize_access_user(user):
+    return {
+        "_id": str(user["_id"]),
+        "employeeId": user.get("employeeId", ""),
+        "name": user.get("name", ""),
+        "email": user.get("email", ""),
+        "role": user.get("role", "Employee"),
+        "designation": user.get("designation", ""),
+        "department": user.get("department", ""),
+        "is_active": user.get("is_active", True),
+        "hasFullAdminAccess": is_full_admin(user),
+        "adminMenuAccess": normalize_admin_menu_access(user.get("adminMenuAccess")),
+    }
+
 @user_bp.route("/add_user", methods=["POST"])
 def add_user():
     try:
+        _, error_response = require_admin_menu_access("add")
+        if error_response:
+            return error_response
+
         data = request.get_json()
         print("\n📩 Received data:", data)
 
@@ -339,6 +367,7 @@ def add_user():
                         "optionalTotal": 2,
                         "lwp": 0
                     },
+                    "adminMenuAccess": [],
                     "dateOfJoining": datetime.utcnow(),
                     "dateOfBirth": None,
                     "createdAt": datetime.utcnow()
@@ -348,6 +377,7 @@ def add_user():
         data.pop("reportsToEmail", None)
         data["is_active"] = bool(data.get("is_active", True))
         data["createdAt"] = datetime.utcnow()
+        data["adminMenuAccess"] = normalize_admin_menu_access(data.get("adminMenuAccess"))
 
         # Handle joining date safely - STORE IT FIRST
         joining_date_for_accrual = None
@@ -440,6 +470,7 @@ def get_users():
         for user in users:
             user["_id"] = str(user["_id"])
             user["is_active"] = user.get("is_active", True)
+            user["adminMenuAccess"] = normalize_admin_menu_access(user.get("adminMenuAccess"))
 
             # ✅ BUILD PHOTO URL
             base = request.host_url.rstrip("/")
@@ -499,10 +530,23 @@ def get_users():
 @user_bp.route("/get_all_employees", methods=["GET"])
 def get_all_employees():
     try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        if not (
+            is_full_admin(requester)
+            or has_admin_menu_access(requester, "apply-behalf")
+            or has_admin_menu_access(requester, "projects")
+            or has_admin_menu_access(requester, "timesheets")
+        ):
+            return jsonify({"error": "You do not have access to this employee list"}), 403
+
         employees = list(mongo.db.users.find({"role": {"$ne": "Admin"}}))  # Exclude Admins
 
         for emp in employees:
             emp["is_active"] = emp.get("is_active", True)
+            emp["adminMenuAccess"] = normalize_admin_menu_access(emp.get("adminMenuAccess"))
             # ✅ BUILD PHOTO URL
             base = request.host_url.rstrip("/")
             emp_id_str = str(emp["_id"])
@@ -527,6 +571,69 @@ def get_all_employees():
         return jsonify({"error": str(e)}), 500
 
 
+@user_bp.route("/access-management", methods=["GET"])
+def get_access_management_data():
+    try:
+        _, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        users = list(mongo.db.users.find({}, {
+            "employeeId": 1,
+            "name": 1,
+            "email": 1,
+            "role": 1,
+            "designation": 1,
+            "department": 1,
+            "is_active": 1,
+            "adminMenuAccess": 1,
+        }).sort("name", 1))
+
+        return jsonify({
+            "options": get_admin_menu_options(),
+            "users": [_serialize_access_user(user) for user in users],
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@user_bp.route("/access-management/<user_id>", methods=["PUT"])
+def update_access_management(user_id):
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        next_access = normalize_admin_menu_access(data.get("adminMenuAccess"))
+
+        user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        if is_full_admin(user):
+            return jsonify({"error": "Full admin accounts already have complete access"}), 400
+
+        mongo.db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "$set": {
+                    "adminMenuAccess": next_access,
+                    "accessManagementUpdatedAt": datetime.utcnow(),
+                    "accessManagementUpdatedBy": requester["_id"],
+                }
+            },
+        )
+
+        updated_user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        return jsonify({
+            "message": "Access updated successfully",
+            "user": _serialize_access_user(updated_user),
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @user_bp.route("/directory", methods=["GET"])
 def get_employee_directory():
     """Directory API contract for employee and leave-aware listing."""
@@ -545,6 +652,13 @@ def get_employee_directory():
         period_end_raw = request.args.get("period_end")
         sort_by = (request.args.get("sort_by") or "name").strip().lower()
         sort_order = (request.args.get("sort_order") or "asc").strip().lower()
+        requester = resolve_requester()
+
+        if scope == "all":
+            if not requester:
+                return jsonify({"error": "A valid requester is required"}), 401
+            if not has_admin_menu_access(requester, "employees"):
+                return jsonify({"error": "You do not have access to the enterprise directory"}), 403
 
         query = {}
         if not include_admins:
@@ -705,6 +819,7 @@ def get_user(user_id):
 
         user["photoUrl"] = photo_url
         user["is_active"] = user.get("is_active", True)
+        user["adminMenuAccess"] = normalize_admin_menu_access(user.get("adminMenuAccess"))
 
         # Convert reportsTo ObjectId to reportsToEmail string
         if "reportsTo" in user and user["reportsTo"]:
@@ -773,6 +888,10 @@ def get_manager(employee_id):
 @user_bp.route("/assign_project/<user_id>", methods=["POST"])
 def assign_project(user_id):
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         data = request.get_json()
         project_id = data.get("projectId")
         start_raw = data.get("startDate")
@@ -845,6 +964,10 @@ def assign_project(user_id):
 @user_bp.route("/update_project/<user_id>/<assignment_id>", methods=["PUT"])
 def update_project_assignment(user_id, assignment_id):
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         data = request.get_json()
         
         update_fields = {}
@@ -893,6 +1016,10 @@ def update_project_assignment(user_id, assignment_id):
 @user_bp.route("/delete_project/<user_id>/<assignment_id>", methods=["DELETE"])
 def delete_project_assignment(user_id, assignment_id):
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         result = mongo.db.users.update_one(
             {"_id": ObjectId(user_id)},
             {"$pull": {"projects": {"_id": ObjectId(assignment_id)}}}
@@ -917,6 +1044,17 @@ def update_user(user_id):
         data = request.get_json()
         print(f"🛠 Updating user {user_id} with RAW data:", data)
 
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        requester_id = str(requester["_id"])
+        is_self_update = requester_id == user_id
+        requester_is_admin = is_full_admin(requester)
+
+        if not (is_self_update or requester_is_admin):
+            return jsonify({"error": "You do not have permission to update this profile"}), 403
+
         # Check if user exists
         user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
@@ -924,8 +1062,30 @@ def update_user(user_id):
 
         update_data = {}
 
+        if not requester_is_admin:
+            restricted_fields = {
+                "role",
+                "leaveBalance",
+                "projects",
+                "adminMenuAccess",
+                "reportsToEmail",
+                "peopleLeadEmail",
+                "department",
+                "designation",
+                "employment_type",
+                "companyCode",
+                "costCenter",
+                "workLocation",
+                "shiftTimings",
+            }
+            if any(field in data for field in restricted_fields):
+                return jsonify({"error": "You do not have permission to update restricted fields"}), 403
+
         # Handle password change separately with verification
         if "password" in data:
+            if not is_self_update and not requester_is_admin:
+                return jsonify({"error": "You do not have permission to change another user's password"}), 403
+
             current_password = data.get("currentPassword")
             
             if current_password:
@@ -1074,6 +1234,10 @@ def update_user(user_id):
 @user_bp.route("/delete_user/<user_id>", methods=["DELETE"])
 def delete_user(user_id):
     try:
+        _, error_response = require_admin()
+        if error_response:
+            return error_response
+
         result = mongo.db.users.delete_one({"_id": ObjectId(user_id)})
         if result.deleted_count == 0:
             return jsonify({"error": "User not found"}), 404
@@ -1088,6 +1252,10 @@ def delete_user(user_id):
 @user_bp.route("/set_active/<user_id>", methods=["PUT"])
 def set_user_active_status(user_id):
     try:
+        _, error_response = require_admin_menu_access("employees")
+        if error_response:
+            return error_response
+
         data = request.get_json() or {}
         is_active = data.get("is_active")
 
@@ -1194,6 +1362,13 @@ def get_employees_by_manager(manager_email):
 def upload_photo(user_id):
     try:
         print("📸 Upload request received for", user_id)
+
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        if str(requester["_id"]) != user_id and not is_full_admin(requester):
+            return jsonify({"error": "You do not have permission to update this photo"}), 403
 
         if "photo" not in request.files:
             return jsonify({"error": "No file provided"}), 400

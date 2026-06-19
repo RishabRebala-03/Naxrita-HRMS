@@ -18,6 +18,7 @@ from services.smtp_service import (
 )
 from services.template_service import render_email_template
 from workers.mail_worker import process_mail_queue_once
+from utils.access_control import require_admin_menu_access
 
 
 mail_bp = Blueprint("mail_bp", __name__)
@@ -26,6 +27,10 @@ mail_bp = Blueprint("mail_bp", __name__)
 @mail_bp.route("/test", methods=["POST"])
 def send_test_mail():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         data = request.get_json() or {}
         tenant_id = _tenant_id(data)
         to_email = data.get("to_email") or data.get("email")
@@ -74,6 +79,10 @@ def send_test_mail():
 @mail_bp.route("/logs", methods=["GET"])
 def get_mail_logs():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         tenant_id = _tenant_id()
         status = request.args.get("status")
         limit = request.args.get("limit", 100)
@@ -85,6 +94,10 @@ def get_mail_logs():
 @mail_bp.route("/settings", methods=["GET"])
 def get_mail_settings():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         tenant_id = _tenant_id()
         settings = get_masked_mail_settings(tenant_id)
         return jsonify(settings or {}), 200
@@ -95,6 +108,10 @@ def get_mail_settings():
 @mail_bp.route("/settings", methods=["PUT"])
 def update_mail_settings():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         data = request.get_json() or {}
         tenant_id = _tenant_id(data)
         settings = save_mail_settings(data, tenant_id=tenant_id)
@@ -106,6 +123,10 @@ def update_mail_settings():
 @mail_bp.route("/retry", methods=["POST"])
 def retry_failed_mail():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         data = request.get_json() or {}
         tenant_id = _tenant_id(data)
         if data.get("retry_all"):
@@ -126,6 +147,10 @@ def retry_failed_mail():
 @mail_bp.route("/health", methods=["GET"])
 def mail_health():
     try:
+        _, error_response = require_admin_menu_access("mail")
+        if error_response:
+            return error_response
+
         return jsonify(health_check(_tenant_id())), 200
     except Exception as exc:
         return jsonify({"status": "unhealthy", "error": str(exc)}), 503

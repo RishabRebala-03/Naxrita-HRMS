@@ -14,6 +14,7 @@ from services.mail_service import (
     queue_leave_status_email,
     send_pending_leave_reminders,
 )
+from utils.access_control import has_admin_menu_access, is_full_admin, resolve_requester
 
 leave_bp = Blueprint("leave_bp", __name__)
 
@@ -576,6 +577,10 @@ def get_all_leaves():
 def get_admin_pending_requests():
     """Get all pending leaves that are escalated to admin level"""
     try:
+        requester = resolve_requester()
+        if not requester or not has_admin_menu_access(requester, "leaves"):
+            return jsonify({"error": "You do not have access to the admin leave workspace"}), 403
+
         print(f"\n{'='*60}")
         print(f"🔍 ADMIN PENDING LEAVES REQUEST")
         print(f"{'='*60}")
@@ -789,6 +794,11 @@ def apply_leave():
 
         if not all([employee_id, leave_type, start_date, end_date]):
             return jsonify({"error": "Missing required fields"}), 400
+
+        requester = resolve_requester()
+        if requester and str(requester.get("_id")) != str(employee_id):
+            if not has_admin_menu_access(requester, "apply-behalf"):
+                return jsonify({"error": "You do not have permission to apply leave on behalf of another employee"}), 403
 
         # Fetch employee
         employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
@@ -1411,6 +1421,11 @@ def cancel_leave_by_lead(leave_id):
 @leave_bp.route("/balance/<employee_id>", methods=["GET"])
 def get_leave_balance(employee_id):
     try:
+        requester = resolve_requester()
+        if requester and str(requester.get("_id")) != str(employee_id):
+            if not (is_full_admin(requester) or has_admin_menu_access(requester, "apply-behalf")):
+                return jsonify({"error": "You do not have permission to view this leave balance"}), 403
+
         employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
         if not employee:
             return jsonify({"error": "Employee not found"}), 404
@@ -1524,6 +1539,7 @@ def get_pending_requests(user_email):
 def update_leave_status(leave_id):
     try:
         data = request.get_json()
+        requester = resolve_requester()
         status = data.get("status")
         rejection_reason = data.get("rejection_reason", "")
         approved_by = data.get("approved_by", "")
@@ -1544,6 +1560,14 @@ def update_leave_status(leave_id):
         leave_record = mongo.db.leaves.find_one({"_id": ObjectId(leave_id)})
         if not leave_record:
             return jsonify({"error": "Leave record not found"}), 404
+
+        current_approver_id = leave_record.get("current_approver_id")
+        requester_id = str(requester["_id"]) if requester else ""
+        is_admin_leave_reviewer = bool(requester and has_admin_menu_access(requester, "leaves"))
+        is_current_approver = bool(current_approver_id and str(current_approver_id) == requester_id)
+
+        if not (is_admin_leave_reviewer or is_current_approver):
+            return jsonify({"error": "You do not have permission to update this leave request"}), 403
 
         old_trimmed = trim_leave(leave_record)
 

@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Briefcase, Building2, ShieldCheck, UserPlus } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const emptyForm = {
   employeeId: "",
@@ -20,7 +21,7 @@ const emptyForm = {
   peopleLeadEmail: "",
 };
 
-const UserForm = ({ onSaved }) => {
+const UserForm = ({ currentUser, onSaved }) => {
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -58,7 +59,7 @@ const UserForm = ({ onSaved }) => {
     try {
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/users/add_user`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildRequesterHeaders(currentUser, { "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
       const data = await response.json();

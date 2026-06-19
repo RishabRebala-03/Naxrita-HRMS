@@ -12,6 +12,7 @@ def create_user_document(name, email, password, role, designation, department, s
         "projects": projects,
         "reportsTo": ObjectId(reportsTo) if reportsTo else None,
         "leaveBalance": leaveBalance,
+        "adminMenuAccess": [],
         "dateOfJoining": None,
         "createdAt": None
     }

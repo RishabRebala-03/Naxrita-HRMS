@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime
 from config.db import mongo  # ⬅️ match your other routes
+from utils.access_control import require_admin_menu_access
 
 holiday_bp = Blueprint("holiday_bp", __name__)
 
@@ -28,6 +29,10 @@ def list_holidays():
 
 @holiday_bp.post("/add")
 def add_holiday():
+    _, error_response = require_admin_menu_access("holidays")
+    if error_response:
+        return error_response
+
     data = request.get_json() or {}
     if not data.get("name") or not data.get("date"):
         return jsonify({"error": "name and date are required"}), 400
@@ -49,6 +54,10 @@ def add_holiday():
 @holiday_bp.put("/update/<hid>")
 def update_holiday(hid):
     try:
+        _, error_response = require_admin_menu_access("holidays")
+        if error_response:
+            return error_response
+
         _id = ObjectId(hid)
     except Exception:
         return jsonify({"error": "invalid id"}), 400
@@ -65,6 +74,10 @@ def update_holiday(hid):
 @holiday_bp.delete("/delete/<hid>")
 def delete_holiday(hid):
     try:
+        _, error_response = require_admin_menu_access("holidays")
+        if error_response:
+            return error_response
+
         _id = ObjectId(hid)
     except Exception:
         return jsonify({"error": "invalid id"}), 400
@@ -80,6 +93,10 @@ def sync_all_public_holidays():
     Useful for initial setup or fixing any inconsistencies.
     """
     try:
+        _, error_response = require_admin_menu_access("holidays")
+        if error_response:
+            return error_response
+
         # Get all public holidays
         public_holidays = list(mongo.db.holidays.find({"type": "public"}))
         

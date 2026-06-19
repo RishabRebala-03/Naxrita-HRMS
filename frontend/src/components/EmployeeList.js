@@ -13,6 +13,7 @@ import {
 import LeaveStatusDot from "./LeaveStatusDot";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const initialFilters = {
   search: "",
@@ -94,6 +95,7 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
 
   const deferredSearch = useDeferredValue(filters.search);
   const canViewDirectory = isAdmin || user?.role === "Manager";
+  const requesterHeaders = useMemo(() => buildRequesterHeaders(user), [user]);
 
   const fetchEmployees = useCallback(async () => {
     if (!canViewDirectory) {
@@ -145,7 +147,10 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
 
       const response = await axios.get(
         `${process.env.REACT_APP_BACKEND_URL}/api/users/directory`,
-        { params }
+        {
+          params,
+          headers: requesterHeaders,
+        }
       );
 
       setEmployees(Array.isArray(response.data?.items) ? response.data.items : []);
@@ -172,7 +177,7 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
     } finally {
       setLoading(false);
     }
-  }, [canViewDirectory, deferredSearch, filters, isAdmin, user?.email, user?.role]);
+  }, [canViewDirectory, deferredSearch, filters, isAdmin, requesterHeaders, user?.email, user?.role]);
 
   useEffect(() => {
     fetchEmployees();
@@ -190,7 +195,8 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
       setActionLoadingId(employeeId);
       const response = await axios.put(
         `${process.env.REACT_APP_BACKEND_URL}/api/users/set_active/${employeeId}`,
-        { is_active: nextStatus }
+        { is_active: nextStatus },
+        { headers: requesterHeaders }
       );
 
       if (response.status === 200) {

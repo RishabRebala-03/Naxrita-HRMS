@@ -15,6 +15,7 @@ from reportlab.platypus import Table, TableStyle
 from werkzeug.utils import secure_filename
 
 from config.db import mongo
+from utils.access_control import has_admin_menu_access
 
 
 payslip_bp = Blueprint("payslip_bp", __name__)
@@ -492,7 +493,7 @@ def _allowed_to_access(payslip, requester):
     requester_id = str(requester.get("_id"))
     employee_id = payslip.get("employee_id")
 
-    if role == "admin":
+    if _is_admin_requester(requester):
         return True
 
     if requester.get("employeeId") == employee_id:
@@ -506,7 +507,7 @@ def _allowed_to_access(payslip, requester):
 
 
 def _is_admin_requester(requester):
-    return bool(requester and str(requester.get("role", "")).strip().lower() == "admin")
+    return bool(requester and has_admin_menu_access(requester, "payslips"))
 
 
 def _normalize_line_items(items):
@@ -643,6 +644,9 @@ def health_check():
 @payslip_bp.route("/upload-excel", methods=["POST"])
 def upload_excel():
     _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only payslip admins can upload payslip sheets"}), 403
 
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
@@ -705,6 +709,9 @@ def upload_excel():
 @payslip_bp.route("/generate-payslip", methods=["POST"])
 def generate_payslip():
     _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only payslip admins can generate payslips"}), 403
     data = request.get_json() or {}
 
     try:
@@ -721,6 +728,9 @@ def generate_payslip():
 @payslip_bp.route("/bulk-store", methods=["POST"])
 def bulk_store_payslips():
     _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only payslip admins can store payslips"}), 403
     payload = request.get_json() or {}
     rows = payload.get("rows") or []
 
@@ -777,7 +787,7 @@ def get_visible_payslips():
     role = str(requester.get("role", "")).strip().lower()
     items = []
 
-    if role == "admin":
+    if _is_admin_requester(requester):
         cursor = _collection().find().sort([("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)])
         items = [_serialize_doc(item) for item in cursor]
     elif role == "manager":
@@ -799,6 +809,9 @@ def get_visible_payslips():
 @payslip_bp.route("/upload-history", methods=["GET"])
 def get_upload_history():
     _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only payslip admins can view upload history"}), 403
     history = list(_history_collection().find().sort("uploaded_at", DESCENDING).limit(50))
     return jsonify({"success": True, "history": [_serialize_doc(item) for item in history]}), 200
 

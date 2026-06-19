@@ -14,6 +14,7 @@ import {
   X,
   Users,
 } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 
@@ -448,16 +449,20 @@ const collectDistinctOptions = (rows, fields, nameAccessor = (row) => row) =>
   );
 
 const fetchJson = async (path, options = {}) => {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: buildRequesterHeaders(null, options.headers || {}),
+  });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || data.message || "Request failed");
   return data;
 };
 
-function Payslips({ user }) {
-  const isAdmin = user?.role === "Admin";
-  const canFilterByEmployee = user?.role !== "Employee";
-  const userId = user?._id || user?.id || "";
+function Payslips({ user, adminView = false }) {
+  const effectiveUser = adminView && user?.role !== "Admin" ? { ...user, role: "Admin" } : user;
+  const isAdmin = effectiveUser?.role === "Admin";
+  const canFilterByEmployee = effectiveUser?.role !== "Employee";
+  const userId = effectiveUser?._id || effectiveUser?.id || "";
   const [activeTab, setActiveTab] = useState(isAdmin ? "upload" : "display");
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()]);
   const [year, setYear] = useState(String(new Date().getFullYear()));
@@ -1075,7 +1080,7 @@ function Payslips({ user }) {
           <p style={S.sub}>
             {isAdmin
               ? "Upload payroll sheets, review them, add payslips to storage, and manage a month-wise archive."
-              : user?.role === "Manager"
+              : effectiveUser?.role === "Manager"
                 ? "Search, group, and download stored payslips for you and your direct reports."
                 : "Search and download your stored payslips from a clean month-wise archive."}
           </p>

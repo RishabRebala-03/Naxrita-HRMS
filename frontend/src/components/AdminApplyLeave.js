@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   CalendarDays,
@@ -8,6 +8,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const handleCardKeyDown = (event, action) => {
   if (event.key === "Enter" || event.key === " ") {
@@ -17,6 +18,7 @@ const handleCardKeyDown = (event, action) => {
 };
 
 const AdminApplyLeave = ({ user }) => {
+  const requesterHeaders = useMemo(() => buildRequesterHeaders(user), [user]);
   const [employees, setEmployees] = useState([]);
   const [selectedEmployee, setSelectedEmployee] = useState("");
   const [employeeBalance, setEmployeeBalance] = useState(null);
@@ -31,15 +33,12 @@ const AdminApplyLeave = ({ user }) => {
   const [employeeLoading, setEmployeeLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
-  useEffect(() => {
-    fetchEmployees();
-  }, []);
-
-  const fetchEmployees = async () => {
+  const fetchEmployees = useCallback(async () => {
     try {
       setEmployeeLoading(true);
       const response = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_all_employees`
+        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_all_employees`,
+        { headers: requesterHeaders }
       );
       setEmployees(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
@@ -48,7 +47,11 @@ const AdminApplyLeave = ({ user }) => {
     } finally {
       setEmployeeLoading(false);
     }
-  };
+  }, [requesterHeaders]);
+
+  useEffect(() => {
+    fetchEmployees();
+  }, [fetchEmployees]);
 
   const fetchEmployeeBalance = async (employeeId) => {
     if (!employeeId) {
@@ -58,7 +61,8 @@ const AdminApplyLeave = ({ user }) => {
 
     try {
       const response = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/balance/${employeeId}`
+        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/balance/${employeeId}`,
+        { headers: requesterHeaders }
       );
       setEmployeeBalance(response.data);
     } catch (error) {
@@ -109,7 +113,8 @@ const AdminApplyLeave = ({ user }) => {
           start_date: leave.start_date,
           end_date: leave.end_date,
           reason: leave.reason || `Applied by ${user.name} (${user.role})`,
-        }
+        },
+        { headers: requesterHeaders }
       );
 
       if (response.status === 201) {

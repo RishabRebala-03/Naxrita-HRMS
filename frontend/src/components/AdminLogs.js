@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import ValueHelpSearch from "./ValueHelpSearch";
 import ValueHelpSelect from "./ValueHelpSelect";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const DEFAULT_FILTERS = {
   search: "",
@@ -143,7 +144,7 @@ const downloadCsv = (filename, headers, rows) => {
   document.body.removeChild(link);
 };
 
-export default function AdminLogs() {
+export default function AdminLogs({ user }) {
   const [logs, setLogs] = useState([]);
   const [expandedRows, setExpandedRows] = useState({});
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -154,7 +155,9 @@ export default function AdminLogs() {
     try {
       setLoading(true);
       setError("");
-      const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/logs/all`);
+      const response = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/logs/all`, {
+        headers: buildRequesterHeaders(user),
+      });
       setLogs(Array.isArray(response.data) ? response.data : []);
     } catch (fetchError) {
       console.error(fetchError);
@@ -162,7 +165,7 @@ export default function AdminLogs() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     fetchLogs();

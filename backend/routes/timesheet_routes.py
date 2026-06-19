@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime, timedelta
 from config.db import mongo
+from utils.access_control import require_admin_menu_access
 
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
@@ -1459,6 +1460,10 @@ def manager_reject_timesheet(timesheet_id):
 @timesheet_bp.route("/all", methods=["GET"])
 def get_all_timesheets():
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         timesheets = list(mongo.db.timesheets.find().sort("submitted_at", -1))
 
         result = []

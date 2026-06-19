@@ -9089,3 +9089,16 @@ button:hover:not(:disabled) {
     grid-template-columns: 1fr;
   }
 }
+
+.access-management-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #33536f;
+}
+
+.access-management-toggle input {
+  width: 16px;
+  height: 16px;
+}

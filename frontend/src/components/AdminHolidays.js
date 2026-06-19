@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import { CalendarDays, MapPin, Plus, Sparkles } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const handleCardKeyDown = (event, action) => {
   if (event.key === "Enter" || event.key === " ") {
@@ -9,7 +10,7 @@ const handleCardKeyDown = (event, action) => {
   }
 };
 
-const AdminHolidays = () => {
+const AdminHolidays = ({ user }) => {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -75,11 +76,14 @@ const AdminHolidays = () => {
       if (editing) {
         await axios.put(
           `${process.env.REACT_APP_BACKEND_URL}/api/holidays/update/${editing}`,
-          form
+          form,
+          { headers: buildRequesterHeaders(user) }
         );
         showToast("Holiday updated successfully");
       } else {
-        await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/holidays/add`, form);
+        await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/holidays/add`, form, {
+          headers: buildRequesterHeaders(user),
+        });
         showToast("Holiday added successfully");
       }
 
@@ -107,7 +111,9 @@ const AdminHolidays = () => {
     if (!window.confirm("Delete this holiday?")) return;
 
     try {
-      await axios.delete(`${process.env.REACT_APP_BACKEND_URL}/api/holidays/delete/${id}`);
+      await axios.delete(`${process.env.REACT_APP_BACKEND_URL}/api/holidays/delete/${id}`, {
+        headers: buildRequesterHeaders(user),
+      });
       load();
       showToast("Holiday deleted successfully");
     } catch (error) {

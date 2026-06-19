@@ -19,6 +19,7 @@ import {
 import ValueHelpSelect from './ValueHelpSelect';
 import ValueHelpSearch from './ValueHelpSearch';
 import './TimesheetsPortal.css';
+import { buildRequesterHeaders } from '../utils/requester';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
@@ -391,7 +392,7 @@ function TimesheetDialog({ dialog, onDismiss }) {
 const fetchAPI = async (endpoint, options = {}) => {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
-    headers: { 'Content-Type': 'application/json', ...options.headers },
+    headers: buildRequesterHeaders(null, { 'Content-Type': 'application/json', ...options.headers }),
   });
   if (!response.ok) {
     let errMsg = 'API request failed';
@@ -404,6 +405,7 @@ const fetchAPI = async (endpoint, options = {}) => {
 const uploadAPI = async (endpoint, formData) => {
   const response = await fetch(`${API_BASE}${endpoint}`, {
     method: 'POST',
+    headers: buildRequesterHeaders(),
     body: formData,
   });
   if (!response.ok) {
@@ -7907,10 +7909,11 @@ function TimesheetsContent({ user }) {
   );
 }
 
-export default function Timesheets({ user }) {
+export default function Timesheets({ user, adminView = false }) {
+  const effectiveUser = adminView && user?.role !== 'Admin' ? { ...user, role: 'Admin' } : user;
   return (
     <TimesheetUiProvider>
-      <TimesheetsContent user={user} />
+      <TimesheetsContent user={effectiveUser} />
     </TimesheetUiProvider>
   );
 }

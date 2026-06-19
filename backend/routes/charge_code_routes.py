@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime
 from config.db import mongo
+from utils.access_control import require_admin_menu_access
 
 charge_code_bp = Blueprint("charge_code_bp", __name__)
 
@@ -201,6 +202,10 @@ def create_charge_code():
     }
     """
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         data         = request.get_json() or {}
         code         = clean_text(data.get("code")).upper()
         name         = clean_text(data.get("name"))
@@ -287,6 +292,10 @@ def create_charge_code():
 def get_all_charge_codes():
     """Get all charge codes. Optional: ?active_only=true"""
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         ensure_reference_charge_codes()
         active_only = request.args.get("active_only", "false").lower() == "true"
         query = {"code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES}}
@@ -324,6 +333,10 @@ def update_charge_code(charge_code_id):
     Body: { name, description, project_name, type, sub_type, client, country, owner_id, is_active }
     """
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         data = request.get_json() or {}
 
         try:
@@ -397,6 +410,10 @@ def update_charge_code(charge_code_id):
 def delete_charge_code(charge_code_id):
     """Delete a charge code (only if not currently assigned)."""
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         try:
             cc_obj_id = ObjectId(charge_code_id)
         except Exception:
@@ -440,6 +457,10 @@ def assign_charge_code():
     }
     """
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         cleanup_deprecated_charge_codes()
         data            = request.get_json() or {}
         employee_id     = data.get("employee_id")
@@ -645,6 +666,10 @@ def get_employee_charge_codes(employee_id):
 def get_all_assignments():
     """Get all charge code assignments (admin view)."""
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         cleanup_deprecated_charge_codes()
         assignments = list(
             mongo.db.charge_code_assignments.find({
@@ -666,6 +691,10 @@ def get_all_assignments():
 def remove_charge_code_assignment(assignment_id):
     """Soft-delete a charge code assignment (marks is_active = False)."""
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         try:
             assign_obj_id = ObjectId(assignment_id)
         except Exception:
@@ -703,6 +732,10 @@ def bulk_assign_charge_codes():
     }
     """
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         cleanup_deprecated_charge_codes()
         data            = request.get_json() or {}
         employee_ids    = data.get("employee_ids", [])

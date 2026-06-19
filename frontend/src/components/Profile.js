@@ -14,6 +14,7 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const cleanDate = (value) => {
   if (!value) return null;
@@ -26,6 +27,7 @@ const cleanDate = (value) => {
 };
 
 const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) => {
+  const requesterHeaders = buildRequesterHeaders(user);
   const [employeeId, setEmployeeId] = useState("");
   const [profile, setProfile] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -240,7 +242,10 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
 
     await fetch(
       `${process.env.REACT_APP_BACKEND_URL}/api/users/delete_project/${employeeId}/${projectId}`,
-      { method: "DELETE" }
+      {
+        method: "DELETE",
+        headers: requesterHeaders,
+      }
     );
 
     fetchProfile(employeeId);
@@ -275,7 +280,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
     try {
       const response = await fetch(url, {
         method: projectForm._id ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildRequesterHeaders(user, { "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
       });
 
@@ -327,7 +332,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
         `${process.env.REACT_APP_BACKEND_URL}/api/users/update_user/${employeeId}`,
         {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: buildRequesterHeaders(user, { "Content-Type": "application/json" }),
           body: JSON.stringify(updateData),
         }
       );
@@ -413,7 +418,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
         `${process.env.REACT_APP_BACKEND_URL}/api/users/update_user/${employeeId}`,
         {
           method: "PUT",
-          headers: { "Content-Type": "application/json" },
+          headers: buildRequesterHeaders(user, { "Content-Type": "application/json" }),
           body: JSON.stringify(requestBody),
         }
       );
@@ -548,6 +553,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
                     `${process.env.REACT_APP_BACKEND_URL}/api/users/upload_photo/${employeeId}`,
                     {
                       method: "POST",
+                      headers: requesterHeaders,
                       body: formData,
                     }
                   );

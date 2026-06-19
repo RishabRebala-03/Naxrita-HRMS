@@ -14,31 +14,34 @@ import {
   Mail,
   NotebookPen,
   ScrollText,
+  Shield,
   UserCog,
   Users,
 } from "lucide-react";
 import logo from "../assets/naxicon.png";
+import { canAccessSection } from "../utils/accessControl";
 
 const buttons = [
-  { key: "dashboard", label: "Overview", roles: ["Admin", "Manager", "Employee"], icon: Home },
-  { key: "employees", label: "Employees", roles: ["Admin", "Manager"], icon: Users },
-  { key: "leaves", label: "Leave Management", roles: ["Admin", "Manager", "Employee"], icon: ClipboardList },
-  { key: "tea-coffee", label: "Tea and Coffee", roles: ["Admin", "Manager", "Employee"], icon: Coffee },
-  { key: "timesheets", label: "MyTimeAndExpenses", roles: ["Admin", "Manager", "Employee"], icon: Clock3 },
-  { key: "payslips", label: "Payslips", roles: ["Admin", "Manager", "Employee"], icon: FileBadge2 },
-  { key: "policy", label: "Policies", roles: ["Admin", "Manager", "Employee"], icon: FileText },
-  { key: "projects", label: "Projects", roles: ["Admin"], icon: FolderKanban },
-  { key: "apply-behalf", label: "Apply on Behalf", roles: ["Admin"], icon: NotebookPen },
-  { key: "mail", label: "Mail Admin", roles: ["Admin"], icon: Mail },
-  { key: "logs", label: "Audit Logs", roles: ["Admin"], icon: ScrollText },
-  { key: "add", label: "Employee Setup", roles: ["Admin"], icon: UserCog },
-  { key: "holidays", label: "Holiday Calendar", roles: ["Admin"], icon: Briefcase },
-  { key: "calendar", label: "Calendar", roles: ["Admin", "Manager", "Employee"], icon: CalendarDays },
+  { key: "dashboard", label: "Overview", icon: Home },
+  { key: "employees", label: "Employees", icon: Users },
+  { key: "leaves", label: "Leave Management", icon: ClipboardList },
+  { key: "tea-coffee", label: "Tea and Coffee", icon: Coffee },
+  { key: "timesheets", label: "MyTimeAndExpenses", icon: Clock3 },
+  { key: "payslips", label: "Payslips", icon: FileBadge2 },
+  { key: "policy", label: "Policies", icon: FileText },
+  { key: "projects", label: "Projects", icon: FolderKanban },
+  { key: "apply-behalf", label: "Apply on Behalf", icon: NotebookPen },
+  { key: "mail", label: "Mail Admin", icon: Mail },
+  { key: "logs", label: "Audit Logs", icon: ScrollText },
+  { key: "add", label: "Employee Setup", icon: UserCog },
+  { key: "holidays", label: "Holiday Calendar", icon: Briefcase },
+  { key: "access-management", label: "Access Management", icon: Shield },
+  { key: "calendar", label: "Calendar", icon: CalendarDays },
 ];
 
-const Sidebar = ({ section, setSection, role, restricted = [], isOpen, isCollapsed, onToggleCollapse }) => {
+const Sidebar = ({ section, setSection, currentUser, restricted = [], isOpen, isCollapsed, onToggleCollapse }) => {
   const visibleButtons = buttons.filter(
-    (btn) => !restricted.includes(btn.key) && (!role || btn.roles.includes(role))
+    (btn) => !restricted.includes(btn.key) && canAccessSection(currentUser, btn.key)
   );
 
   return (

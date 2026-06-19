@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
 const STATUSES = ["All", "Active", "Completed", "On Hold", "Planning"];
@@ -113,7 +114,7 @@ const buildSearchSuggestions = (items, fields) => {
   );
 };
 
-const Projects = () => {
+const Projects = ({ user }) => {
   const [activeTab, setActiveTab] = useState("portfolio");
   const [projects, setProjects] = useState([]);
   const [users, setUsers] = useState([]);
@@ -154,9 +155,10 @@ const Projects = () => {
   const fetchWorkspace = async () => {
     setLoading(true);
     try {
+      const requesterHeaders = buildRequesterHeaders(user);
       const [projectRes, userRes, timesheetRes, leaveRes] = await Promise.all([
         fetch(`${API_BASE}/api/projects/`),
-        fetch(`${API_BASE}/api/users/get_all_employees`),
+        fetch(`${API_BASE}/api/users/get_all_employees`, { headers: requesterHeaders }),
         fetch(`${API_BASE}/api/timesheets/all`),
         fetch(`${API_BASE}/api/leaves/all`),
       ]);
@@ -376,7 +378,7 @@ const Projects = () => {
     try {
       const response = await fetch(`${API_BASE}/api/projects/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildRequesterHeaders(user, { "Content-Type": "application/json" }),
         body: JSON.stringify(projectForm),
       });
       const data = await response.json();
@@ -395,7 +397,10 @@ const Projects = () => {
 
   const handleDeleteProject = async (projectId) => {
     if (!window.confirm("Delete this project and remove it from assigned employees?")) return;
-    const response = await fetch(`${API_BASE}/api/projects/${projectId}`, { method: "DELETE" });
+    const response = await fetch(`${API_BASE}/api/projects/${projectId}`, {
+      method: "DELETE",
+      headers: buildRequesterHeaders(user),
+    });
     if (!response.ok) {
       showToast("Failed to delete project");
       return;

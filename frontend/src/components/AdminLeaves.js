@@ -30,6 +30,7 @@ import {
 } from "recharts";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const chartPalette = ["#0a6ed1", "#5b738b", "#8fb5d9", "#d1e3f8", "#0f2742", "#91c8f6"];
 const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Early Logout", "LWP"];
@@ -216,9 +217,13 @@ const AdminLeaves = ({ user }) => {
       setLoading(true);
 
       const [pendingRes, allLeavesRes, usersRes] = await Promise.all([
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/pending/admin`),
+        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/pending/admin`, {
+          headers: buildRequesterHeaders(user),
+        }),
         axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/all`),
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/users/`),
+        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/users/`, {
+          headers: buildRequesterHeaders(user),
+        }),
       ]);
 
       setPendingLeaves(Array.isArray(pendingRes.data) ? pendingRes.data : []);
@@ -655,7 +660,8 @@ const AdminLeaves = ({ user }) => {
 
       const response = await axios.put(
         `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
-        payload
+        payload,
+        { headers: buildRequesterHeaders(user) }
       );
 
       setMessage(response.data?.message || `Leave ${status.toLowerCase()} successfully.`);

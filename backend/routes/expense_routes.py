@@ -6,6 +6,7 @@ from bson import ObjectId
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from config.db import mongo
+from utils.access_control import has_admin_menu_access, resolve_requester
 
 expense_bp = Blueprint("expense_bp", __name__)
 UPLOAD_FOLDER = os.path.join("static", "expense_documents")
@@ -43,6 +44,16 @@ def list_expenses():
         employee_id = request.args.get("employee_id")
         role = request.args.get("role", "")
         query = {}
+        requester = resolve_requester()
+        has_admin_expense_access = bool(
+            requester and (
+                str(requester.get("role", "")).strip().lower() == "admin"
+                or has_admin_menu_access(requester, "timesheets")
+            )
+        )
+
+        if role.lower() == "admin" and not has_admin_expense_access:
+            return jsonify({"error": "You do not have access to admin expense review"}), 403
 
         if employee_id and role.lower() != "admin":
             query["employee_id"] = ObjectId(employee_id)

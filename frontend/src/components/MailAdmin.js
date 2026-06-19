@@ -9,6 +9,7 @@ import {
   Send,
   Settings,
 } from "lucide-react";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
 const MAIL_API = `${API_BASE}/api/mail`;
@@ -53,20 +54,21 @@ export default function MailAdmin({ user }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const requesterHeaders = useMemo(() => buildRequesterHeaders(user), [user]);
 
   const fetchSettings = useCallback(async () => {
-    const response = await axios.get(`${MAIL_API}/settings`);
+    const response = await axios.get(`${MAIL_API}/settings`, { headers: requesterHeaders });
     setSettings({
       ...DEFAULT_SETTINGS,
       ...response.data,
       smtp_password: "",
     });
-  }, []);
+  }, [requesterHeaders]);
 
   const fetchLogs = useCallback(async () => {
-    const response = await axios.get(`${MAIL_API}/logs?limit=150`);
+    const response = await axios.get(`${MAIL_API}/logs?limit=150`, { headers: requesterHeaders });
     setLogs(Array.isArray(response.data) ? response.data : []);
-  }, []);
+  }, [requesterHeaders]);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -110,7 +112,7 @@ export default function MailAdmin({ user }) {
       if (!payload.smtp_password) {
         delete payload.smtp_password;
       }
-      const response = await axios.put(`${MAIL_API}/settings`, payload);
+      const response = await axios.put(`${MAIL_API}/settings`, payload, { headers: requesterHeaders });
       setSettings({ ...DEFAULT_SETTINGS, ...response.data.settings, smtp_password: "" });
       setStatus("SMTP settings saved");
     } catch (saveError) {
@@ -124,7 +126,7 @@ export default function MailAdmin({ user }) {
     try {
       setStatus("");
       setError("");
-      await axios.post(`${MAIL_API}/test`, { to_email: testEmail });
+      await axios.post(`${MAIL_API}/test`, { to_email: testEmail }, { headers: requesterHeaders });
       setStatus("Test mail sent");
       await fetchLogs();
     } catch (testError) {
@@ -137,7 +139,7 @@ export default function MailAdmin({ user }) {
     try {
       setStatus("");
       setError("");
-      const response = await axios.get(`${MAIL_API}/health`);
+      const response = await axios.get(`${MAIL_API}/health`, { headers: requesterHeaders });
       setStatus(`SMTP health: ${response.data.status}`);
     } catch (healthError) {
       setError(healthError.response?.data?.error || "SMTP health check failed");
@@ -148,7 +150,11 @@ export default function MailAdmin({ user }) {
     try {
       setStatus("");
       setError("");
-      await axios.post(`${MAIL_API}/retry`, logId ? { log_id: logId } : { retry_all: true });
+      await axios.post(
+        `${MAIL_API}/retry`,
+        logId ? { log_id: logId } : { retry_all: true },
+        { headers: requesterHeaders }
+      );
       setStatus("Retry queued");
       await fetchLogs();
     } catch (retryError) {

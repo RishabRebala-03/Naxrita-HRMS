@@ -27,6 +27,8 @@ import Timesheets from "./components/Timesheets";
 import Payslips from "./components/Payslips";
 import MailAdmin from "./components/MailAdmin";
 import EnterpriseAssistant from "./components/EnterpriseAssistant";
+import AccessManagement from "./components/AccessManagement";
+import { canAccessSection, hasAdminMenuAccess } from "./utils/accessControl";
 
 // Injects critical CSS to fix mobile scrolling
 const MobileScrollFix = () => (
@@ -106,6 +108,43 @@ const ForceScroll = () => {
   }, []);
 
   return null;
+};
+
+const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
+  const [activeTab, setActiveTab] = useState("personal");
+
+  const personalLabel = baseRole === "Manager" ? "Manager Leave" : "My Leave";
+
+  return (
+    <section className="delegated-leaves-workspace">
+      <div className="leave-tab-strip" role="tablist" aria-label="Delegated leave workspace tabs">
+        <button
+          type="button"
+          className={`leave-tab-button ${activeTab === "personal" ? "active" : ""}`}
+          onClick={() => setActiveTab("personal")}
+          role="tab"
+          aria-selected={activeTab === "personal"}
+        >
+          {personalLabel}
+        </button>
+        <button
+          type="button"
+          className={`leave-tab-button ${activeTab === "admin" ? "active" : ""}`}
+          onClick={() => setActiveTab("admin")}
+          role="tab"
+          aria-selected={activeTab === "admin"}
+        >
+          Admin Leaves
+        </button>
+      </div>
+
+      {activeTab === "personal"
+        ? baseRole === "Manager"
+          ? <ManagerLeaves user={user} />
+          : <EmployeeLeaves user={user} navigationState={navigationState} />
+        : <AdminLeaves user={user} />}
+    </section>
+  );
 };
 
 function App() {
@@ -300,7 +339,7 @@ function App() {
               handleSectionChange(s);
               setIsSidebarOpen(false);
             }}
-            role="Admin"
+            currentUser={currentUser}
             isOpen={isSidebarOpen}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
@@ -315,8 +354,7 @@ function App() {
               handleSectionChange(s);
               setIsSidebarOpen(false);
             }}
-            role="Manager"
-            restricted={["add", "holidays"]}
+            currentUser={currentUser}
             isOpen={isSidebarOpen}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
@@ -332,8 +370,7 @@ function App() {
               handleSectionChange(s);
               setIsSidebarOpen(false);
             }}
-            role="Employee"
-            restricted={["add", "employees", "holidays"]}
+            currentUser={currentUser}
             isOpen={isSidebarOpen}
             isCollapsed={isSidebarCollapsed}
             onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
@@ -376,7 +413,7 @@ function App() {
         return <ProgressTracker user={currentUser} />;
 
       case "add":
-        return role === "Admin" ? <UserForm /> : <AccessDenied />;
+        return canAccessSection(currentUser, "add") ? <UserForm currentUser={currentUser} /> : <AccessDenied />;
 
       case "users":
         return role === "Admin" ? <UserList /> : <AccessDenied />;
@@ -385,19 +422,19 @@ function App() {
         return role === "Admin" ? <ManagerInfo /> : <AccessDenied />;
 
       case "holidays":
-        return role === "Admin" ? <AdminHolidays /> : <AccessDenied />;
+        return canAccessSection(currentUser, "holidays") ? <AdminHolidays user={currentUser} /> : <AccessDenied />;
 
       case "apply-behalf":
-        return role === "Admin" ? <AdminApplyLeave user={currentUser} /> : <AccessDenied />;
+        return canAccessSection(currentUser, "apply-behalf") ? <AdminApplyLeave user={currentUser} /> : <AccessDenied />;
 
       case "logs":
-        return role === "Admin" ? <AdminLogs user={currentUser} /> : <AccessDenied />;
+        return canAccessSection(currentUser, "logs") ? <AdminLogs user={currentUser} /> : <AccessDenied />;
 
       case "mail":
-        return role === "Admin" ? <MailAdmin user={currentUser} /> : <AccessDenied />;
+        return canAccessSection(currentUser, "mail") ? <MailAdmin user={currentUser} /> : <AccessDenied />;
 
       case "employees":
-        if (role === "Admin") {
+        if (role === "Admin" || hasAdminMenuAccess(currentUser, "employees")) {
           return (
             <EmployeeList
               user={currentUser}
@@ -413,6 +450,14 @@ function App() {
       case "leaves":
         if (role === "Admin") {
           return <AdminLeaves user={currentUser} />;
+        } else if (hasAdminMenuAccess(currentUser, "leaves")) {
+          return (
+            <DelegatedLeavesWorkspace
+              user={currentUser}
+              baseRole={role}
+              navigationState={sectionState}
+            />
+          );
         } else if (role === "Manager") {
           return <ManagerLeaves user={currentUser} />;
         } else {
@@ -443,18 +488,21 @@ function App() {
         return <Policy user={currentUser} />;
 
       case "projects":
-        return role === "Admin" ? <Projects user={currentUser} /> : <AccessDenied />;
+        return canAccessSection(currentUser, "projects") ? <Projects user={currentUser} /> : <AccessDenied />;
+
+      case "access-management":
+        return role === "Admin" ? <AccessManagement user={currentUser} onCurrentUserUpdate={handleUserUpdate} /> : <AccessDenied />;
 
       // ✅ Timesheets - available to all roles
       case "timesheets":
         return (
           <div className="timesheets-page-shell">
-            <Timesheets user={currentUser} />
+            <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} />
           </div>
         );
 
       case "payslips":
-        return <Payslips user={currentUser} />;
+        return <Payslips user={currentUser} adminView={hasAdminMenuAccess(currentUser, "payslips")} />;
 
       default:
         if (role === "Admin") {

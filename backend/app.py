@@ -40,7 +40,7 @@ CORS(app,
              "http://me.naxrita.com"
          ],
          "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-         "allow_headers": ["Content-Type", "Authorization"],
+         "allow_headers": ["Content-Type", "Authorization", "X-User-Id"],
          "supports_credentials": True
      }})
 
@@ -57,7 +57,7 @@ def before_all_requests():
         if origin in ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://me.naxrita.com']:
             response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Id'
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         return response, 200
 
@@ -69,7 +69,7 @@ def after_request(response):
     if origin in ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://me.naxrita.com']:
         response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-User-Id'
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     return response
 

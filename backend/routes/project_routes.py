@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime
 from config.db import mongo
+from utils.access_control import require_admin_menu_access
 
 project_bp = Blueprint("project_bp", __name__)
 
@@ -20,6 +21,10 @@ def serialize_project(obj):
 @project_bp.route("/create", methods=["POST"])
 def create_project():
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         data = request.get_json()
         
         # Validate required fields
@@ -103,6 +108,10 @@ def get_project(project_id):
 @project_bp.route("/<project_id>", methods=["PUT"])
 def update_project(project_id):
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         data = request.get_json()
         update_data = {}
         
@@ -145,6 +154,10 @@ def update_project(project_id):
 @project_bp.route("/<project_id>", methods=["DELETE"])
 def delete_project(project_id):
     try:
+        _, error_response = require_admin_menu_access("projects")
+        if error_response:
+            return error_response
+
         # Remove project from all users first
         mongo.db.users.update_many(
             {"projects.projectId": ObjectId(project_id)},

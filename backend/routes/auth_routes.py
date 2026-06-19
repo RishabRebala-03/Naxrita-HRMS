@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from config.db import mongo
 import os
+from utils.access_control import normalize_admin_menu_access
 
 auth_bp = Blueprint("auth_bp", __name__)
 
@@ -72,6 +73,7 @@ def login():
             "designation": user.get("designation", ""),
             "department": user.get("department", ""),
             "is_active": user.get("is_active", True),
+            "adminMenuAccess": normalize_admin_menu_access(user.get("adminMenuAccess")),
             "photoUrl": photo_url   # 👈 ADD THIS
         }
 

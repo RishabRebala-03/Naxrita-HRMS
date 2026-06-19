@@ -24,6 +24,7 @@ import {
   YAxis,
 } from "recharts";
 import OrganizationHierarchy from "./OrganizationHierarchy";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -218,7 +219,8 @@ const AdminDashboard = ({ user, onNavigate }) => {
       setLoading(true);
 
       const employeesRes = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_all_employees`
+        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_all_employees`,
+        { headers: buildRequesterHeaders(user) }
       );
       const employees = Array.isArray(employeesRes.data)
         ? employeesRes.data.filter((employee) => employee && employee._id)
