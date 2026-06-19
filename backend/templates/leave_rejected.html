@@ -2,7 +2,8 @@
 {% set title = "Leave rejected" %}
 {% block content %}
   <h1>Leave Rejected</h1>
-  <p>Your leave request was rejected. The remarks are included below.</p>
+  <p>Hello {{ recipient_name }},</p>
+  <p>The leave request for {{ employee_name }} was rejected. The details are below.</p>
 
   <table class="summary" role="presentation">
     <tr><td class="label">Employee</td><td class="value">{{ employee_name }}</td></tr>
@@ -14,6 +15,6 @@
   </table>
 
   <div class="actions">
-    <a class="button" href="{{ approval_url }}">Open Request</a>
+    <a class="button" href="{{ hrms_leaves_url }}">Open Leaves Page</a>
   </div>
 {% endblock %}

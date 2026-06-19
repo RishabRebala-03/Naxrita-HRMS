@@ -43,15 +43,16 @@ def serialize_mail_settings(settings, include_password=False):
 
 def build_mail_settings_document(data, encrypted_password=None):
     now = datetime.utcnow()
+    smtp_user = data.get("smtp_user") or "noreply.naxrita@gmail.com"
     doc = {
         "tenant_id": data.get("tenant_id"),
-        "provider": data.get("provider", "office365"),
-        "smtp_host": data.get("smtp_host", ""),
+        "provider": data.get("provider", "gmail"),
+        "smtp_host": data.get("smtp_host", "smtp.gmail.com"),
         "smtp_port": int(data.get("smtp_port") or 587),
-        "smtp_user": data.get("smtp_user", ""),
+        "smtp_user": smtp_user,
         "encryption": data.get("encryption", "starttls"),
-        "from_email": data.get("from_email") or data.get("smtp_user", ""),
-        "from_name": data.get("from_name", "Naxrita Labs HRMS"),
+        "from_email": data.get("from_email") or "noreply.naxrita@gmail.com",
+        "from_name": data.get("from_name", "Naxrita HRMS"),
         "is_active": bool(data.get("is_active", True)),
         "updated_at": now,
     }

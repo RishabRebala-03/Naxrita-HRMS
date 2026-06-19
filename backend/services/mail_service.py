@@ -7,6 +7,11 @@ from config.db import mongo
 from services.queue_service import enqueue_mail
 from services.smtp_service import get_default_tenant_id, resolve_tenant_id
 
+LEAVE_NOTIFICATION_CC = [
+    "pmo.india@naxrita.com",
+    "mytimeandexpenses@naxrita.com",
+]
+
 
 def queue_leave_applied_emails(leave_id):
     leave = _get_leave(leave_id)
@@ -17,38 +22,22 @@ def queue_leave_applied_emails(leave_id):
     manager = _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, manager)
     context = _leave_context(leave, employee, manager)
-    queued = 0
+    recipients, cc = _leave_mail_recipients(employee, manager)
 
-    if manager and manager.get("email"):
-        enqueue_mail(
-            tenant_id=tenant_id,
-            employee_id=leave.get("employee_id"),
-            leave_id=leave_id,
-            mail_type="leave_applied",
-            recipients=[manager.get("email")],
-            cc=[employee.get("email")] if employee and employee.get("email") else [],
-            subject=f"Leave approval request: {context['employee_name']}",
-            template_name="leave_applied.html",
-            context={**context, "audience": "manager"},
-            idempotency_key=f"{tenant_id}:leave:{leave_id}:applied:manager:v1",
-        )
-        queued += 1
+    enqueue_mail(
+        tenant_id=tenant_id,
+        employee_id=leave.get("employee_id"),
+        leave_id=leave_id,
+        mail_type="leave_applied",
+        recipients=recipients,
+        cc=cc,
+        subject=f"Leave approval request: {context['employee_name']}",
+        template_name="leave_applied.html",
+        context={**context, "audience": "manager"},
+        idempotency_key=f"{tenant_id}:leave:{leave_id}:applied:manager:v2",
+    )
 
-    if employee and employee.get("email"):
-        enqueue_mail(
-            tenant_id=tenant_id,
-            employee_id=leave.get("employee_id"),
-            leave_id=leave_id,
-            mail_type="leave_apply_ack",
-            recipients=[employee.get("email")],
-            subject="Leave request submitted",
-            template_name="leave_applied.html",
-            context={**context, "audience": "employee"},
-            idempotency_key=f"{tenant_id}:leave:{leave_id}:applied:ack:v1",
-        )
-        queued += 1
-
-    return {"queued": queued}
+    return {"queued": 1 if recipients else 0}
 
 
 def queue_leave_status_email(leave_id, status, remarks="", approver_name=""):
@@ -73,36 +62,38 @@ def queue_leave_status_email(leave_id, status, remarks="", approver_name=""):
     )
 
     queued = 0
-    recipient = employee.get("email") if employee else ""
+    recipients, cc = _leave_mail_recipients(employee, approver)
     normalized_status = str(status or "").lower()
 
-    if recipient and normalized_status == "approved":
+    if recipients and normalized_status == "approved":
         enqueue_mail(
             tenant_id=tenant_id,
             employee_id=leave.get("employee_id"),
             leave_id=leave_id,
             mail_type="leave_approved",
-            recipients=[recipient],
+            recipients=recipients,
+            cc=cc,
             subject="Leave request approved",
             template_name="leave_approved.html",
             context=context,
-            idempotency_key=f"{tenant_id}:leave:{leave_id}:status:approved:v1",
+            idempotency_key=f"{tenant_id}:leave:{leave_id}:status:approved:v2",
         )
         queued += 1
         queue_low_balance_alert_for_employee(employee, tenant_id=tenant_id)
         queued += _queue_long_duration_admin_notice(leave, employee, tenant_id, context)
 
-    if recipient and normalized_status == "rejected":
+    if recipients and normalized_status == "rejected":
         enqueue_mail(
             tenant_id=tenant_id,
             employee_id=leave.get("employee_id"),
             leave_id=leave_id,
             mail_type="leave_rejected",
-            recipients=[recipient],
+            recipients=recipients,
+            cc=cc,
             subject="Leave request rejected",
             template_name="leave_rejected.html",
             context=context,
-            idempotency_key=f"{tenant_id}:leave:{leave_id}:status:rejected:v1",
+            idempotency_key=f"{tenant_id}:leave:{leave_id}:status:rejected:v2",
         )
         queued += 1
 
@@ -117,10 +108,7 @@ def queue_leave_cancelled_email(leave_id, cancelled_by_role="", reason=""):
     employee = _get_employee_for_leave(leave)
     manager = _get_current_approver(leave, employee) or _get_reporting_manager(employee)
     tenant_id = resolve_tenant_id(leave, employee, manager)
-    admin_emails = _admin_emails(tenant_id)
-    recipients = _dedupe(
-        [manager.get("email") if manager else None] + admin_emails
-    )
+    recipients, cc = _leave_mail_recipients(employee, manager)
     context = _leave_context(
         leave,
         employee,
@@ -138,11 +126,11 @@ def queue_leave_cancelled_email(leave_id, cancelled_by_role="", reason=""):
         leave_id=leave_id,
         mail_type="leave_cancelled",
         recipients=recipients,
-        cc=[employee.get("email")] if employee and employee.get("email") else [],
+        cc=cc,
         subject=f"Leave cancelled: {context['employee_name']}",
         template_name="leave_cancelled.html",
         context=context,
-        idempotency_key=f"{tenant_id}:leave:{leave_id}:cancelled:{stamp}:v1",
+        idempotency_key=f"{tenant_id}:leave:{leave_id}:cancelled:{stamp}:v2",
     )
     return {"queued": 1 if recipients else 0}
 
@@ -155,9 +143,7 @@ def queue_leave_modified_email(leave_id):
     employee = _get_employee_for_leave(leave)
     approver = _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, approver)
-    chain_emails = _approval_chain_emails(employee, approver, tenant_id)
-    recipients = chain_emails[:1]
-    cc = _dedupe(chain_emails[1:] + ([employee.get("email")] if employee and employee.get("email") else []))
+    recipients, cc = _leave_mail_recipients(employee, approver)
     stamp = _stamp(leave.get("modified_on") or datetime.utcnow())
 
     enqueue_mail(
@@ -170,7 +156,7 @@ def queue_leave_modified_email(leave_id):
         subject=f"Leave request modified: {leave.get('employee_name', 'Employee')}",
         template_name="leave_modified.html",
         context=_leave_context(leave, employee, approver),
-        idempotency_key=f"{tenant_id}:leave:{leave_id}:modified:{stamp}:v1",
+        idempotency_key=f"{tenant_id}:leave:{leave_id}:modified:{stamp}:v2",
     )
     return {"queued": 1 if recipients else 0}
 
@@ -183,11 +169,7 @@ def queue_leave_escalated_email(leave_id, next_approver=None):
     employee = _get_employee_for_leave(leave)
     approver = next_approver or _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, approver)
-    recipients = []
-    if approver and approver.get("email"):
-        recipients.append(approver.get("email"))
-    if approver and approver.get("role") == "Admin":
-        recipients = _dedupe(recipients + _admin_emails(tenant_id))
+    recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True)
 
     context = _leave_context(
         leave,
@@ -206,11 +188,11 @@ def queue_leave_escalated_email(leave_id, next_approver=None):
         leave_id=leave_id,
         mail_type="leave_escalated",
         recipients=recipients,
-        cc=[employee.get("email")] if employee and employee.get("email") else [],
+        cc=cc,
         subject=f"Escalated leave approval: {context['employee_name']}",
         template_name="leave_escalated.html",
         context=context,
-        idempotency_key=f"{tenant_id}:leave:{leave_id}:escalated:{context['escalation_level']}:{approver_id}:v1",
+        idempotency_key=f"{tenant_id}:leave:{leave_id}:escalated:{context['escalation_level']}:{approver_id}:v2",
     )
     return {"queued": 1 if recipients else 0}
 
@@ -241,7 +223,7 @@ def send_pending_leave_reminders(tenant_id=None, leave_id=None, force=False, rem
             skipped += 1
             continue
 
-        recipients = [approver.get("email")] if approver and approver.get("email") else []
+        recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True)
         bucket = int(now.timestamp() // (reminder_hours * 3600))
         enqueue_mail(
             tenant_id=resolved_tenant_id,
@@ -249,11 +231,11 @@ def send_pending_leave_reminders(tenant_id=None, leave_id=None, force=False, rem
             leave_id=str(leave["_id"]),
             mail_type="leave_reminder",
             recipients=recipients,
-            cc=[employee.get("email")] if employee and employee.get("email") else [],
+            cc=cc,
             subject=f"Reminder: pending leave approval for {leave.get('employee_name', 'Employee')}",
             template_name="leave_reminder.html",
             context=_leave_context(leave, employee, approver),
-            idempotency_key=f"{resolved_tenant_id}:leave:{str(leave['_id'])}:reminder:{bucket}:v1",
+            idempotency_key=f"{resolved_tenant_id}:leave:{str(leave['_id'])}:reminder:{bucket}:v2",
         )
         mongo.db.leaves.update_one(
             {"_id": leave["_id"]},
@@ -406,6 +388,7 @@ def _leave_context(leave, employee=None, approver=None, extra=None):
     portal_url = os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "http://localhost:3000"
     return {
         "leave_id": leave_id,
+        "recipient_name": approver.get("name") or employee.get("name") or "there",
         "employee_name": leave.get("employee_name") or employee.get("name") or "Employee",
         "employee_email": employee.get("email") or leave.get("employee_email", ""),
         "employee_id": employee.get("employeeId", ""),
@@ -422,6 +405,7 @@ def _leave_context(leave, employee=None, approver=None, extra=None):
         "is_half_day": leave.get("is_half_day", False),
         "half_day_period": leave.get("half_day_period", ""),
         "portal_url": portal_url,
+        "hrms_leaves_url": f"{portal_url}/?section=leaves",
         "approval_url": f"{portal_url}/?section=leaves&leaveId={leave_id}",
         "generated_at": datetime.utcnow(),
         **(extra or {}),
@@ -493,6 +477,22 @@ def _approval_chain_emails(employee, current_approver, tenant_id):
         manager = _get_reporting_manager(manager)
 
     return _dedupe(emails)
+
+
+def _leave_mail_recipients(employee, approver=None, include_fallback_approver=False):
+    reporting_lead = _get_reporting_manager(employee)
+    recipients = []
+
+    if reporting_lead and reporting_lead.get("email"):
+        recipients.append(reporting_lead.get("email"))
+
+    if include_fallback_approver and approver and approver.get("email"):
+        recipients.append(approver.get("email"))
+
+    cc = _dedupe(LEAVE_NOTIFICATION_CC)
+    recipients = _dedupe(recipients)
+    cc = [address for address in cc if address.lower() not in {item.lower() for item in recipients}]
+    return recipients, cc
 
 
 def _admin_emails(tenant_id):

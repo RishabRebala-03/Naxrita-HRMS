@@ -1,8 +1,9 @@
 {% extends "email_base.html" %}
 {% set title = "Pending leave reminder" %}
 {% block content %}
-  <h1>Pending Approval Reminder</h1>
-  <p>A leave request from {{ employee_name }} is still pending your action.</p>
+  <h1>Pending Leave Reminder</h1>
+  <p>Hello {{ recipient_name }},</p>
+  <p>A leave request from {{ employee_name }} is still pending action.</p>
 
   <table class="summary" role="presentation">
     <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
@@ -13,6 +14,6 @@
   </table>
 
   <div class="actions">
-    <a class="button" href="{{ approval_url }}">Review Request</a>
+    <a class="button" href="{{ hrms_leaves_url }}">Open Leaves Page</a>
   </div>
 {% endblock %}

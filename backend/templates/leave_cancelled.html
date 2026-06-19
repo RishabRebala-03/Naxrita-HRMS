@@ -2,7 +2,8 @@
 {% set title = "Leave cancelled" %}
 {% block content %}
   <h1>Leave Cancelled</h1>
-  <p>{{ employee_name }}'s leave request has been cancelled{% if cancelled_by_role %} by {{ cancelled_by_role }}{% endif %}.</p>
+  <p>Hello {{ recipient_name }},</p>
+  <p>The leave request for {{ employee_name }} has been cancelled{% if cancelled_by_role %} by {{ cancelled_by_role }}{% endif %}.</p>
 
   <table class="summary" role="presentation">
     <tr><td class="label">Employee</td><td class="value">{{ employee_name }}</td></tr>
@@ -13,6 +14,6 @@
   </table>
 
   <div class="actions">
-    <a class="button" href="{{ approval_url }}">Open Request</a>
+    <a class="button" href="{{ hrms_leaves_url }}">Open Leaves Page</a>
   </div>
 {% endblock %}

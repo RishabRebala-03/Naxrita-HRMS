@@ -2,6 +2,7 @@
 {% set title = "Daily leave summary" %}
 {% block content %}
   <h1>Daily Leave Summary</h1>
+  <p>Hello {{ recipient_name|default("there") }},</p>
   <p>Summary for {{ summary_date|date_label }}.</p>
 
   <table class="summary" role="presentation">
@@ -20,6 +21,6 @@
   {% endif %}
 
   <div class="actions">
-    <a class="button" href="{{ portal_url }}">Open HRMS</a>
+    <a class="button" href="{{ hrms_leaves_url|default(portal_url) }}">Open Leaves Page</a>
   </div>
 {% endblock %}

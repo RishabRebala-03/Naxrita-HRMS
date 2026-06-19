@@ -15,14 +15,14 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
 const MAIL_API = `${API_BASE}/api/mail`;
 
 const DEFAULT_SETTINGS = {
-  provider: "office365",
-  smtp_host: "smtp.office365.com",
+  provider: "gmail",
+  smtp_host: "smtp.gmail.com",
   smtp_port: 587,
-  smtp_user: "",
+  smtp_user: "noreply.naxrita@gmail.com",
   smtp_password: "",
   encryption: "starttls",
-  from_email: "",
-  from_name: "Naxrita Labs HRMS",
+  from_email: "noreply.naxrita@gmail.com",
+  from_name: "Naxrita HRMS",
   is_active: true,
 };
 

@@ -1,13 +1,9 @@
 {% extends "email_base.html" %}
 {% set title = "Leave request submitted" %}
 {% block content %}
-  {% if audience == "manager" %}
-    <h1>Leave Approval Request</h1>
-    <p>{{ employee_name }} has submitted a leave request that needs your review.</p>
-  {% else %}
-    <h1>Leave Request Received</h1>
-    <p>Your leave request has been submitted and routed to {{ manager_name }} for approval.</p>
-  {% endif %}
+  <h1>Leave Request Submitted</h1>
+  <p>Hello {{ recipient_name }},</p>
+  <p>{{ employee_name }} has submitted a leave request. Please review it on the HRMS leaves page.</p>
 
   <table class="summary" role="presentation">
     <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
@@ -20,11 +16,7 @@
   </table>
 
   <div class="actions">
-    {% if audience == "manager" %}
-      <a class="button" href="{{ approval_url }}">Review Request</a>
-      <a class="button secondary" href="{{ portal_url }}">Open HRMS</a>
-    {% else %}
-      <a class="button" href="{{ approval_url }}">View Request</a>
-    {% endif %}
+    <a class="button" href="{{ hrms_leaves_url }}">Open Leaves Page</a>
+    <a class="button secondary" href="{{ approval_url }}">Open Request</a>
   </div>
 {% endblock %}

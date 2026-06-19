@@ -28,6 +28,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { buildRequesterHeaders } from "../utils/requester";
 import OrganizationHierarchy from "./OrganizationHierarchy";
 import LeaveStatusDot from "./LeaveStatusDot";
 
@@ -550,7 +551,8 @@ const ManagerDashboard = ({ user, onNavigate, onNavigateToProfile }) => {
 
       const response = await axios.put(
         `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
-        payload
+        payload,
+        { headers: buildRequesterHeaders(user) }
       );
 
       if (response.status === 200) {

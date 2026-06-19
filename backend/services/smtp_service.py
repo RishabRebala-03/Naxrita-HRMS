@@ -28,6 +28,12 @@ except Exception:  # pragma: no cover - dependency is declared in requirements.
 logger = logging.getLogger("hrms.mail.smtp")
 
 DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "naxrita-labs")
+DEFAULT_SMTP_PROVIDER = "gmail"
+DEFAULT_SMTP_HOST = "smtp.gmail.com"
+DEFAULT_SMTP_PORT = 587
+DEFAULT_SMTP_USER = "noreply.naxrita@gmail.com"
+DEFAULT_FROM_EMAIL = "noreply.naxrita@gmail.com"
+DEFAULT_FROM_NAME = "Naxrita HRMS"
 
 
 class MailConfigurationError(RuntimeError):
@@ -104,24 +110,24 @@ def decrypt_secret(value):
 
 
 def _env_settings(tenant_id):
-    smtp_host = os.getenv("SMTP_HOST") or os.getenv("MAIL_SERVER")
-    smtp_user = os.getenv("SMTP_USER") or os.getenv("MAIL_USERNAME")
+    smtp_host = os.getenv("SMTP_HOST") or os.getenv("MAIL_SERVER") or DEFAULT_SMTP_HOST
+    smtp_user = os.getenv("SMTP_USER") or os.getenv("MAIL_USERNAME") or DEFAULT_SMTP_USER
     smtp_password = os.getenv("SMTP_PASSWORD") or os.getenv("MAIL_PASSWORD")
-    from_email = os.getenv("SMTP_FROM_EMAIL") or os.getenv("MAIL_SENDER") or smtp_user
+    from_email = os.getenv("SMTP_FROM_EMAIL") or os.getenv("MAIL_SENDER") or DEFAULT_FROM_EMAIL
 
-    if not smtp_host or not from_email:
+    if not smtp_host or not from_email or not smtp_password:
         return None
 
     return {
         "tenant_id": tenant_id,
-        "provider": os.getenv("SMTP_PROVIDER", "office365"),
+        "provider": os.getenv("SMTP_PROVIDER", DEFAULT_SMTP_PROVIDER),
         "smtp_host": smtp_host,
-        "smtp_port": int(os.getenv("SMTP_PORT", "587")),
+        "smtp_port": int(os.getenv("SMTP_PORT", str(DEFAULT_SMTP_PORT))),
         "smtp_user": smtp_user or "",
         "smtp_password": smtp_password or "",
         "encryption": os.getenv("SMTP_ENCRYPTION", "starttls"),
         "from_email": from_email,
-        "from_name": os.getenv("SMTP_FROM_NAME", "Naxrita Labs HRMS"),
+        "from_name": os.getenv("SMTP_FROM_NAME", DEFAULT_FROM_NAME),
         "is_active": os.getenv("MAIL_ENABLED", "true").lower() == "true",
         "source": "env",
     }

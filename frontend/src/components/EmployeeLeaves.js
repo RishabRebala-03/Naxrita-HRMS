@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import { buildRequesterHeaders } from "../utils/requester";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -562,7 +563,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
       const res = await axios.put(
         `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
-        payload
+        payload,
+        { headers: buildRequesterHeaders(user) }
       );
 
       if (res.status === 200) {

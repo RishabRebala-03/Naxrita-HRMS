@@ -1,8 +1,9 @@
 {% extends "email_base.html" %}
 {% set title = "Leave approval escalated" %}
 {% block content %}
-  <h1>Escalated Leave Approval</h1>
-  <p>This pending leave request has been escalated to {{ approver_name }}.</p>
+  <h1>Leave Request Escalated</h1>
+  <p>Hello {{ recipient_name }},</p>
+  <p>This pending leave request for {{ employee_name }} has been escalated.</p>
 
   <table class="summary" role="presentation">
     <tr><td class="label">Employee</td><td class="value">{{ employee_name }}{% if employee_id %} ({{ employee_id }}){% endif %}</td></tr>
@@ -14,6 +15,6 @@
   </table>
 
   <div class="actions">
-    <a class="button" href="{{ approval_url }}">Review Request</a>
+    <a class="button" href="{{ hrms_leaves_url }}">Open Leaves Page</a>
   </div>
 {% endblock %}

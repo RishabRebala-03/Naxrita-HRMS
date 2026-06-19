@@ -1540,6 +1540,8 @@ def update_leave_status(leave_id):
     try:
         data = request.get_json()
         requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
         status = data.get("status")
         rejection_reason = data.get("rejection_reason", "")
         approved_by = data.get("approved_by", "")

@@ -403,7 +403,8 @@ const AdminDashboard = ({ user, onNavigate }) => {
 
       const response = await axios.put(
         `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
-        payload
+        payload,
+        { headers: buildRequesterHeaders(user) }
       );
 
       if (response.status === 200) {
