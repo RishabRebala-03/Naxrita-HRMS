@@ -7540,14 +7540,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     periodTo: '',
     month: '',
   });
-<<<<<<< HEAD
-=======
   const [appliedSummaryFilters, setAppliedSummaryFilters] = useState(summaryFilters);
-  const [workScheduleEditorOpen, setWorkScheduleEditorOpen] = useState(false);
-  const [workScheduleInput, setWorkScheduleInput] = useState('');
-  const [savingWorkSchedule, setSavingWorkSchedule] = useState(false);
-  const [workScheduleOverrideValue, setWorkScheduleOverrideValue] = useState(null);
->>>>>>> 2dd7f0b (changes on 26th june)
 
   const dates = useMemo(() => {
     if (!period) return [];
@@ -8268,7 +8261,7 @@ function TimesheetsContent({ user }) {
     { key: 'adjustments', label: 'ADJUSTMENTS' },
     { key: 'summary', label: 'SUMMARY' },
     { key: 'preferences', label: 'PREFERENCES' },
-    { key: 'reports', label: 'REPORTS' },
+    ...(user?.role === 'Admin' ? [{ key: 'reports', label: 'REPORTS' }] : []),
   ];
 
   const renderActiveModule = () => {
@@ -8323,7 +8316,14 @@ function TimesheetsContent({ user }) {
       case 'preferences':
         return <PreferencesPanel user={user} />;
       case 'reports':
-        return <ReportsPanel user={user} />;
+        return user?.role === 'Admin' ? <ReportsPanel user={user} /> : (
+          <PortalTimeWorkspace
+            user={user}
+            selectedPeriod={selectedPeriod}
+            onSelectedPeriodChange={setSelectedPeriod}
+            onSheetSnapshotChange={handleSheetSnapshotChange}
+          />
+        );
       default:
         return (
           <PortalTimeWorkspace

@@ -1632,11 +1632,7 @@ def manager_reject_timesheet(timesheet_id):
 # GET ALL TIMESHEETS (ADMIN)
 # ========================================
 
-<<<<<<< HEAD
 @timesheet_bp.route("/all", methods=["GET"])
-=======
-@timesheet_bp.route("/all", methods=["GET"])
->>>>>>> 2dd7f0b (changes on 26th june)
 def get_all_timesheets():
     try:
         _, error_response = require_admin_menu_access("timesheets")
@@ -1682,6 +1678,10 @@ def get_all_timesheets():
 @timesheet_bp.route("/reports/lop-summary", methods=["GET"])
 def get_lop_summary_report():
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         today = datetime.utcnow()
         start_dt = parse_report_date(request.args.get("start_date"), today.replace(day=1))
         end_dt = parse_report_date(request.args.get("end_date"), today)
@@ -1710,6 +1710,10 @@ def get_lop_summary_report():
 @timesheet_bp.route("/reports/lop-summary/filters", methods=["GET"])
 def get_lop_summary_filters():
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         employees = list(mongo.db.users.find({"role": {"$ne": "Admin"}}).sort("name", 1))
         departments = sorted({emp.get("department") for emp in employees if emp.get("department")})
         return jsonify({
@@ -1741,6 +1745,10 @@ def get_lop_summary_filters():
 @timesheet_bp.route("/reports/lop-summary/export", methods=["GET"])
 def export_lop_summary_report():
     try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
         today = datetime.utcnow()
         start_dt = parse_report_date(request.args.get("start_date"), today.replace(day=1))
         end_dt = parse_report_date(request.args.get("end_date"), today)
