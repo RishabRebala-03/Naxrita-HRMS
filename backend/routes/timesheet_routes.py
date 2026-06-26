@@ -1,7 +1,11 @@
 # routes/timesheet_routes.py
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, send_file
 from bson import ObjectId
 from datetime import datetime, timedelta
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from config.db import mongo
 from utils.access_control import require_admin_menu_access
 
@@ -291,6 +295,177 @@ def normalize_absence_label(value):
         .lower()
         .split()
     )
+
+
+def is_lop_entry(entry):
+    """Identify loss-of-pay rows generated from approved leave/timesheet entries."""
+    values = [
+        entry.get("leave_type"),
+        entry.get("description"),
+        entry.get("charge_code_name"),
+        entry.get("display_code"),
+        entry.get("code"),
+        entry.get("charge_code"),
+    ]
+    normalized_values = {normalize_absence_label(value) for value in values if value not in (None, "")}
+    return bool(
+        {"lwp", "lop", "leave without pay", "leave with loss of pay"} & normalized_values
+        or "955x18" in {str(value or "").strip().lower() for value in values}
+    )
+
+
+def parse_report_date(value, fallback=None):
+    if not value:
+        return fallback
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d")
+    except Exception:
+        return fallback
+
+
+def report_date_key(value):
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    return str(value or "")[:10]
+
+
+def count_weekdays_between(start_key, end_key):
+    if not start_key or not end_key:
+        return 0
+    return sum(1 for item in daterange_keys(start_key, end_key) if is_weekday_date(item))
+
+
+def get_employee_status_label(employee):
+    if employee.get("isActive") is False or employee.get("active") is False:
+        return "Inactive"
+    return employee.get("status") or "Active"
+
+
+def build_lop_report_rows(start_key, end_key, filters=None):
+    filters = filters or {}
+    employee_query = {"role": {"$ne": "Admin"}}
+    department = (filters.get("department") or "").strip()
+    employee_status = (filters.get("employee_status") or "all").strip().lower()
+    search = (filters.get("search") or "").strip().lower()
+
+    if department and department != "all":
+        employee_query["department"] = department
+
+    employees = list(mongo.db.users.find(employee_query).sort("name", 1))
+    if employee_status == "active":
+        employees = [emp for emp in employees if get_employee_status_label(emp).lower() == "active"]
+    elif employee_status == "inactive":
+        employees = [emp for emp in employees if get_employee_status_label(emp).lower() != "active"]
+
+    if search:
+        employees = [
+            emp for emp in employees
+            if search in " ".join([
+                str(emp.get("employeeId", "")),
+                str(emp.get("name", "")),
+                str(emp.get("email", "")),
+                str(emp.get("department", "")),
+            ]).lower()
+        ]
+
+    employee_ids = [emp["_id"] for emp in employees]
+    timesheets_by_employee = {str(emp_id): [] for emp_id in employee_ids}
+    if employee_ids:
+        timesheets = list(mongo.db.timesheets.find({
+            "employee_id": {"$in": employee_ids},
+            "period_start": {"$lte": end_key},
+            "period_end": {"$gte": start_key},
+        }))
+        for ts in timesheets:
+            refreshed = refresh_timesheet_for_read(ts)
+            timesheets_by_employee.setdefault(str(refreshed.get("employee_id")), []).append(refreshed)
+
+    rows = []
+    total_lop_days = 0.0
+    total_actual_lop_days = 0.0
+    total_adjusted_lop_days = 0.0
+    for employee in employees:
+        lop_hours = 0.0
+        for timesheet in timesheets_by_employee.get(str(employee["_id"]), []):
+            for entry in timesheet.get("entries", []) or []:
+                entry_date = report_date_key(entry.get("date"))
+                if not entry_date or entry_date < start_key or entry_date > end_key:
+                    continue
+                if not is_lop_entry(entry):
+                    continue
+                try:
+                    lop_hours += float(entry.get("hours") or 0)
+                except (TypeError, ValueError):
+                    continue
+
+        actual_lop_days = round(lop_hours / WORKDAY_HOURS, 2) if WORKDAY_HOURS else 0
+        lop_days = round(actual_lop_days, 2)
+        adjusted_lop_days = 0.0
+        total_lop_days += lop_days
+        total_actual_lop_days += actual_lop_days
+        total_adjusted_lop_days += adjusted_lop_days
+        rows.append({
+            "employee_id": employee.get("employeeId", "") or str(employee["_id"]),
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+            "employee_status": get_employee_status_label(employee),
+            "department": employee.get("department", ""),
+            "working_days": count_weekdays_between(start_key, end_key),
+            "adjustment_days": adjusted_lop_days,
+            "lop_days": lop_days,
+            "actual_lop_days": actual_lop_days,
+        })
+
+    return {
+        "rows": rows,
+        "totals": {
+            "employees": len(rows),
+            "lop_days": round(total_lop_days, 2),
+            "adjusted_lop_days": round(total_adjusted_lop_days, 2),
+            "actual_lop_days": round(total_actual_lop_days, 2),
+        },
+    }
+
+
+def create_lop_report_workbook(start_key, end_key, rows):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "lop_summary"
+    ws.merge_cells("A1:F1")
+    ws["A1"] = f"Naxrita Solutions Private Limited\nLoss Of Pay Summary\n\nFrom {datetime.strptime(start_key, '%Y-%m-%d').strftime('%d/%m/%Y')} To {datetime.strptime(end_key, '%Y-%m-%d').strftime('%d/%m/%Y')}"
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws["A1"].font = Font(bold=True, size=12)
+    ws.row_dimensions[1].height = 68
+
+    headers = [
+        "Employee ID",
+        "Employee Name",
+        "Employee Email ID",
+        "Employee Status",
+        "Working Days",
+        "LOP Days",
+    ]
+    ws.append(headers)
+    for cell in ws[2]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="F7F8FC")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for row in rows:
+        ws.append([
+            row["employee_id"],
+            row["employee_name"],
+            row["employee_email"],
+            row["employee_status"],
+            row["working_days"],
+            row["lop_days"],
+        ])
+
+    widths = [18, 28, 34, 18, 16, 14]
+    for index, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    ws.freeze_panes = "A3"
+    return wb
 
 
 def get_absence_charge_code(leave_type):
@@ -1457,7 +1632,11 @@ def manager_reject_timesheet(timesheet_id):
 # GET ALL TIMESHEETS (ADMIN)
 # ========================================
 
+<<<<<<< HEAD
 @timesheet_bp.route("/all", methods=["GET"])
+=======
+@timesheet_bp.route("/all", methods=["GET"])
+>>>>>>> 2dd7f0b (changes on 26th june)
 def get_all_timesheets():
     try:
         _, error_response = require_admin_menu_access("timesheets")
@@ -1497,6 +1676,96 @@ def get_all_timesheets():
 
     except Exception as e:
         print(f"❌ Error in /all: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/reports/lop-summary", methods=["GET"])
+def get_lop_summary_report():
+    try:
+        today = datetime.utcnow()
+        start_dt = parse_report_date(request.args.get("start_date"), today.replace(day=1))
+        end_dt = parse_report_date(request.args.get("end_date"), today)
+        if start_dt > end_dt:
+            return jsonify({"error": "start_date cannot be after end_date"}), 400
+
+        start_key = start_dt.strftime("%Y-%m-%d")
+        end_key = end_dt.strftime("%Y-%m-%d")
+        result = build_lop_report_rows(start_key, end_key, {
+            "department": request.args.get("department"),
+            "employee_status": request.args.get("employee_status"),
+            "search": request.args.get("search"),
+        })
+        return jsonify({
+            "company": "Naxrita Solutions Private Limited",
+            "title": "Loss Of Pay Summary",
+            "start_date": start_key,
+            "end_date": end_key,
+            **result,
+        }), 200
+    except Exception as e:
+        print(f"❌ Error in /reports/lop-summary: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/reports/lop-summary/filters", methods=["GET"])
+def get_lop_summary_filters():
+    try:
+        employees = list(mongo.db.users.find({"role": {"$ne": "Admin"}}).sort("name", 1))
+        departments = sorted({emp.get("department") for emp in employees if emp.get("department")})
+        return jsonify({
+            "departments": departments,
+            "employees": [
+                {
+                    "value": " ".join([
+                        str(emp.get("employeeId", "")),
+                        str(emp.get("name", "")),
+                        str(emp.get("email", "")),
+                    ]).strip(),
+                    "label": emp.get("name", "") or emp.get("email", "") or emp.get("employeeId", ""),
+                    "description": " · ".join(
+                        item for item in [
+                            emp.get("employeeId", ""),
+                            emp.get("email", ""),
+                            emp.get("department", ""),
+                        ] if item
+                    ),
+                }
+                for emp in employees
+            ],
+        }), 200
+    except Exception as e:
+        print(f"❌ Error in /reports/lop-summary/filters: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/reports/lop-summary/export", methods=["GET"])
+def export_lop_summary_report():
+    try:
+        today = datetime.utcnow()
+        start_dt = parse_report_date(request.args.get("start_date"), today.replace(day=1))
+        end_dt = parse_report_date(request.args.get("end_date"), today)
+        if start_dt > end_dt:
+            return jsonify({"error": "start_date cannot be after end_date"}), 400
+
+        start_key = start_dt.strftime("%Y-%m-%d")
+        end_key = end_dt.strftime("%Y-%m-%d")
+        result = build_lop_report_rows(start_key, end_key, {
+            "department": request.args.get("department"),
+            "employee_status": request.args.get("employee_status"),
+            "search": request.args.get("search"),
+        })
+        workbook = create_lop_report_workbook(start_key, end_key, result["rows"])
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        return send_file(
+            output,
+            as_attachment=True,
+            download_name=f"lop_summary_{start_key}_to_{end_key}.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        print(f"❌ Error exporting LOP summary: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

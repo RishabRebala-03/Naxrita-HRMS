@@ -2,7 +2,8 @@
 import { Children, createContext, useContext, useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
-  parseISO, subMonths,
+  parseISO, subMonths, startOfQuarter, endOfQuarter, subQuarters,
+  startOfYear, endOfYear, subYears,
 } from 'date-fns';
 import {
   Plus, Trash2, AlertCircle,
@@ -7118,6 +7119,281 @@ function PreferencesPanel({ user }) {
   );
 }
 
+const REPORT_RANGE_OPTIONS = [
+  { value: 'this_month', label: 'This Month' },
+  { value: 'this_quarter', label: 'This Quarter' },
+  { value: 'this_half_year', label: 'This Half Year' },
+  { value: 'this_year', label: 'This Year' },
+  { value: 'previous_month', label: 'Previous Month' },
+  { value: 'previous_quarter', label: 'Previous Quarter' },
+  { value: 'previous_half_year', label: 'Previous Half Year' },
+  { value: 'previous_year', label: 'Previous Year' },
+  { value: 'custom', label: 'Custom' },
+];
+
+function getHalfYearRange(date, offset = 0) {
+  const year = date.getFullYear();
+  const halfIndex = date.getMonth() < 6 ? 0 : 1;
+  const absoluteHalf = year * 2 + halfIndex + offset;
+  const targetYear = Math.floor(absoluteHalf / 2);
+  const targetHalf = absoluteHalf % 2;
+  return {
+    start: new Date(targetYear, targetHalf === 0 ? 0 : 6, 1),
+    end: new Date(targetYear, targetHalf === 0 ? 6 : 12, 0),
+  };
+}
+
+function getReportRange(option, referenceDate = new Date()) {
+  if (option === 'this_quarter') return { start: startOfQuarter(referenceDate), end: endOfQuarter(referenceDate) };
+  if (option === 'previous_quarter') {
+    const previous = subQuarters(referenceDate, 1);
+    return { start: startOfQuarter(previous), end: endOfQuarter(previous) };
+  }
+  if (option === 'this_half_year') return getHalfYearRange(referenceDate);
+  if (option === 'previous_half_year') return getHalfYearRange(referenceDate, -1);
+  if (option === 'this_year') return { start: startOfYear(referenceDate), end: endOfYear(referenceDate) };
+  if (option === 'previous_year') {
+    const previous = subYears(referenceDate, 1);
+    return { start: startOfYear(previous), end: endOfYear(previous) };
+  }
+  if (option === 'previous_month') {
+    const previous = subMonths(referenceDate, 1);
+    return { start: startOfMonth(previous), end: endOfMonth(previous) };
+  }
+  return { start: startOfMonth(referenceDate), end: endOfMonth(referenceDate) };
+}
+
+function buildReportQuery(filters) {
+  const params = new URLSearchParams({
+    start_date: filters.startDate,
+    end_date: filters.endDate,
+  });
+  if (filters.department !== 'all') params.set('department', filters.department);
+  if (filters.employeeStatus !== 'all') params.set('employee_status', filters.employeeStatus);
+  if (filters.search.trim()) params.set('search', filters.search.trim());
+  return params.toString();
+}
+
+function getReportRangeLabel(filters) {
+  const selected = REPORT_RANGE_OPTIONS.find((option) => option.value === filters.range)?.label || 'Custom';
+  if (!filters.startDate || !filters.endDate) return selected;
+  return `${selected} (${filters.startDate} to ${filters.endDate})`;
+}
+
+function ReportsPanel() {
+  const { notify } = useTimesheetUi();
+  const initialRange = getReportRange('previous_month');
+  const [filters, setFilters] = useState({
+    range: 'previous_month',
+    startDate: format(initialRange.start, 'yyyy-MM-dd'),
+    endDate: format(initialRange.end, 'yyyy-MM-dd'),
+    department: 'all',
+    employeeStatus: 'all',
+    search: '',
+  });
+  const [report, setReport] = useState(null);
+  const [filterOptions, setFilterOptions] = useState({ departments: [], employees: [] });
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+
+  const updateRange = (rangeValue) => {
+    if (rangeValue === 'custom') {
+      setFilters((previous) => ({ ...previous, range: rangeValue }));
+      return;
+    }
+    const nextRange = getReportRange(rangeValue);
+    setFilters((previous) => ({
+      ...previous,
+      range: rangeValue,
+      startDate: format(nextRange.start, 'yyyy-MM-dd'),
+      endDate: format(nextRange.end, 'yyyy-MM-dd'),
+    }));
+  };
+
+  const loadReport = useCallback(async () => {
+    if (!filters.startDate || !filters.endDate) return;
+    setLoading(true);
+    try {
+      const data = await fetchAPI(`/timesheets/reports/lop-summary?${buildReportQuery(filters)}`);
+      setReport(data);
+      setSubmitted(true);
+    } catch (err) {
+      notify(`Failed to load report: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [filters, notify]);
+
+  useEffect(() => {
+    fetchAPI('/timesheets/reports/lop-summary/filters')
+      .then((data) => setFilterOptions({
+        departments: Array.isArray(data.departments) ? data.departments : [],
+        employees: Array.isArray(data.employees) ? data.employees : [],
+      }))
+      .catch(() => setFilterOptions({ departments: [], employees: [] }));
+  }, []);
+
+  const rows = useMemo(() => report?.rows || [], [report]);
+  const departmentOptions = useMemo(() => [
+    { value: 'all', label: 'All Departments' },
+    ...filterOptions.departments.map((department) => ({ value: department, label: department })),
+  ], [filterOptions.departments]);
+  const statusOptions = [
+    { value: 'all', label: 'All Employees' },
+    { value: 'active', label: 'Active Employees' },
+    { value: 'inactive', label: 'Inactive Employees' },
+  ];
+
+  const exportReport = async () => {
+    setExporting(true);
+    try {
+      const response = await fetch(`${API_BASE}/timesheets/reports/lop-summary/export?${buildReportQuery(filters)}`);
+      if (!response.ok) throw new Error('Export failed');
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `lop_summary_${filters.startDate}_to_${filters.endDate}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      notify(`Failed to export report: ${err.message}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  return (
+    <div className="mte-reports-shell">
+      <section className="mte-report-topbar">
+        <div className="mte-report-title-block">
+          <FileText size={17} />
+          <div>
+            <span>Payroll Overview</span>
+            <strong>Loss Of Pay Summary</strong>
+          </div>
+        </div>
+        <button type="button" className="mte-report-export" onClick={exportReport} disabled={exporting}>
+          <Download size={15} />
+          <span>{exporting ? 'Exporting...' : 'Export as'}</span>
+        </button>
+      </section>
+
+      <section className="mte-report-filters">
+        <label className="mte-report-filter-field">
+          <span>Date Range :</span>
+          <ValueHelpSelect
+            value={filters.range}
+            onChange={updateRange}
+            options={REPORT_RANGE_OPTIONS}
+            placeholder="Select date range"
+            searchPlaceholder="Search date ranges"
+          />
+        </label>
+        <label className="mte-report-filter-field">
+          <span>From</span>
+          <input
+            type="date"
+            value={filters.startDate}
+            onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', startDate: event.target.value }))}
+          />
+        </label>
+        <label className="mte-report-filter-field">
+          <span>To</span>
+          <input
+            type="date"
+            value={filters.endDate}
+            onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', endDate: event.target.value }))}
+          />
+        </label>
+        <label className="mte-report-filter-field">
+          <span>Department</span>
+          <ValueHelpSelect
+            value={filters.department}
+            onChange={(value) => setFilters((previous) => ({ ...previous, department: value }))}
+            options={departmentOptions}
+            placeholder="All Departments"
+            searchPlaceholder="Search departments"
+          />
+        </label>
+        <label className="mte-report-filter-field">
+          <span>Status</span>
+          <ValueHelpSelect
+            value={filters.employeeStatus}
+            onChange={(value) => setFilters((previous) => ({ ...previous, employeeStatus: value }))}
+            options={statusOptions}
+            placeholder="All Employees"
+            searchPlaceholder="Search statuses"
+          />
+        </label>
+        <label className="mte-report-filter-field mte-report-search">
+          <span>Employee Value Help</span>
+          <ValueHelpSearch
+            value={filters.search}
+            onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))}
+            suggestions={filterOptions.employees}
+            placeholder="Employee, email, ID, department"
+          />
+        </label>
+        <div className="mte-report-submit-cell">
+          <button type="button" className="mte-report-run" onClick={loadReport} disabled={loading}>
+            {loading ? 'Submitting...' : 'Submit'}
+          </button>
+        </div>
+      </section>
+
+      <section className="mte-report-card">
+        <div className="mte-report-table-header">
+          <h3>Employee Wise Summary</h3>
+          <span>{submitted ? rows.length : 0} of {submitted ? report?.totals?.employees || 0 : 0} employees · {getReportRangeLabel(filters)}</span>
+        </div>
+        <div className="mte-report-table-wrap">
+          <table className="mte-report-table">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Email</th>
+                <th>Department</th>
+                <th>Status</th>
+                <th>Working Days</th>
+                <th>LOP Days</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={6}>Loading report...</td></tr>
+              ) : !submitted ? (
+                <tr><td colSpan={6}>Select filters and click Submit to view report data.</td></tr>
+              ) : rows.length === 0 ? (
+                <tr><td colSpan={6}>There are no LOP for employees during this period</td></tr>
+              ) : rows.map((row) => (
+                <tr key={`${row.employee_id}-${row.employee_email}`}>
+                  <td>
+                    <strong>{row.employee_name || '-'}</strong>
+                    <small>{row.employee_id}</small>
+                  </td>
+                  <td>{row.employee_email}</td>
+                  <td>{row.department || '-'}</td>
+                  <td>{row.employee_status}</td>
+                  <td>{row.working_days}</td>
+                  <td>{Number(row.lop_days || 0).toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={5}>Total Employees: {submitted ? report?.totals?.employees || 0 : 0}</td>
+                <td>{Number(report?.totals?.lop_days || 0).toFixed(2)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function PortalTimeWorkspace({
   user,
   selectedPeriod,
@@ -7258,7 +7534,20 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     search: '',
     department: 'all',
     metric: 'all',
+    clientCode: 'all',
+    employee: '',
+    periodFrom: '',
+    periodTo: '',
+    month: '',
   });
+<<<<<<< HEAD
+=======
+  const [appliedSummaryFilters, setAppliedSummaryFilters] = useState(summaryFilters);
+  const [workScheduleEditorOpen, setWorkScheduleEditorOpen] = useState(false);
+  const [workScheduleInput, setWorkScheduleInput] = useState('');
+  const [savingWorkSchedule, setSavingWorkSchedule] = useState(false);
+  const [workScheduleOverrideValue, setWorkScheduleOverrideValue] = useState(null);
+>>>>>>> 2dd7f0b (changes on 26th june)
 
   const dates = useMemo(() => {
     if (!period) return [];
@@ -7433,11 +7722,21 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     const numberValue = Number(value);
     return Number.isFinite(numberValue) ? numberValue.toFixed(decimals) : value;
   };
+  const summaryDateInRange = useCallback((dateValue) => {
+    const dateKey = String(dateValue || '').slice(0, 10);
+    if (!dateKey) return true;
+    if (appliedSummaryFilters.month && !dateKey.startsWith(appliedSummaryFilters.month)) return false;
+    if (appliedSummaryFilters.periodFrom && dateKey < appliedSummaryFilters.periodFrom) return false;
+    if (appliedSummaryFilters.periodTo && dateKey > appliedSummaryFilters.periodTo) return false;
+    return true;
+  }, [appliedSummaryFilters.month, appliedSummaryFilters.periodFrom, appliedSummaryFilters.periodTo]);
 
   const adminEmployeeRows = useMemo(() => {
     if (!isAdmin) return [];
     const grouped = {};
     allTimesheets.forEach((item) => {
+      const effectiveEntries = getEffectiveSummaryEntries(item.entries || []).filter((entry) => summaryDateInRange(entry.date));
+      if (!effectiveEntries.length) return;
       const key = item.employee_id || item.employee_email || item.employee_name || 'unknown';
       if (!grouped[key]) {
         grouped[key] = {
@@ -7450,9 +7749,10 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           documents: [],
         };
       }
-      grouped[key].hours += getEntriesWorkHours(getEffectiveSummaryEntries(item.entries || []));
+      grouped[key].hours += getEntriesWorkHours(effectiveEntries);
     });
     expenses.forEach((expense) => {
+      if (!summaryDateInRange(expense.expense_date)) return;
       const key = expense.employee_id || expense.employee_email || expense.employee_name || 'unknown';
       if (!grouped[key]) {
         grouped[key] = {
@@ -7476,13 +7776,43 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
         clientCodesText: formatClientCodeList(Array.from(row.clientCodes)),
       }))
       .sort((a, b) => a.employee.localeCompare(b.employee));
-  }, [allTimesheets, expenses, isAdmin]);
+  }, [allTimesheets, expenses, isAdmin, summaryDateInRange]);
   const summaryDepartmentOptions = useMemo(
     () => Array.from(new Set(adminEmployeeRows.map((row) => row.department || 'Unassigned')))
       .sort((first, second) => first.localeCompare(second)),
     [adminEmployeeRows]
   );
-  const summarySearch = summaryFilters.search.trim().toLowerCase();
+  const summaryClientCodeOptions = useMemo(() => {
+    const sourceRows = isAdmin ? adminEmployeeRows : summaryRows;
+    return Array.from(new Set(sourceRows.flatMap((row) => row.clientCodes || (row.clientCode && row.clientCode !== '-' ? [row.clientCode] : []))))
+      .filter(Boolean)
+      .sort((first, second) => first.localeCompare(second));
+  }, [adminEmployeeRows, isAdmin, summaryRows]);
+  const summaryEmployeeSuggestions = useMemo(() => (
+    adminEmployeeRows.map((row) => ({
+      value: row.employee,
+      label: row.employee,
+      description: [row.email, row.department].filter(Boolean).join(' · '),
+    }))
+  ), [adminEmployeeRows]);
+  const applySummaryFilters = () => {
+    setAppliedSummaryFilters(summaryFilters);
+  };
+  const updateSummaryMonth = (value) => {
+    if (!value) {
+      setSummaryFilters((previous) => ({ ...previous, month: '' }));
+      return;
+    }
+    const monthStart = `${value}-01`;
+    const monthEnd = format(endOfMonth(parseISO(monthStart)), 'yyyy-MM-dd');
+    setSummaryFilters((previous) => ({
+      ...previous,
+      month: value,
+      periodFrom: monthStart,
+      periodTo: monthEnd,
+    }));
+  };
+  const summarySearch = appliedSummaryFilters.search.trim().toLowerCase();
   const filteredAdminEmployeeRows = useMemo(() => {
     if (!isAdmin) return [];
     return adminEmployeeRows.filter((row) => {
@@ -7490,15 +7820,22 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
         || [row.employee, row.email, row.department, row.clientCodesText]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(summarySearch));
-      const matchesDepartment = summaryFilters.department === 'all'
-        || row.department === summaryFilters.department;
-      const matchesMetric = summaryFilters.metric === 'all'
-        || (summaryFilters.metric === 'hours' && row.hours > 0)
-        || (summaryFilters.metric === 'expenses' && row.expenses > 0)
-        || (summaryFilters.metric === 'documents' && row.documents.length > 0);
-      return matchesSearch && matchesDepartment && matchesMetric;
+      const employeeQuery = appliedSummaryFilters.employee.trim().toLowerCase();
+      const matchesEmployee = !employeeQuery
+        || [row.employee, row.email]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(employeeQuery));
+      const matchesDepartment = appliedSummaryFilters.department === 'all'
+        || row.department === appliedSummaryFilters.department;
+      const matchesMetric = appliedSummaryFilters.metric === 'all'
+        || (appliedSummaryFilters.metric === 'hours' && row.hours > 0)
+        || (appliedSummaryFilters.metric === 'expenses' && row.expenses > 0)
+        || (appliedSummaryFilters.metric === 'documents' && row.documents.length > 0);
+      const matchesClientCode = appliedSummaryFilters.clientCode === 'all'
+        || row.clientCodes.includes(appliedSummaryFilters.clientCode);
+      return matchesSearch && matchesEmployee && matchesDepartment && matchesMetric && matchesClientCode;
     });
-  }, [adminEmployeeRows, isAdmin, summaryFilters.department, summaryFilters.metric, summarySearch]);
+  }, [adminEmployeeRows, appliedSummaryFilters.clientCode, appliedSummaryFilters.department, appliedSummaryFilters.employee, appliedSummaryFilters.metric, isAdmin, summarySearch]);
 
   const adminDepartmentRows = useMemo(() => {
     if (!isAdmin) return [];
@@ -7523,14 +7860,23 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
   const filteredSummaryRows = useMemo(() => {
     if (isAdmin) return [];
     return summaryRows.filter((row) => {
-      if (!summarySearch) return true;
-      return [row.label, row.clientCode]
+      const matchesSearch = !summarySearch || [row.label, row.clientCode]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(summarySearch));
+      const matchesClientCode = appliedSummaryFilters.clientCode === 'all'
+        || row.clientCodes?.includes?.(appliedSummaryFilters.clientCode)
+        || row.clientCode === appliedSummaryFilters.clientCode;
+      const matchesMetric = appliedSummaryFilters.metric === 'all'
+        || (appliedSummaryFilters.metric === 'hours' && Number(row.hours || 0) > 0)
+        || (appliedSummaryFilters.metric === 'expenses' && Number(row.expenses || 0) > 0)
+        || (appliedSummaryFilters.metric === 'documents');
+      return matchesSearch && matchesClientCode && matchesMetric;
     });
-  }, [isAdmin, summaryRows, summarySearch]);
+  }, [appliedSummaryFilters.clientCode, appliedSummaryFilters.metric, isAdmin, summaryRows, summarySearch]);
   const resetSummaryFilters = () => {
-    setSummaryFilters({ search: '', department: 'all', metric: 'all' });
+    const next = { search: '', department: 'all', metric: 'all', clientCode: 'all', employee: '', periodFrom: '', periodTo: '', month: '' };
+    setSummaryFilters(next);
+    setAppliedSummaryFilters(next);
   };
   const exportSummary = () => {
     const rowsForExport = isAdmin
@@ -7599,40 +7945,101 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
       <div className={`mte-summary-filter-grid ${isAdmin ? '' : 'is-employee'}`}>
         <label className="mte-summary-filter-field mte-summary-filter-search">
           <span>Search</span>
-          <input
+          <ValueHelpSearch
             value={summaryFilters.search}
-            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, search: event.target.value }))}
+            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, search: value }))}
+            suggestions={isAdmin ? summaryEmployeeSuggestions : summaryRows.map((row) => ({
+              value: row.label,
+              label: row.label,
+              description: row.clientCode || '',
+            }))}
             placeholder={isAdmin ? 'Employee, email, department, or client code' : 'Charge code, client code, or summary row'}
           />
         </label>
         {isAdmin ? (
           <>
             <label className="mte-summary-filter-field">
-              <span>Department</span>
-              <select
-                value={summaryFilters.department}
-                onChange={(event) => setSummaryFilters((previous) => ({ ...previous, department: event.target.value }))}
-              >
-                <option value="all">All Departments</option>
-                {summaryDepartmentOptions.map((department) => (
-                  <option key={department} value={department}>{department}</option>
-                ))}
-              </select>
+              <span>Employee</span>
+              <ValueHelpSearch
+                value={summaryFilters.employee}
+                onChange={(value) => setSummaryFilters((previous) => ({ ...previous, employee: value }))}
+                suggestions={summaryEmployeeSuggestions}
+                placeholder="All Employees"
+              />
             </label>
             <label className="mte-summary-filter-field">
-              <span>Metric</span>
-              <select
-                value={summaryFilters.metric}
-                onChange={(event) => setSummaryFilters((previous) => ({ ...previous, metric: event.target.value }))}
-              >
-                <option value="all">All Records</option>
-                <option value="hours">With Hours</option>
-                <option value="expenses">With Expenses</option>
-                <option value="documents">With Documents</option>
-              </select>
+              <span>Department</span>
+              <ValueHelpSelect
+                value={summaryFilters.department}
+                onChange={(value) => setSummaryFilters((previous) => ({ ...previous, department: value }))}
+                options={[
+                  { value: 'all', label: 'All Departments' },
+                  ...summaryDepartmentOptions.map((department) => ({ value: department, label: department })),
+                ]}
+                placeholder="All Departments"
+                searchPlaceholder="Search departments"
+              />
             </label>
           </>
         ) : null}
+        <label className="mte-summary-filter-field">
+          <span>Client Code</span>
+          <ValueHelpSelect
+            value={summaryFilters.clientCode}
+            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, clientCode: value }))}
+            options={[
+              { value: 'all', label: 'All Client Codes' },
+              ...summaryClientCodeOptions.map((clientCode) => ({ value: clientCode, label: clientCode })),
+            ]}
+            placeholder="All Client Codes"
+            searchPlaceholder="Search client codes"
+          />
+        </label>
+        <label className="mte-summary-filter-field">
+          <span>Metric</span>
+          <ValueHelpSelect
+            value={summaryFilters.metric}
+            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, metric: value }))}
+            options={[
+              { value: 'all', label: 'All Records' },
+              { value: 'hours', label: 'With Hours' },
+              { value: 'expenses', label: 'With Expenses' },
+              ...(isAdmin ? [{ value: 'documents', label: 'With Documents' }] : []),
+            ]}
+            placeholder="All Records"
+            searchPlaceholder="Search metrics"
+          />
+        </label>
+        <label className="mte-summary-filter-field">
+          <span>Month Wise</span>
+          <input
+            type="month"
+            value={summaryFilters.month}
+            onChange={(event) => updateSummaryMonth(event.target.value)}
+          />
+        </label>
+        <label className="mte-summary-filter-field">
+          <span>Period From</span>
+          <input
+            type="date"
+            value={summaryFilters.periodFrom}
+            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodFrom: event.target.value }))}
+          />
+        </label>
+        <label className="mte-summary-filter-field">
+          <span>Period To</span>
+          <input
+            type="date"
+            value={summaryFilters.periodTo}
+            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodTo: event.target.value }))}
+          />
+        </label>
+        <div className="mte-summary-filter-submit-row">
+          <button type="button" className="is-primary" onClick={applySummaryFilters}>
+            <CheckCircle2 size={14} />
+            <span>Submit</span>
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -7861,6 +8268,7 @@ function TimesheetsContent({ user }) {
     { key: 'adjustments', label: 'ADJUSTMENTS' },
     { key: 'summary', label: 'SUMMARY' },
     { key: 'preferences', label: 'PREFERENCES' },
+    { key: 'reports', label: 'REPORTS' },
   ];
 
   const renderActiveModule = () => {
@@ -7914,6 +8322,8 @@ function TimesheetsContent({ user }) {
         );
       case 'preferences':
         return <PreferencesPanel user={user} />;
+      case 'reports':
+        return <ReportsPanel user={user} />;
       default:
         return (
           <PortalTimeWorkspace
