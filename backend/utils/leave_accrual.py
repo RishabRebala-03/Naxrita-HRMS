@@ -1,6 +1,7 @@
 #utils/leave_accural.py
 from datetime import datetime
 from config.db import mongo
+from utils.timezone import month_start_ist, now_ist
 
 def accrue_monthly_leaves():
     """
@@ -9,8 +10,8 @@ def accrue_monthly_leaves():
     Planned leaves are capped at 12
     """
     try:
-        today = datetime.utcnow()
-        first_of_month = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        today = now_ist()
+        first_of_month = month_start_ist(today).replace(tzinfo=None)
         
         # Find all active employees
         employees = mongo.db.users.find({})

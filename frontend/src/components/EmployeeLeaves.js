@@ -10,6 +10,7 @@ import {
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
+import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -19,32 +20,15 @@ const statusToneMap = {
 };
 
 const formatDate = (dateStr) => {
-  if (!dateStr) return "Not available";
+  return formatDateIST(dateStr);
+};
 
-  try {
-    const value = typeof dateStr === "object" && dateStr.$date ? dateStr.$date : dateStr;
-    const date = new Date(value);
-
-    if (Number.isNaN(date.getTime())) return "Not available";
-
-    return date.toLocaleDateString("en-IN", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-  } catch {
-    return "Not available";
-  }
+const formatDateTime = (dateStr) => {
+  return formatDateTimeIST(dateStr);
 };
 
 const toDateKey = (value) => {
-  if (!value) return "";
-
-  try {
-    return new Date(value).toISOString().slice(0, 10);
-  } catch {
-    return "";
-  }
+  return toDateKeyIST(value);
 };
 
 const isDateWithinRange = (dateStr, startDate, endDate) => {
@@ -1225,7 +1209,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                             {item.status}
                           </span>
                         </td>
-                        <td>{formatDate(item.applied_on)}</td>
+                        <td>{formatDateTime(item.applied_on)}</td>
                         <td className="employee-history-actions-cell">
                           {item.status === "Pending" || canEmployeeCancelApprovedLeave(item) ? (
                             <div className="employee-table-actions">
@@ -1396,7 +1380,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                     ) : null}
                     <div>
                       <span>Applied on</span>
-                      <strong>{formatDate(teamLeave.applied_on)}</strong>
+                      <strong>{formatDateTime(teamLeave.applied_on)}</strong>
                     </div>
                   </div>
 
@@ -1473,11 +1457,11 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                   <div className="admin-approval-details">
                     <div>
                       <span>Applied on</span>
-                      <strong>{formatDate(record.applied_on)}</strong>
+                      <strong>{formatDateTime(record.applied_on)}</strong>
                     </div>
                     <div>
                       <span>Resolved on</span>
-                      <strong>{formatDate(record.approved_on || record.rejected_on)}</strong>
+                      <strong>{formatDateTime(record.approved_on || record.rejected_on)}</strong>
                     </div>
                     <div className="is-wide">
                       <span>Reason</span>

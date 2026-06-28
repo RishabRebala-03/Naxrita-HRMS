@@ -33,7 +33,7 @@ def process_mail_queue_once(batch_size=None):
                 settings=settings,
                 recipients=log.get("recipients") or [],
                 cc=log.get("cc") or [],
-                subject=log.get("subject") or "Naxrita Labs HRMS Notification",
+                subject=log.get("subject") or "Naxrita HRMS Notification",
                 html_content=html_content,
             )
             mark_mail_sent(log["_id"])

@@ -9,7 +9,7 @@ import {
   Plus, Trash2, AlertCircle,
   CheckCircle, CheckCircle2, XCircle, Clock, Eye,
   Download, TrendingUp, BarChart3, UserCheck,
-  FileText, Calendar, RefreshCw, CircleHelp, Users, Building2,
+	  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
   LayoutGrid, ChevronLeft, ChevronRight, Upload, Paperclip,
   Save,
 } from 'lucide-react';
@@ -21,6 +21,7 @@ import ValueHelpSelect from './ValueHelpSelect';
 import ValueHelpSearch from './ValueHelpSearch';
 import './TimesheetsPortal.css';
 import { buildRequesterHeaders } from '../utils/requester';
+import { formatDateTimeIST } from '../utils/dateTime';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
@@ -418,6 +419,9 @@ const uploadAPI = async (endpoint, formData) => {
 };
 
 const getUserId = (user) => user?._id || user?.id || user?.user_id || '';
+const formatDateTime = (value) => {
+  return formatDateTimeIST(value, '—');
+};
 const getRoleKey = (user) => String(user?.role || '').trim().toLowerCase();
 const isLeadUser = (user) => getRoleKey(user) === 'lead';
 const isManagerUser = (user) => getRoleKey(user) === 'manager';
@@ -2995,7 +2999,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                     {h.stage === 'lead' ? 'Lead' : 'Manager'} {h.action}
                   </span>
                   {' by '}{h.approver_name}
-                  {h.timestamp && ` · ${format(new Date(h.timestamp), 'MMM d, yyyy')}`}
+                  {h.timestamp && ` · ${formatDateTime(h.timestamp)}`}
                   {h.comments && ` — "${h.comments}"`}
                 </div>
               ))}
@@ -3277,7 +3281,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                       {h.stage === 'lead' ? 'Lead' : 'Manager'} {h.action}
                     </span>
                     {' by '}{h.approver_name}
-                    {h.timestamp && ` · ${format(new Date(h.timestamp), 'MMM d, yyyy')}`}
+                    {h.timestamp && ` · ${formatDateTime(h.timestamp)}`}
                     {h.comments && <div style={{ marginTop: '4px', fontSize: '12px' }}>"{h.comments}"</div>}
                   </div>
                 ))}
@@ -3581,7 +3585,7 @@ function Approvals({ user }) {
                         <td style={S.td}>{period}</td>
                         <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(a.total_hours)}</strong></td>
                         <td style={S.tdMid}>
-                          {a.submitted_at ? format(new Date(a.submitted_at), 'MMM d, yyyy') : '—'}
+                          {formatDateTime(a.submitted_at)}
                         </td>
                         <td style={S.tdCenter}><StatusBadge status={a.status} /></td>
                         <td style={S.tdCenter}>
@@ -3878,7 +3882,7 @@ function History({ user, onNavigate }) {
                         <td style={S.td}><strong>{period}</strong></td>
                         <td style={S.td}><strong>{formatTimesheetHoursWithSuffix(s.total_hours)}</strong></td>
                         <td style={S.tdMid}>
-                          {s.submitted_at ? format(new Date(s.submitted_at), 'MMM d, yyyy') : '—'}
+                          {formatDateTime(s.submitted_at)}
                         </td>
                         <td style={S.td}>
                           <StatusBadge status={s.status} />
@@ -4377,7 +4381,7 @@ function TeamTimesheets({ user }) {
                         <td style={S.td}>{period}</td>
                         <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(ts.total_hours)}</strong></td>
                         <td style={S.tdMid}>
-                          {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
+                          {formatDateTime(ts.submitted_at)}
                         </td>
                         <td style={S.tdCenter}><StatusBadge status={ts.status} /></td>
                         <td style={S.tdCenter}>
@@ -4462,7 +4466,7 @@ const getReportingLeadLabel = (timesheet) =>
 
 // ─── AdminTimesheets ──────────────────────────────────────────────────────────
 function AdminTimesheets() {
-  const { notify } = useTimesheetUi();
+  const { notify, confirmAction, promptAction } = useTimesheetUi();
   const [timesheets,       setTimesheets]       = useState([]);
   const [employees,        setEmployees]        = useState([]);
   const [loading,          setLoading]          = useState(false);
@@ -4474,10 +4478,23 @@ function AdminTimesheets() {
   const [departmentFilter, setDepartmentFilter] = useState('all');
   const [leadFilter,       setLeadFilter]       = useState('all');
   const [groupMode,        setGroupMode]        = useState('department');
+  const [collapsedGroups,  setCollapsedGroups]  = useState({});
   const [viewingTimesheet, setViewingTimesheet] = useState(null);
   const [fullPageView,     setFullPageView]     = useState(false);
 
   const ccLookup = useCcLookup();
+  const userId = getUserId(JSON.parse(localStorage.getItem('user') || 'null') || {});
+  const getFortnightMeta = (timesheet) => {
+    const start = timesheet?.period_start ? new Date(timesheet.period_start) : null;
+    const end = timesheet?.period_end ? new Date(timesheet.period_end) : null;
+    if (!start || Number.isNaN(start.getTime()) || !end || Number.isNaN(end.getTime())) {
+      return { key: 'unknown', label: 'Unknown fortnight' };
+    }
+    return {
+      key: `${timesheet.period_start}__${timesheet.period_end}`,
+      label: `${format(start, 'MMM d, yyyy')} – ${format(end, 'MMM d, yyyy')}`,
+    };
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -4546,10 +4563,14 @@ function AdminTimesheets() {
     filtered.forEach((timesheet) => {
       const key = groupMode === 'team'
         ? (timesheet.reporting_lead_id || getLeadApprovalMeta(timesheet).name || 'Unassigned')
-        : (timesheet.employee_department || 'Unassigned');
+        : groupMode === 'fortnight'
+          ? getFortnightMeta(timesheet).key
+          : (timesheet.employee_department || 'Unassigned');
       const label = groupMode === 'team'
         ? getReportingLeadLabel(timesheet)
-        : (timesheet.employee_department || 'Unassigned');
+        : groupMode === 'fortnight'
+          ? getFortnightMeta(timesheet).label
+          : (timesheet.employee_department || 'Unassigned');
       if (!groups.has(key)) {
         groups.set(key, { key, label, items: [] });
       }
@@ -4561,15 +4582,15 @@ function AdminTimesheets() {
   }, [filtered, groupMode]);
 
   const stats = {
-    total:    timesheets.length,
-    pending:  timesheets.filter((t) => t.status?.startsWith('pending')).length,
-    approved: timesheets.filter((t) => t.status === 'approved').length,
-    rejected: timesheets.filter((t) => t.status?.startsWith('rejected')).length,
-    approvedHours: timesheets
+    total:    filtered.length,
+    pending:  filtered.filter((t) => t.status?.startsWith('pending')).length,
+    approved: filtered.filter((t) => t.status === 'approved').length,
+    rejected: filtered.filter((t) => t.status?.startsWith('rejected')).length,
+    approvedHours: filtered
       .filter((t) => t.status === 'approved')
       .reduce((s, t) => s + (t.total_hours || 0), 0),
-    departments: departmentOptions.length,
-    leads: leadOptions.length,
+    departments: new Set(filtered.map((item) => item.employee_department || 'Unassigned')).size,
+    leads: new Set(filtered.map((item) => item.reporting_lead_id || getReportingLeadLabel(item) || 'Unassigned')).size,
   };
   const searchSuggestions = useMemo(
     () => uniqSuggestions(timesheets, ['employee_name', 'employee_email', 'employee_department', 'reporting_lead_name']),
@@ -4594,6 +4615,91 @@ function AdminTimesheets() {
     setStatusFilter('approved');
     setTypeFilter('all');
     setDateRange({ ...blankDateRange });
+  };
+
+  const requestAdminApproverName = async (actionLabel) => {
+    const approverName = await promptAction({
+      title: `${actionLabel} Timesheet`,
+      message: `Enter the name that should be recorded for this admin ${actionLabel.toLowerCase()} action.`,
+      confirmLabel: actionLabel,
+      placeholder: 'Enter approver name',
+      required: true,
+    });
+    return approverName?.trim() || '';
+  };
+
+  const handleAdminApprove = async (timesheet) => {
+    const approverName = await requestAdminApproverName('Approve');
+    if (!approverName) return;
+    const shouldApprove = await confirmAction({
+      title: 'Approve Timesheet',
+      message: `Approve this timesheet as "${approverName}"?`,
+      confirmLabel: 'Approve',
+    });
+    if (!shouldApprove) return;
+    try {
+      await fetchAPI(`/timesheets/approve/lead/${timesheet._id || timesheet.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ approved_by: userId, approver_name: approverName, comments: '' }),
+      });
+      notify('Timesheet approved successfully.', 'success');
+      const approvedAt = new Date().toISOString();
+      setTimesheets((previous) => previous.map((item) => (
+        (item._id || item.id) !== (timesheet._id || timesheet.id)
+          ? item
+          : {
+            ...item,
+            status: 'approved',
+            lead_approved_by: approverName,
+            lead_approved_at: approvedAt,
+            approval_history: [
+              ...(Array.isArray(item.approval_history) ? item.approval_history : []),
+              { stage: 'lead', action: 'approved', approver_name: approverName, timestamp: approvedAt, comments: '' },
+            ],
+          }
+      )));
+    } catch (err) {
+      notify(`Approval failed: ${err.message}`, 'error');
+    }
+  };
+
+  const handleAdminReject = async (timesheet) => {
+    const approverName = await requestAdminApproverName('Reject');
+    if (!approverName) return;
+    const rejectionReason = await promptAction({
+      title: 'Reject Timesheet',
+      message: `Enter the rejection reason to record under "${approverName}".`,
+      confirmLabel: 'Reject',
+      tone: 'danger',
+      placeholder: 'Enter rejection reason',
+      multiline: true,
+      required: true,
+    });
+    if (!rejectionReason?.trim()) return;
+    try {
+      await fetchAPI(`/timesheets/reject/lead/${timesheet._id || timesheet.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ rejected_by: userId, approver_name: approverName, rejection_reason: rejectionReason.trim() }),
+      });
+      notify('Timesheet rejected successfully.', 'success');
+      const rejectedAt = new Date().toISOString();
+      setTimesheets((previous) => previous.map((item) => (
+        (item._id || item.id) !== (timesheet._id || timesheet.id)
+          ? item
+          : {
+            ...item,
+            status: 'rejected_by_lead',
+            lead_rejected_by: approverName,
+            rejection_reason: rejectionReason.trim(),
+            approval_history: [
+              ...(Array.isArray(item.approval_history) ? item.approval_history : []),
+              { stage: 'lead', action: 'rejected', approver_name: approverName, timestamp: rejectedAt, comments: rejectionReason.trim() },
+            ],
+          }
+      )));
+    } catch (err) {
+      notify(`Rejection failed: ${err.message}`, 'error');
+    }
   };
 
   const renderTimesheetTable = (rows) => (
@@ -4635,7 +4741,7 @@ function AdminTimesheets() {
                   <td style={S.td}>{period}</td>
                   <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(ts.total_hours)}</strong></td>
                   <td style={S.tdMid}>
-                    {ts.submitted_at ? format(new Date(ts.submitted_at), 'MMM d, yyyy') : '—'}
+                    {formatDateTime(ts.submitted_at)}
                   </td>
                   <td style={S.tdCenter}><StatusBadge status={ts.status} /></td>
                   <td style={S.td}>
@@ -4643,7 +4749,7 @@ function AdminTimesheets() {
                       <>
                         <div style={{ fontWeight: '500' }}>{leadApproval.name}</div>
                         <div style={{ fontSize: '12px', color: C.textMid }}>
-                          {leadApproval.timestamp ? format(new Date(leadApproval.timestamp), 'MMM d, yyyy') : 'Date unavailable'}
+                          {leadApproval.timestamp ? formatDateTime(leadApproval.timestamp) : 'Date unavailable'}
                         </div>
                       </>
                     ) : (
@@ -4652,9 +4758,9 @@ function AdminTimesheets() {
                       </span>
                     )}
                   </td>
-                  <td style={S.tdCenter}>
-                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                      <button
+	                  <td style={S.tdCenter}>
+	                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
+	                      <button
                         onClick={async () => {
                           try {
                             const full = await fetchAPI(`/timesheets/${ts._id}`);
@@ -4717,11 +4823,29 @@ function AdminTimesheets() {
                         }}
                         style={S.btnIcon}
                         title="Export this timesheet"
-                      >
-                        <Download size={15} />
-                      </button>
-                    </div>
-                  </td>
+	                      >
+	                        <Download size={15} />
+	                      </button>
+                        {ts.status === 'pending_lead' && (
+                          <>
+                            <button
+                              onClick={() => handleAdminApprove(ts)}
+                              style={{ ...S.btnIcon, color: C.green }}
+                              title="Approve as admin"
+                            >
+                              <CheckCircle size={15} />
+                            </button>
+                            <button
+                              onClick={() => handleAdminReject(ts)}
+                              style={{ ...S.btnIcon, color: C.red }}
+                              title="Reject as admin"
+                            >
+                              <XCircle size={15} />
+                            </button>
+                          </>
+                        )}
+	                    </div>
+	                  </td>
                 </tr>
               );
             })}
@@ -4781,6 +4905,10 @@ function AdminTimesheets() {
     URL.revokeObjectURL(url);
   };
 
+  const toggleGroupCollapse = (groupKey) => {
+    setCollapsedGroups((previous) => ({ ...previous, [groupKey]: !previous[groupKey] }));
+  };
+
   return (
     <div style={S.page}>
       <div style={S.inner}>
@@ -4801,7 +4929,7 @@ function AdminTimesheets() {
               <div key={label} style={S.statCard}>
                 <div style={S.statRow}><span style={S.statLabel}>{label}</span><Icon size={18} style={{ color: C.purpleMid }} /></div>
                 <div style={S.statValue}>{value}</div>
-                <div style={S.statSub}>{sub}</div>
+                <div style={S.statSub}>{filtered.length === timesheets.length ? sub : `Filtered ${sub.toLowerCase()}`}</div>
               </div>
             ))}
           </div>
@@ -4820,6 +4948,7 @@ function AdminTimesheets() {
                 {[
                   { key: 'department', label: 'Department-wise', Icon: Building2 },
                   { key: 'team', label: 'Team-wise', Icon: Users },
+                  { key: 'fortnight', label: 'Fortnight-wise', Icon: CalendarRange },
                   { key: 'flat', label: 'Flat table', Icon: LayoutGrid },
                 ].map(({ key, label, Icon }) => (
                   <button
@@ -4933,24 +5062,30 @@ function AdminTimesheets() {
           {groupedTimesheets.length === 0 ? (
             renderTimesheetTable([])
           ) : (
-            groupedTimesheets.map((group) => (
-              <section key={group.key} style={{ marginBottom: '20px' }}>
-                {groupMode !== 'flat' ? (
-                  <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '10px' }}>
-                    <div style={S.rowBetween}>
-                      <div>
-                        <div style={{ fontSize: '15px', fontWeight: '600', color: C.text }}>{group.label}</div>
+	            groupedTimesheets.map((group) => (
+	              <section key={group.key} style={{ marginBottom: '20px' }}>
+	                {groupMode !== 'flat' ? (
+	                  <div
+                      style={{ ...S.card, ...S.cardPadSm, marginBottom: '10px', cursor: 'pointer' }}
+                      onClick={() => toggleGroupCollapse(group.key)}
+                    >
+	                    <div style={S.rowBetween}>
+	                      <div>
+	                        <div style={{ fontSize: '15px', fontWeight: '600', color: C.text }}>{group.label}</div>
+	                        <div style={{ fontSize: '12px', color: C.textMid }}>
+	                          {group.items.length} timesheet{group.items.length !== 1 ? 's' : ''} ·{' '}
+	                          {formatTimesheetHoursWithSuffix(group.items.reduce((sum, item) => sum + (item.total_hours || 0), 0))}
+	                        </div>
+	                      </div>
                         <div style={{ fontSize: '12px', color: C.textMid }}>
-                          {group.items.length} timesheet{group.items.length !== 1 ? 's' : ''} ·{' '}
-                          {formatTimesheetHoursWithSuffix(group.items.reduce((sum, item) => sum + (item.total_hours || 0), 0))}
+                          {collapsedGroups[group.key] ? 'Show' : 'Collapse'}
                         </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-                {renderTimesheetTable(group.items)}
-              </section>
-            ))
+	                    </div>
+	                  </div>
+	                ) : null}
+	                {groupMode === 'flat' || !collapsedGroups[group.key] ? renderTimesheetTable(group.items) : null}
+	              </section>
+	            ))
           )}
 
           {viewingTimesheet && fullPageView && (
@@ -4971,7 +5106,7 @@ function AdminTimesheets() {
             <ul style={S.infoList}>
               {[
                 'Lead-approved timesheets are shown by default for payroll-ready review',
-                'Switch between department-wise, team-wise, and flat views',
+                'Switch between department-wise, team-wise, fortnight-wise, and flat views',
                 'Filter by employee, department, reporting lead, status, entry type, or period',
                 'Lead approval name and date are visible directly in the admin grid',
               ].map((t, i) => <li key={i} style={S.infoItem}>• {t}</li>)}
@@ -5876,7 +6011,7 @@ function LegacyChargeCodeAdmin({ user }) {
                         </span>
                       </td>
                       <td style={S.tdMid}>
-                        {c.created_at ? format(new Date(c.created_at), 'MMM d, yyyy') : '—'}
+                        {formatDateTime(c.created_at)}
                       </td>
                     </tr>
                   ))}

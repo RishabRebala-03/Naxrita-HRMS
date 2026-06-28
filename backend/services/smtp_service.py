@@ -232,7 +232,7 @@ def send_mail(settings, recipients, subject, html_content, cc=None, text_content
         raise MailConfigurationError("SMTP settings are disabled")
 
     from_email = settings.get("from_email") or settings.get("smtp_user")
-    from_name = settings.get("from_name") or "Naxrita Labs HRMS"
+    from_name = settings.get("from_name") or "Naxrita HRMS"
     if not from_email:
         raise MailConfigurationError("From email is required")
 

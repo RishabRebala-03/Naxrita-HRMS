@@ -1,5 +1,5 @@
 // src/App.js
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import Login from "./components/Login";
 import Sidebar from "./components/Sidebar";
@@ -152,6 +152,8 @@ const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
 };
 
 function App() {
+  const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
+  const IDLE_WARNING_MS = 30 * 1000;
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [section, setSection] = useState("dashboard");
@@ -160,6 +162,11 @@ function App() {
   const [profileReturnSection, setProfileReturnSection] = useState("dashboard");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [idleWarningVisible, setIdleWarningVisible] = useState(false);
+  const [idleCountdownMs, setIdleCountdownMs] = useState(IDLE_WARNING_MS);
+  const idleLogoutTimeoutRef = useRef(null);
+  const idleWarningTimeoutRef = useRef(null);
+  const idleCountdownIntervalRef = useRef(null);
 
   // Session recovery on app load
   useEffect(() => {
@@ -245,7 +252,33 @@ function App() {
     setCurrentUser(updatedUser);
   };
 
-  const handleLogout = () => {
+  const clearIdleTimers = useCallback(() => {
+    if (idleWarningTimeoutRef.current) {
+      window.clearTimeout(idleWarningTimeoutRef.current);
+      idleWarningTimeoutRef.current = null;
+    }
+    if (idleLogoutTimeoutRef.current) {
+      window.clearTimeout(idleLogoutTimeoutRef.current);
+      idleLogoutTimeoutRef.current = null;
+    }
+    if (idleCountdownIntervalRef.current) {
+      window.clearInterval(idleCountdownIntervalRef.current);
+      idleCountdownIntervalRef.current = null;
+    }
+  }, []);
+
+  const hideIdleWarning = useCallback(() => {
+    setIdleWarningVisible(false);
+    setIdleCountdownMs(IDLE_WARNING_MS);
+    if (idleCountdownIntervalRef.current) {
+      window.clearInterval(idleCountdownIntervalRef.current);
+      idleCountdownIntervalRef.current = null;
+    }
+  }, [IDLE_WARNING_MS]);
+
+  const handleLogout = useCallback((reason = "manual") => {
+    clearIdleTimers();
+    hideIdleWarning();
     localStorage.removeItem('user');
     console.log('👋 User logged out, session cleared');
     setCurrentUser(null);
@@ -254,6 +287,80 @@ function App() {
     setSectionState(null);
     setViewEmployeeId(null);
     setProfileReturnSection("dashboard");
+    if (reason === "idle") {
+      window.alert("You were logged out due to inactivity.");
+    }
+  }, [clearIdleTimers, hideIdleWarning]);
+
+  const startIdleCountdown = useCallback(() => {
+    setIdleWarningVisible(true);
+    setIdleCountdownMs(IDLE_WARNING_MS);
+    const warningStartedAt = Date.now();
+
+    if (idleCountdownIntervalRef.current) {
+      window.clearInterval(idleCountdownIntervalRef.current);
+    }
+
+    idleCountdownIntervalRef.current = window.setInterval(() => {
+      const remaining = Math.max(IDLE_WARNING_MS - (Date.now() - warningStartedAt), 0);
+      setIdleCountdownMs(remaining);
+      if (remaining <= 0 && idleCountdownIntervalRef.current) {
+        window.clearInterval(idleCountdownIntervalRef.current);
+        idleCountdownIntervalRef.current = null;
+      }
+    }, 250);
+  }, [IDLE_WARNING_MS]);
+
+  const scheduleIdleLogout = useCallback(() => {
+    clearIdleTimers();
+    hideIdleWarning();
+
+    idleWarningTimeoutRef.current = window.setTimeout(() => {
+      startIdleCountdown();
+    }, Math.max(IDLE_TIMEOUT_MS - IDLE_WARNING_MS, 0));
+
+    idleLogoutTimeoutRef.current = window.setTimeout(() => {
+      handleLogout("idle");
+    }, IDLE_TIMEOUT_MS);
+  }, [IDLE_TIMEOUT_MS, IDLE_WARNING_MS, clearIdleTimers, handleLogout, hideIdleWarning, startIdleCountdown]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      clearIdleTimers();
+      hideIdleWarning();
+      return undefined;
+    }
+
+    scheduleIdleLogout();
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart", "click"];
+    const handleActivity = () => {
+      scheduleIdleLogout();
+    };
+
+    activityEvents.forEach((eventName) => {
+      window.addEventListener(eventName, handleActivity, { passive: true });
+    });
+
+    return () => {
+      activityEvents.forEach((eventName) => {
+        window.removeEventListener(eventName, handleActivity);
+      });
+      clearIdleTimers();
+    };
+  }, [clearIdleTimers, hideIdleWarning, isAuthenticated, scheduleIdleLogout]);
+
+  const handleStayLoggedIn = () => {
+    scheduleIdleLogout();
+  };
+
+  const formatIdleCountdown = (remainingMs) => {
+    const totalSeconds = Math.max(Math.ceil(remainingMs / 1000), 0);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return minutes > 0
+      ? `${minutes}m ${String(seconds).padStart(2, "0")}s`
+      : `${seconds}s`;
   };
 
   const handleNavigateToProfile = (employeeId) => {
@@ -554,6 +661,21 @@ function App() {
         </div>
       </div>
       <div className="portal-alert-stack" aria-live="polite" aria-atomic="true">
+        {idleWarningVisible ? (
+          <div className="portal-alert-toast portal-alert-toast--warning" role="alert">
+            <div className="portal-alert-toast__title">Auto Logout Soon</div>
+            <div className="portal-alert-toast__message">
+              You will be logged out in {formatIdleCountdown(idleCountdownMs)} due to inactivity.
+            </div>
+            <button
+              type="button"
+              className="portal-alert-toast__action"
+              onClick={handleStayLoggedIn}
+            >
+              Stay Logged In
+            </button>
+          </div>
+        ) : null}
         {portalAlerts.map((alertItem) => (
           <div key={alertItem.id} className="portal-alert-toast" role="status">
             <div className="portal-alert-toast__title">Notification Alert</div>

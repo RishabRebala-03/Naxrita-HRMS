@@ -47,7 +47,7 @@ def send_test_mail():
             leave_id=None,
             mail_type="smtp_test",
             recipients=[to_email],
-            subject="Naxrita Labs HRMS test mail",
+            subject="Naxrita HRMS test mail",
             template_name="test_mail.html",
             context=context,
             idempotency_key=f"{tenant_id}:smtp-test:{to_email}:{datetime.utcnow().timestamp()}",
@@ -59,7 +59,7 @@ def send_test_mail():
             send_mail(
                 settings=settings,
                 recipients=[to_email],
-                subject="Naxrita Labs HRMS test mail",
+                subject="Naxrita HRMS test mail",
                 html_content=html_content,
             )
             from services.queue_service import mark_mail_sent

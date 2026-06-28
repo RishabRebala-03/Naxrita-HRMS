@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from config.db import mongo
 from utils.log_utils import log_leave_action, trim_leave
 from utils.leave_accrual import accrue_monthly_leaves
+from utils.timezone import ist_today, now_ist_naive
 from utils.recalculate_balances import recalculate_all_balances
 from services.mail_service import (
     queue_leave_applied_emails,
@@ -847,7 +848,7 @@ def apply_leave():
                     "error": "Selected leave range has no working days. Weekends are not counted as leave."
                 }), 400
         
-        today = datetime.now().date()
+        today = ist_today()
 
         # Date validation based on leave type
         if leave_type.lower() == "planned":
@@ -1110,7 +1111,7 @@ def update_leave(leave_id):
                 "error": "Selected leave range has no working days. Weekends are not counted as leave."
             }), 400
 
-    today = datetime.now().date()
+    today = ist_today()
 
     # ✅ LOOPHOLE FIX: Full type-specific date validation (mirrors apply_leave)
     if new_leave_type.lower() == "planned":
@@ -1442,7 +1443,7 @@ def get_leave_balance(employee_id):
         
         join_date = employee.get("dateOfJoining")
         if join_date:
-            today = datetime.utcnow()
+            today = now_ist_naive()
             months = (today.year - join_date.year) * 12 + (today.month - join_date.month) + 1
             leave_balance["monthsEmployed"] = months
             leave_balance["accrualRate"] = {"planned": "1.0/month", "sick": "0.5/month"}
@@ -1766,7 +1767,7 @@ def check_escalations():
     try:
         pending_leaves = list(mongo.db.leaves.find({"status": "Pending"}))
         escalated_count = 0
-        current_time = datetime.utcnow()
+        current_time = now_ist_naive()
         
         print(f"\n🔍 Checking {len(pending_leaves)} pending leaves for escalation...")
         

@@ -13,6 +13,7 @@ import {
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
+import { formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -38,12 +39,7 @@ const buildSearchSuggestions = (items) => {
 };
 
 const toDateKey = (value) => {
-  if (!value) return "";
-  try {
-    return new Date(value).toISOString().slice(0, 10);
-  } catch {
-    return "";
-  }
+  return toDateKeyIST(value);
 };
 
 const parseDateKey = (dateStr) => {
@@ -66,6 +62,10 @@ const canLeadCancelApprovedLeave = (leave = {}) => {
   if (leave.status !== "Approved") return false;
   const cutoff = getLeaveCancellationCutoff(leave);
   return Boolean(cutoff && Date.now() > cutoff.getTime());
+};
+
+const formatDateTime = (dateStr) => {
+  return formatDateTimeIST(dateStr);
 };
 
 const ManagerLeaves = ({ user }) => {
@@ -579,7 +579,7 @@ const ManagerLeaves = ({ user }) => {
                       <td>{formatDate(leaveRecord.start_date)} to {formatDate(leaveRecord.end_date)}</td>
                       <td>
                         <div className="fiori-primary-cell">
-                          <span>{formatDate(leaveRecord.applied_on)}</span>
+                          <span>{formatDateTime(leaveRecord.applied_on)}</span>
                           <span>{leaveRecord.logout_time || "No logout time"}</span>
                         </div>
                       </td>
@@ -745,7 +745,7 @@ const ManagerLeaves = ({ user }) => {
                               {historyItem.status || "Pending"}
                             </span>
                           </td>
-                          <td>{formatDate(historyItem.applied_on)}</td>
+                          <td>{formatDateTime(historyItem.applied_on)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -803,7 +803,7 @@ const ManagerLeaves = ({ user }) => {
                         </div>
                       </td>
                       <td>{formatDate(item.start_date)} to {formatDate(item.end_date)}</td>
-                      <td>{formatDate(item.approved_on)}</td>
+                      <td>{formatDateTime(item.approved_on)}</td>
                       <td>
                         {canLeadCancelApprovedLeave(item) ? (
                           <button

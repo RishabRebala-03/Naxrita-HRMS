@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { formatDateTimeIST } from "../utils/dateTime";
 
 const LeaveBalance = () => {
   const [employeeId, setEmployeeId] = useState("");
@@ -89,7 +90,7 @@ const LeaveBalance = () => {
       {pending.map(p => (
         <div key={p._id} className="card small" style={{marginTop:10}}>
           <div><strong>Employee:</strong> {p.employee_id}</div>
-          <div className="muted">{p.leave_type} &middot; Applied: {new Date(p.applied_on).toLocaleString()}</div>
+          <div className="muted">{p.leave_type} &middot; Applied: {formatDateTimeIST(p.applied_on, "-")}</div>
           <div style={{marginTop:8}}>
             <button className="btn" onClick={()=>updateStatus(p._id,"Approved")}>Approve</button>
             <button className="btn ghost" style={{background:"#fef3f2", color:"var(--danger)"}} onClick={()=>updateStatus(p._id,"Rejected")}>Reject</button>

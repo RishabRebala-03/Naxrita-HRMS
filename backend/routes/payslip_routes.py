@@ -64,6 +64,7 @@ def _ensure_indexes():
         unique=True,
     )
     _collection().create_index([("generated_at", DESCENDING)])
+    _collection().create_index([("published", ASCENDING), ("employee_id", ASCENDING), ("year", DESCENDING), ("month_number", DESCENDING)])
     _history_collection().create_index([("uploaded_at", DESCENDING)])
 
 
@@ -489,19 +490,13 @@ def _allowed_to_access(payslip, requester):
     if not requester:
         return False
 
-    role = str(requester.get("role", "")).strip().lower()
-    requester_id = str(requester.get("_id"))
     employee_id = payslip.get("employee_id")
 
     if _is_admin_requester(requester):
         return True
 
     if requester.get("employeeId") == employee_id:
-        return True
-
-    if role == "manager":
-        report = mongo.db.users.find_one({"employeeId": employee_id}, {"reportsTo": 1})
-        return bool(report and str(report.get("reportsTo")) == requester_id)
+        return bool(payslip.get("published"))
 
     return False
 
@@ -582,6 +577,9 @@ def _create_or_get_payslip(data):
             "net_pay": net_pay,
             "employee_profile": merged_profile,
             "pdf_filename": f"Payslip_{employee_id}_{month}_{year}.pdf",
+            "published": bool(existing_payslip.get("published", False)),
+            "published_at": existing_payslip.get("published_at"),
+            "published_by": existing_payslip.get("published_by"),
         }
         _collection().update_one({"_id": existing_payslip["_id"]}, {"$set": refresh_fields})
         existing_payslip.update(refresh_fields)
@@ -613,6 +611,9 @@ def _create_or_get_payslip(data):
         "employee_profile": profile,
         "generated_at": datetime.utcnow(),
         "pdf_filename": f"Payslip_{employee_id}_{month}_{year}.pdf",
+        "published": False,
+        "published_at": None,
+        "published_by": None,
     }
 
     inserted = _collection().insert_one(payslip_doc)
@@ -665,9 +666,10 @@ def upload_excel():
 
         data = []
         missing_users = []
+        failed_rows = []
         records_count = 0
 
-        for row in sheet.iter_rows(min_row=2, values_only=True):
+        for row_index, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):
             if not any(row):
                 continue
 
@@ -676,11 +678,24 @@ def upload_excel():
             row_data = _build_row_data(row_dict)
             employee_id = row_data["employee_id"]
             if not employee_id:
+                failed_rows.append({
+                    "row_number": row_index,
+                    "employee_id": "",
+                    "employee_name": row_data.get("name", ""),
+                    "reason": "Employee ID is missing in this row.",
+                })
                 continue
 
             user = _find_user_by_employee_id(employee_id)
             if not user:
                 missing_users.append(employee_id)
+                failed_rows.append({
+                    "row_number": row_index,
+                    "employee_id": employee_id,
+                    "employee_name": row_data.get("name", ""),
+                    "reason": f"Employee ID {employee_id} was not found in HRMS.",
+                })
+                continue
 
             data.append(row_data)
             records_count += 1
@@ -689,6 +704,8 @@ def upload_excel():
             {
                 "filename": secure_filename(file.filename),
                 "records_uploaded": records_count,
+                "failed_rows_count": len(failed_rows),
+                "failed_rows": failed_rows[:100],
                 "missing_users": missing_users,
                 "uploaded_at": datetime.utcnow(),
             }
@@ -700,6 +717,8 @@ def upload_excel():
                 "message": f"Successfully parsed {records_count} records",
                 "data": data,
                 "missing_users": sorted(set(missing_users)),
+                "failed_rows": failed_rows,
+                "failed_count": len(failed_rows),
             }
         ), 200
     except Exception as exc:
@@ -790,15 +809,8 @@ def get_visible_payslips():
     if _is_admin_requester(requester):
         cursor = _collection().find().sort([("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)])
         items = [_serialize_doc(item) for item in cursor]
-    elif role == "manager":
-        direct_reports = list(mongo.db.users.find({"reportsTo": requester["_id"]}, {"employeeId": 1}))
-        employee_ids = [requester.get("employeeId")] + [item.get("employeeId") for item in direct_reports]
-        cursor = _collection().find({"employee_id": {"$in": [emp_id for emp_id in employee_ids if emp_id]}}).sort(
-            [("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)]
-        )
-        items = [_serialize_doc(item) for item in cursor]
     else:
-        cursor = _collection().find({"employee_id": requester.get("employeeId")}).sort(
+        cursor = _collection().find({"employee_id": requester.get("employeeId"), "published": True}).sort(
             [("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)]
         )
         items = [_serialize_doc(item) for item in cursor]
@@ -944,6 +956,9 @@ def update_payslip(payslip_id):
         "net_pay": net_pay,
         "employee_profile": profile,
         "pdf_filename": f"Payslip_{employee_id}_{month}_{year}.pdf",
+        "published": bool(payslip.get("published", False)),
+        "published_at": payslip.get("published_at"),
+        "published_by": payslip.get("published_by"),
     }
 
     _collection().update_one({"_id": payslip["_id"]}, {"$set": update_fields})
@@ -967,3 +982,79 @@ def delete_payslip(payslip_id):
         return jsonify({"error": "Payslip not found"}), 404
 
     return jsonify({"success": True, "message": "Payslip deleted successfully"}), 200
+
+
+@payslip_bp.route("/bulk-delete", methods=["POST"])
+def bulk_delete_payslips():
+    _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only admins can delete payslips"}), 403
+
+    payload = request.get_json() or {}
+    payslip_ids = payload.get("payslip_ids") or []
+    if not isinstance(payslip_ids, list) or not payslip_ids:
+        return jsonify({"error": "payslip_ids is required"}), 400
+
+    object_ids = []
+    invalid_ids = []
+    for payslip_id in payslip_ids:
+        try:
+            object_ids.append(ObjectId(str(payslip_id)))
+        except Exception:
+            invalid_ids.append(str(payslip_id))
+
+    if not object_ids:
+        return jsonify({"error": "No valid payslip ids were provided"}), 400
+
+    result = _collection().delete_many({"_id": {"$in": object_ids}})
+    return jsonify({
+        "success": True,
+        "message": f"Deleted {result.deleted_count} payslip(s).",
+        "deleted_count": result.deleted_count,
+        "invalid_ids": invalid_ids,
+    }), 200
+
+
+@payslip_bp.route("/publish", methods=["POST"])
+def publish_payslips():
+    _ensure_indexes()
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only admins can publish payslips"}), 403
+
+    payload = request.get_json() or {}
+    payslip_ids = payload.get("payslip_ids") or []
+    publish_all = bool(payload.get("publish_all"))
+    query = {"published": {"$ne": True}}
+
+    if publish_all:
+        pass
+    else:
+        if not isinstance(payslip_ids, list) or not payslip_ids:
+            return jsonify({"error": "Select at least one payslip to publish"}), 400
+        object_ids = []
+        invalid_ids = []
+        for payslip_id in payslip_ids:
+            try:
+                object_ids.append(ObjectId(str(payslip_id)))
+            except Exception:
+                invalid_ids.append(str(payslip_id))
+        if not object_ids:
+            return jsonify({"error": "No valid payslip ids were provided"}), 400
+        query["_id"] = {"$in": object_ids}
+    published_at = datetime.utcnow()
+    result = _collection().update_many(query, {"$set": {
+        "published": True,
+        "published_at": published_at,
+        "published_by": requester["_id"],
+    }})
+
+    response = {
+        "success": True,
+        "message": f"Published {result.modified_count} payslip(s).",
+        "published_count": result.modified_count,
+    }
+    if not publish_all:
+        response["invalid_ids"] = invalid_ids
+    return jsonify(response), 200

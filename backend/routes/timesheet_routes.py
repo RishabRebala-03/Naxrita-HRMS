@@ -7,7 +7,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from config.db import mongo
-from utils.access_control import require_admin_menu_access
+from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester
 
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
@@ -1337,12 +1337,19 @@ def get_employee_timesheets(employee_id):
 @timesheet_bp.route("/pending/lead/<user_id>", methods=["GET"])
 def get_pending_for_lead(user_id):
     try:
-        timesheets = list(
-            mongo.db.timesheets.find({
-                "reporting_lead_id": ObjectId(user_id),
-                "status": "pending_lead",
-            }).sort("submitted_at", -1)
-        )
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        query = {"status": "pending_lead"}
+        if has_admin_menu_access(requester, "timesheets"):
+            pass
+        elif str(requester.get("_id")) == str(user_id):
+            query["reporting_lead_id"] = ObjectId(user_id)
+        else:
+            return jsonify({"error": "You do not have permission to view these approvals"}), 403
+
+        timesheets = list(mongo.db.timesheets.find(query).sort("submitted_at", -1))
         timesheets = [refresh_timesheet_for_read(ts) for ts in timesheets]
         timesheets = [enrich_timesheet_with_employee_assignments(ts) for ts in timesheets]
         return jsonify(serialize_all(timesheets)), 200
@@ -1370,11 +1377,12 @@ def get_pending_for_manager(user_id):
 def lead_approve_timesheet(timesheet_id):
     try:
         data        = request.get_json()
-        approved_by = data.get("approved_by")
         comments    = data.get("comments", "")
+        approver_name_input = str(data.get("approver_name") or "").strip()
+        requester   = resolve_requester()
 
-        if not approved_by:
-            return jsonify({"error": "approved_by is required"}), 400
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
 
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
@@ -1382,15 +1390,23 @@ def lead_approve_timesheet(timesheet_id):
         if timesheet.get("status") != "pending_lead":
             return jsonify({"error": "Timesheet is not pending lead approval"}), 400
 
-        approver = mongo.db.users.find_one({"_id": ObjectId(approved_by)})
-        if not approver:
-            return jsonify({"error": "Approver not found"}), 404
+        requester_id = str(requester.get("_id"))
+        reporting_lead_id = str(timesheet.get("reporting_lead_id") or "")
+        is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
+        if not (is_timesheet_admin or requester_id == reporting_lead_id):
+            return jsonify({"error": "You do not have permission to approve this timesheet"}), 403
+        if is_timesheet_admin and not approver_name_input:
+            return jsonify({"error": "approver_name is required for admin approval"}), 400
+
+        approver = requester
+        approver_id = approver.get("_id")
+        approver_name = approver_name_input or approver.get("name") or ""
 
         approval_entry = {
             "stage":         "lead",
             "action":        "approved",
-            "approver_id":   ObjectId(approved_by),
-            "approver_name": approver.get("name"),
+            "approver_id":   approver_id,
+            "approver_name": approver_name,
             "comments":      comments,
             "timestamp":     datetime.utcnow(),
         }
@@ -1402,7 +1418,8 @@ def lead_approve_timesheet(timesheet_id):
                 "$set": {
                     "status":             "approved",
                     "lead_approved_at":   now,
-                    "lead_approved_by":   approver.get("name"),
+                    "lead_approved_by":   approver_name,
+                    "lead_approved_by_id": approver_id,
                     "is_locked":          True,
                     "updated_at":         now,
                 },
@@ -1420,7 +1437,7 @@ def lead_approve_timesheet(timesheet_id):
             related_timesheet_id=timesheet_id,
         )
 
-        print(f"✅ Timesheet {timesheet_id} fully approved by lead {approver.get('name')}")
+        print(f"✅ Timesheet {timesheet_id} fully approved by lead/admin {approver_name}")
         return jsonify({"message": "Timesheet approved"}), 200
 
     except Exception as e:
@@ -1437,13 +1454,14 @@ def lead_approve_timesheet(timesheet_id):
 def lead_reject_timesheet(timesheet_id):
     try:
         data             = request.get_json()
-        rejected_by      = data.get("rejected_by")
         rejection_reason = data.get("rejection_reason", "").strip()
+        approver_name_input = str(data.get("approver_name") or "").strip()
+        requester        = resolve_requester()
 
         if not rejection_reason:
             return jsonify({"error": "Rejection reason is required"}), 400
-        if not rejected_by:
-            return jsonify({"error": "rejected_by is required"}), 400
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
 
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
@@ -1451,15 +1469,23 @@ def lead_reject_timesheet(timesheet_id):
         if timesheet.get("status") != "pending_lead":
             return jsonify({"error": "Timesheet is not pending lead approval"}), 400
 
-        rejector = mongo.db.users.find_one({"_id": ObjectId(rejected_by)})
-        if not rejector:
-            return jsonify({"error": "Rejector not found"}), 404
+        requester_id = str(requester.get("_id"))
+        reporting_lead_id = str(timesheet.get("reporting_lead_id") or "")
+        is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
+        if not (is_timesheet_admin or requester_id == reporting_lead_id):
+            return jsonify({"error": "You do not have permission to reject this timesheet"}), 403
+        if is_timesheet_admin and not approver_name_input:
+            return jsonify({"error": "approver_name is required for admin rejection"}), 400
+
+        rejector = requester
+        rejector_id = rejector.get("_id")
+        rejector_name = approver_name_input or rejector.get("name") or ""
 
         rejection_entry = {
             "stage":         "lead",
             "action":        "rejected",
-            "approver_id":   ObjectId(rejected_by),
-            "approver_name": rejector.get("name"),
+            "approver_id":   rejector_id,
+            "approver_name": rejector_name,
             "comments":      rejection_reason,
             "timestamp":     datetime.utcnow(),
         }
@@ -1470,7 +1496,8 @@ def lead_reject_timesheet(timesheet_id):
                 "$set": {
                     "status":           "rejected_by_lead",
                     "lead_rejected_at": datetime.utcnow(),
-                    "lead_rejected_by": rejector.get("name"),
+                    "lead_rejected_by": rejector_name,
+                    "lead_rejected_by_id": rejector_id,
                     "rejection_reason": rejection_reason,
                     "updated_at":       datetime.utcnow(),
                 },

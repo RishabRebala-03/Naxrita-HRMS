@@ -31,6 +31,7 @@ import {
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
+import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
 
 const chartPalette = ["#0a6ed1", "#5b738b", "#8fb5d9", "#d1e3f8", "#0f2742", "#91c8f6"];
 const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Early Logout", "LWP"];
@@ -44,39 +45,11 @@ const statusToneMap = {
 };
 
 const formatDate = (value) => {
-  if (!value) return "Not available";
-
-  try {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Not available";
-
-    return date.toLocaleDateString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-  } catch {
-    return "Not available";
-  }
+  return formatDateIST(value);
 };
 
 const formatDateTime = (value) => {
-  if (!value) return "Not available";
-
-  try {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "Not available";
-
-    return date.toLocaleString("en-IN", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return "Not available";
-  }
+  return formatDateTimeIST(value);
 };
 
 const shortLabel = (value, max = 12) => {
@@ -111,12 +84,7 @@ const dayDiff = (start, end) => {
 };
 
 const toDateKey = (value) => {
-  if (!value) return "";
-  try {
-    return new Date(value).toISOString().slice(0, 10);
-  } catch {
-    return "";
-  }
+  return toDateKeyIST(value);
 };
 
 const leaveOverlapsRange = (leave, dateRange) => {
@@ -1019,7 +987,7 @@ const AdminLeaves = ({ user }) => {
                           <td>
                             <div className="fiori-primary-cell">
                               <span>{getLeaveWindow(leave)}</span>
-                              <span>Applied {formatDate(leave.applied_on)}</span>
+                              <span>Applied {formatDateTime(leave.applied_on)}</span>
                             </div>
                           </td>
                           <td>
@@ -1049,7 +1017,7 @@ const AdminLeaves = ({ user }) => {
                                   </button>
                                 </>
                               ) : (
-                                <span>{formatDate(leave.approved_on || leave.rejected_on)}</span>
+                                <span>{formatDateTime(leave.approved_on || leave.rejected_on)}</span>
                               )}
                             </div>
                           </td>

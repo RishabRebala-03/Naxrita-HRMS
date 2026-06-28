@@ -358,6 +358,30 @@ const S = {
     background: "#f8fafc",
     color: C.text,
   },
+  toastStack: {
+    position: "fixed",
+    top: 20,
+    right: 20,
+    display: "grid",
+    gap: 12,
+    zIndex: 1200,
+    width: "min(360px, calc(100vw - 32px))",
+  },
+  toastCard: {
+    borderRadius: 14,
+    padding: "14px 16px",
+    boxShadow: "0 18px 45px rgba(15, 23, 42, 0.18)",
+    border: `1px solid ${C.border}`,
+    background: C.white,
+  },
+  confirmCard: {
+    width: "min(460px, 100%)",
+    background: C.white,
+    borderRadius: 16,
+    border: `1px solid ${C.border}`,
+    boxShadow: "0 22px 55px rgba(15, 23, 42, 0.24)",
+    padding: 20,
+  },
   iconButton: {
     display: "inline-flex",
     alignItems: "center",
@@ -490,6 +514,12 @@ function Payslips({ user, adminView = false }) {
   const [editForm, setEditForm] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingPayslipId, setDeletingPayslipId] = useState("");
+  const [selectedPayslipIds, setSelectedPayslipIds] = useState([]);
+  const [publishing, setPublishing] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [uploadLogs, setUploadLogs] = useState([]);
+  const [toast, setToast] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
   const fileInputRef = useRef(null);
 
   const openEditModal = (item, context = { mode: "display" }) => {
@@ -505,6 +535,16 @@ function Payslips({ user, adminView = false }) {
     setSavingEdit(false);
   };
 
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timeoutId = window.setTimeout(() => setToast(null), 3200);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
+
+  const showToast = (tone, text) => {
+    setToast({ tone, text, id: Date.now() });
+  };
+
   const loadVisiblePayslips = async () => {
     if (!userId) return;
     setLoadingPayslips(true);
@@ -515,9 +555,11 @@ function Payslips({ user, adminView = false }) {
       ]);
       const items = Array.isArray(payslipResult.payslips) ? payslipResult.payslips : [];
       setPayslips(items);
+      setSelectedPayslipIds((previous) => previous.filter((id) => items.some((item) => item._id === id)));
       setHistory(Array.isArray(historyResult.history) ? historyResult.history : []);
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+      showToast("error", error.message);
     } finally {
       setLoadingPayslips(false);
     }
@@ -676,12 +718,24 @@ function Payslips({ user, adminView = false }) {
       const result = await fetchJson("/payslips/upload-excel", { method: "POST", body: formData });
       const normalized = (result.data || []).map((row) => ({ ...row, month, year }));
       setUploadedData(normalized);
+      setUploadLogs(Array.isArray(result.failed_rows) ? result.failed_rows : []);
       setUploadSearchTerm("");
       setUploadEmployeeFilter("all");
       setSelectedStorageStatus("all");
       setUploadColumnFilters({});
+      setMessage({
+        tone: result.failed_count ? "warn" : "success",
+        text: result.failed_count
+          ? `Parsed ${normalized.length} row(s). ${result.failed_count} row(s) need attention before storage.`
+          : `Parsed ${normalized.length} row(s) successfully.`,
+      });
+      showToast(result.failed_count ? "warn" : "success", result.failed_count
+        ? `Upload parsed with ${result.failed_count} row issue(s).`
+        : `Upload parsed successfully.`);
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+      setUploadLogs([]);
+      showToast("error", error.message);
     } finally {
       setLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -697,11 +751,13 @@ function Payslips({ user, adminView = false }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(row),
       });
-      setMessage({ tone: "success", text: result.message || "Payslip added to storage successfully" });
+      setMessage({ tone: "success", text: `${result.message || "Payslip saved successfully"} It is still private until published.` });
+      showToast("success", result.message || "Payslip draft saved successfully.");
       await loadVisiblePayslips();
       window.open(`${API_BASE}/payslips/download/${result.payslip._id}?user_id=${encodeURIComponent(userId)}`, "_blank", "noopener,noreferrer");
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+      showToast("error", error.message);
     } finally {
       setGeneratingRow(null);
     }
@@ -724,11 +780,19 @@ function Payslips({ user, adminView = false }) {
       });
       setMessage({
         tone: result.failed_count ? "warn" : "success",
-        text: result.failed_count ? result.message : "Submit complete. The uploaded payslips are now available in the display tab.",
+        text: result.failed_count ? `${result.message}. Saved payslips stay private until you publish them.` : "Submit complete. The payslips are saved as drafts in the display tab until you publish them.",
       });
+      showToast(result.failed_count ? "warn" : "success", result.failed_count ? result.message : "Payslip drafts saved successfully.");
+      setUploadLogs(Array.isArray(result.failed) ? result.failed.map((item, index) => ({
+        row_number: index + 1,
+        employee_id: item.employee_id || "",
+        employee_name: item.name || "",
+        reason: item.error || "This row could not be stored.",
+      })) : []);
       await loadVisiblePayslips();
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+      showToast("error", error.message);
     } finally {
       setStoringAll(false);
     }
@@ -845,27 +909,127 @@ function Payslips({ user, adminView = false }) {
         body: JSON.stringify(payload),
       });
       setMessage({ tone: "success", text: result.message || "Payslip updated successfully" });
+      showToast("success", result.message || "Payslip updated successfully.");
       closeEditModal();
       await loadVisiblePayslips();
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+      showToast("error", error.message);
       setSavingEdit(false);
     }
   };
 
   const handleDeletePayslip = async (item) => {
-    if (!window.confirm(`Delete payslip for ${item.employee_name} - ${item.month} ${item.year}?`)) return;
+    setConfirmAction({
+      title: "Delete Payslip",
+      description: `Delete payslip for ${item.employee_name} - ${item.month} ${item.year}? This cannot be undone.`,
+      confirmLabel: "Delete",
+      tone: "danger",
+      onConfirm: async () => {
     setDeletingPayslipId(item._id);
     setMessage(null);
     try {
       const result = await fetchJson(`/payslips/${item._id}?user_id=${encodeURIComponent(userId)}`, { method: "DELETE" });
       setMessage({ tone: "success", text: result.message || "Payslip deleted successfully" });
+          showToast("success", result.message || "Payslip deleted successfully.");
       await loadVisiblePayslips();
     } catch (error) {
       setMessage({ tone: "error", text: error.message });
+          showToast("error", error.message);
     } finally {
       setDeletingPayslipId("");
     }
+      },
+    });
+  };
+
+  const togglePayslipSelection = (payslipId) => {
+    setSelectedPayslipIds((previous) => (
+      previous.includes(payslipId)
+        ? previous.filter((id) => id !== payslipId)
+        : [...previous, payslipId]
+    ));
+  };
+
+  const handleSelectAllVisible = () => {
+    setSelectedPayslipIds((previous) => {
+      if (allVisibleSelected) {
+        return previous.filter((id) => !filteredPayslips.some((item) => item._id === id));
+      }
+      const next = new Set(previous);
+      filteredPayslips.forEach((item) => next.add(item._id));
+      return Array.from(next);
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selectedPayslipIds.length) {
+      setMessage({ tone: "warn", text: "Select at least one payslip to delete." });
+      showToast("warn", "Select at least one payslip to delete.");
+      return;
+    }
+    setConfirmAction({
+      title: "Delete Selected Payslips",
+      description: `Delete ${selectedPayslipIds.length} selected payslip(s)? This cannot be undone.`,
+      confirmLabel: "Delete Selected",
+      tone: "danger",
+      onConfirm: async () => {
+    setBulkDeleting(true);
+    setMessage(null);
+    try {
+      const result = await fetchJson("/payslips/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payslip_ids: selectedPayslipIds }),
+      });
+      setMessage({ tone: "success", text: result.message || "Selected payslips deleted successfully." });
+          showToast("success", result.message || "Selected payslips deleted successfully.");
+      setSelectedPayslipIds([]);
+      await loadVisiblePayslips();
+    } catch (error) {
+      setMessage({ tone: "error", text: error.message });
+          showToast("error", error.message);
+    } finally {
+      setBulkDeleting(false);
+    }
+      },
+    });
+  };
+
+  const handlePublish = async () => {
+    const unpublishedSelectedIds = filteredPayslips
+      .filter((item) => selectedPayslipIds.includes(item._id) && !item.published)
+      .map((item) => item._id);
+    if (!unpublishedSelectedIds.length) {
+      setMessage({ tone: "warn", text: "Select at least one unpublished payslip to publish." });
+      showToast("warn", "Select at least one unpublished payslip to publish.");
+      return;
+    }
+    setConfirmAction({
+      title: "Publish Payslips",
+      description: `Publish ${unpublishedSelectedIds.length} selected payslip(s)? Employees will be able to view them immediately after this.`,
+      confirmLabel: "Publish",
+      tone: "primary",
+      onConfirm: async () => {
+        setPublishing(true);
+        setMessage(null);
+        try {
+          const result = await fetchJson("/payslips/publish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ payslip_ids: unpublishedSelectedIds }),
+          });
+          setMessage({ tone: "success", text: result.message || "Selected payslips published successfully." });
+          showToast("success", result.message || "Selected payslips published successfully.");
+          await loadVisiblePayslips();
+        } catch (error) {
+          setMessage({ tone: "error", text: error.message });
+          showToast("error", error.message);
+        } finally {
+          setPublishing(false);
+        }
+      },
+    });
   };
 
   const filterOptions = useMemo(() => {
@@ -1024,6 +1188,8 @@ function Payslips({ user, adminView = false }) {
     return withPeriod;
   }, [payslips, searchTerm, selectedYear, selectedMonths, selectedEmployee, sortBy, displayColumnFilters, canFilterByEmployee]);
 
+  const allVisibleSelected = filteredPayslips.length > 0 && filteredPayslips.every((item) => selectedPayslipIds.includes(item._id));
+
   const displayColumns = useMemo(() => {
     if (!filteredPayslips.length) return [];
     const lineMap = new Map();
@@ -1055,6 +1221,7 @@ function Payslips({ user, adminView = false }) {
       { key: "gross_earnings", label: "Gross Earnings", getValue: (row) => row.gross_earnings, isAmount: true },
       { key: "gross_deductions", label: "Gross Deductions", getValue: (row) => row.gross_deductions, isAmount: true },
       { key: "net_pay", label: "Net Pay", getValue: (row) => row.net_pay, isAmount: true },
+      { key: "publish_status", label: "Status", getValue: (row) => row.published ? "Published" : "Draft" },
       { key: "generated_at", label: "Generated", getValue: (row) => row.generated_at ? new Date(row.generated_at).toLocaleDateString("en-IN") : "Unavailable" },
     ];
   }, [filteredPayslips]);
@@ -1071,9 +1238,32 @@ function Payslips({ user, adminView = false }) {
       : message?.tone === "error"
         ? { ...S.banner, background: C.redLight, border: `1px solid ${C.redBorder}`, color: C.red }
         : { ...S.banner, background: C.amberLight, border: `1px solid ${C.amberBorder}`, color: C.amber };
+  const toastStyle = toast?.tone === "success"
+    ? { ...S.toastCard, background: C.greenLight, border: `1px solid ${C.greenBorder}` }
+    : toast?.tone === "error"
+      ? { ...S.toastCard, background: C.redLight, border: `1px solid ${C.redBorder}` }
+      : { ...S.toastCard, background: C.amberLight, border: `1px solid ${C.amberBorder}` };
+  const confirmButtonStyle = confirmAction?.tone === "danger" ? S.dangerTextButton : S.btnPrimary;
 
   return (
     <div style={S.page}>
+      {toast ? (
+        <div style={S.toastStack} aria-live="polite" aria-atomic="true">
+          <div style={toastStyle} role="status">
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                  {toast.tone === "error" ? "Action failed" : toast.tone === "warn" ? "Please review" : "Action completed"}
+                </div>
+                <div style={{ fontSize: 13, color: C.text, marginTop: 4, lineHeight: 1.5 }}>{toast.text}</div>
+              </div>
+              <button type="button" style={S.iconButton} onClick={() => setToast(null)} aria-label="Dismiss notification">
+                <X size={15} />
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div style={S.inner}>
         <div style={S.header}>
           <h1 style={S.title}>Payslips</h1>
@@ -1081,8 +1271,8 @@ function Payslips({ user, adminView = false }) {
             {isAdmin
               ? "Upload payroll sheets, review them, add payslips to storage, and manage a month-wise archive."
               : effectiveUser?.role === "Manager"
-                ? "Search, group, and download stored payslips for you and your direct reports."
-                : "Search and download your stored payslips from a clean month-wise archive."}
+                ? "Search and download your published payslips."
+                : "Search and download your published payslips from a clean month-wise archive."}
           </p>
         </div>
 
@@ -1158,7 +1348,7 @@ function Payslips({ user, adminView = false }) {
               />
             </div>
 
-            {uploadedRowsWithStatus.length ? (
+	            {uploadedRowsWithStatus.length ? (
               <div style={{ ...S.successInfo }}>
                 <div style={S.uploadSummaryGrid}>
                   <div style={S.miniCard}>
@@ -1169,16 +1359,20 @@ function Payslips({ user, adminView = false }) {
                     <div style={S.statLabel}>Ready to Store</div>
                     <div style={{ ...S.statValue, fontSize: 20 }}>{uploadSummary.ready}</div>
                   </div>
-                  <div style={S.miniCard}>
-                    <div style={S.statLabel}>Already Stored</div>
-                    <div style={{ ...S.statValue, fontSize: 20 }}>{uploadSummary.stored}</div>
-                  </div>
-                </div>
+	                  <div style={S.miniCard}>
+	                    <div style={S.statLabel}>Already Stored</div>
+	                    <div style={{ ...S.statValue, fontSize: 20 }}>{uploadSummary.stored}</div>
+	                  </div>
+	                  <div style={S.miniCard}>
+	                    <div style={S.statLabel}>Needs Attention</div>
+	                    <div style={{ ...S.statValue, fontSize: 20 }}>{uploadLogs.length || uploadSummary.invalid}</div>
+	                  </div>
+	                </div>
 
                 <div style={S.rowBetween}>
                   <div style={{ fontSize: 13, color: C.textMid }}>
-                    Selected period: <strong style={{ color: C.text }}>{month} {year}</strong>. Rows move to the display tab only after you submit the batch.
-                  </div>
+	                    Selected period: <strong style={{ color: C.text }}>{month} {year}</strong>. Rows save as drafts first, and employees can only see them after you publish.
+	                  </div>
                   <button
                     type="button"
                     style={{ ...S.btnPrimary, ...(storingAll ? S.btnDisabled : {}) }}
@@ -1190,14 +1384,33 @@ function Payslips({ user, adminView = false }) {
                   </button>
                 </div>
               </div>
-            ) : null}
+	            ) : null}
 
-            <div style={{ ...S.card, ...S.cardPad }}>
+              {uploadLogs.length ? (
+                <div style={{ ...S.card, ...S.cardPad, marginTop: 14, marginBottom: 14, borderColor: C.amberBorder, background: "#fffaf0" }}>
+                  <div style={{ fontSize: 16, color: C.text, fontWeight: 600 }}>Upload Notes</div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>
+                    These rows need attention before they can be stored or published.
+                  </div>
+                  <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                    {uploadLogs.map((log, index) => (
+                      <div key={`${log.row_number}-${log.employee_id}-${index}`} style={{ ...S.miniCard, background: "#fff" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: C.text }}>
+                          Row {log.row_number || "Unknown"} {log.employee_name ? `• ${log.employee_name}` : ""} {log.employee_id ? `(${log.employee_id})` : ""}
+                        </div>
+                        <div style={{ fontSize: 13, color: C.textMid, marginTop: 4 }}>{log.reason}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+	            <div style={{ ...S.card, ...S.cardPad }}>
               <div style={S.rowBetween}>
                 <div>
                   <div style={{ fontSize: 16, color: C.text, fontWeight: 600 }}>Uploaded Employee Data</div>
                   <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>
-                    Review row status before storing or generating a single PDF immediately.
+	                    Review row status before saving drafts or generating a single PDF immediately.
                   </div>
                 </div>
                 {loading ? <div style={{ fontSize: 13, color: C.textMid }}>Processing upload...</div> : null}
@@ -1251,7 +1464,7 @@ function Payslips({ user, adminView = false }) {
                 <div style={S.tableToolbar}>
                   <div>
                     <div style={S.tableToolbarTitle}>Upload Preview Table</div>
-                    <div style={S.tableToolbarSub}>All parsed sheet fields are shown here. Use Edit to change row details and add or remove pay columns.</div>
+	                    <div style={S.tableToolbarSub}>All parsed sheet fields are shown here. Use Edit to change row details and add or remove pay columns.</div>
                   </div>
                   <span style={S.inlineBadge}>{filteredUploadedRows.length} visible row{filteredUploadedRows.length !== 1 ? "s" : ""}</span>
                 </div>
@@ -1281,8 +1494,8 @@ function Payslips({ user, adminView = false }) {
                             })}
                             <td style={S.td}>
                               <span style={S.badge}>
-                                {row.storage_status === "ready" ? "Ready to store" : row.storage_status === "stored" ? "Already stored" : "Needs attention"}
-                              </span>
+	                                {row.storage_status === "ready" ? "Ready to store" : row.storage_status === "stored" ? "Already stored" : "Needs attention"}
+	                              </span>
                             </td>
                               <td style={{ ...S.td, ...S.stickyActionCell }}>
                               <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
@@ -1297,8 +1510,8 @@ function Payslips({ user, adminView = false }) {
                                 onClick={() => handleGenerate(row, row.sourceIndex)}
                               >
                                 <Download size={15} />
-                                {generatingRow === row.sourceIndex ? "Working..." : row.alreadyStored ? "Open PDF" : "Store & Open PDF"}
-                              </button>
+	                                {generatingRow === row.sourceIndex ? "Working..." : row.alreadyStored ? "Open PDF" : "Save Draft & Open PDF"}
+	                              </button>
                               </div>
                             </td>
                           </tr>
@@ -1344,12 +1557,37 @@ function Payslips({ user, adminView = false }) {
                 <div>
                   <div style={{ fontSize: 16, color: C.text, fontWeight: 600 }}>Payslip Archive</div>
                   <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>
-                    Organized into expandable month-wise sections with fast filters and sorting.
-                  </div>
-                </div>
-                <div style={S.rowGap}>
-                  <button type="button" style={S.btnSecondary} onClick={loadVisiblePayslips}>
-                    <CalendarRange size={15} />
+	                    Admins can review draft payslips here and publish them only when they are ready for employees.
+	                  </div>
+	                </div>
+	                <div style={S.rowGap}>
+                      {isAdmin ? (
+                        <>
+                          <button type="button" style={S.btnSecondary} onClick={handleSelectAllVisible}>
+                            {allVisibleSelected ? "Clear Selection" : "Select All"}
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...S.btnPrimary, ...(publishing ? S.btnDisabled : {}) }}
+                            disabled={publishing}
+                            onClick={handlePublish}
+                          >
+                            <FileText size={15} />
+                            {publishing ? "Publishing..." : "Publish"}
+                          </button>
+                          <button
+                            type="button"
+                            style={{ ...S.dangerTextButton, ...(bulkDeleting ? S.btnDisabled : {}) }}
+                            disabled={bulkDeleting}
+                            onClick={handleBulkDelete}
+                          >
+                            <Trash2 size={15} />
+                            {bulkDeleting ? "Deleting..." : "Delete Selected"}
+                          </button>
+                        </>
+                      ) : null}
+	                  <button type="button" style={S.btnSecondary} onClick={loadVisiblePayslips}>
+	                    <CalendarRange size={15} />
                     Refresh
                   </button>
                 </div>
@@ -1437,30 +1675,47 @@ function Payslips({ user, adminView = false }) {
                       <div style={S.tableToolbarTitle}>Payslip Results</div>
                       <div style={S.tableToolbarSub}>Use the filters above, including multi-month selection, to narrow the table directly.</div>
                     </div>
-                    <span style={S.inlineBadge}>{filteredPayslips.length} visible row{filteredPayslips.length !== 1 ? "s" : ""}</span>
-                  </div>
-                  <div style={S.tableWrap}>
-                    <table style={S.table}>
-                      <thead>
-                        <tr>
-                          {displayColumns.map((column) => (
-                            <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
-                          ))}
+	                    <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
+                        <span style={S.inlineBadge}>{filteredPayslips.length} visible row{filteredPayslips.length !== 1 ? "s" : ""}</span>
+                        {isAdmin ? <span style={S.inlineBadge}>{selectedPayslipIds.length} selected</span> : null}
+                      </div>
+	                  </div>
+	                  <div style={S.tableWrap}>
+	                    <table style={S.table}>
+	                      <thead>
+	                        <tr>
+                          {isAdmin ? <th style={S.th}><input type="checkbox" checked={allVisibleSelected} onChange={handleSelectAllVisible} /></th> : null}
+	                          {displayColumns.map((column) => (
+	                            <th key={column.key} style={{ ...S.th, ...(column.isAmount ? { textAlign: "right" } : {}) }}>{column.label}</th>
+	                          ))}
                           <th style={{ ...S.th, textAlign: "right", borderRight: "none" }}>Actions</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {filteredPayslips.map((item) => (
-                          <tr key={item._id}>
-                            {displayColumns.map((column, index) => {
-                              const value = column.getValue(item);
+	                      <tbody>
+	                        {filteredPayslips.map((item) => (
+	                          <tr key={item._id}>
+                              {isAdmin ? (
+                                <td style={S.td}>
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedPayslipIds.includes(item._id)}
+                                    onChange={() => togglePayslipSelection(item._id)}
+                                  />
+                                </td>
+                              ) : null}
+	                            {displayColumns.map((column, index) => {
+	                              const value = column.getValue(item);
                               const isLastDataColumn = index === displayColumns.length - 1;
                               return (
                                 <td key={column.key} style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}), ...(isLastDataColumn ? { borderRight: `1px solid ${C.borderLight}` } : {}) }}>
-                                  {column.key === "name" ? <strong>{String(value ?? "")}</strong> : column.isAmount ? currency(value || 0) : String(value ?? "")}
-                                </td>
-                              );
-                            })}
+	                                  {column.key === "name"
+                                      ? <strong>{String(value ?? "")}</strong>
+                                      : column.key === "publish_status"
+                                        ? <span style={{ ...S.badge, ...(item.published ? { background: C.greenLight, border: `1px solid ${C.greenBorder}`, color: C.green } : { background: C.amberLight, border: `1px solid ${C.amberBorder}`, color: C.amber }) }}>{String(value ?? "")}</span>
+                                        : column.isAmount ? currency(value || 0) : String(value ?? "")}
+	                                </td>
+	                              );
+	                            })}
                             <td style={{ ...S.td, ...S.stickyActionCell, borderRight: "none" }}>
                               <div style={{ ...S.rowGap, justifyContent: "flex-end" }}>
                                 {isAdmin ? (
@@ -1590,6 +1845,35 @@ function Payslips({ user, adminView = false }) {
                     {savingEdit ? "Saving..." : "Save Changes"}
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {confirmAction ? (
+          <div
+            style={S.modalBackdrop}
+            onClick={() => setConfirmAction(null)}
+          >
+            <div style={S.confirmCard} onClick={(event) => event.stopPropagation()}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: C.text }}>{confirmAction.title}</div>
+              <div style={{ fontSize: 14, color: C.textMid, marginTop: 8, lineHeight: 1.6 }}>
+                {confirmAction.description}
+              </div>
+              <div style={{ ...S.rowGap, justifyContent: "flex-end", marginTop: 18 }}>
+                <button type="button" style={S.btnSecondary} onClick={() => setConfirmAction(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  style={confirmButtonStyle}
+                  onClick={async () => {
+                    const action = confirmAction.onConfirm;
+                    setConfirmAction(null);
+                    await action();
+                  }}
+                >
+                  {confirmAction.confirmLabel || "Confirm"}
+                </button>
               </div>
             </div>
           </div>

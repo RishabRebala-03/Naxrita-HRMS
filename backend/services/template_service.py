@@ -35,7 +35,7 @@ def render_email_template(template_name, context=None):
         "portal_url",
         os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "http://localhost:3000",
     )
-    context.setdefault("company_name", "Naxrita Labs")
+    context.setdefault("company_name", "Naxrita HRMS")
     context.setdefault("generated_at", datetime.utcnow())
     template = env.get_template(template_name)
     return template.render(**context)

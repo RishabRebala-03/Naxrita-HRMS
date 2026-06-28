@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut, Menu, UserCircle2 } from "lucide-react";
 import UniversalSearch from "./UniversalSearch";
 import Notifications from "./Notifications";
+import { formatTimeIST } from "../utils/dateTime";
 
 const Topbar = ({ user, onLogout, onNavigateToProfile, onToggleSidebar, isSidebarCollapsed }) => {
   const [showDropdown, setShowDropdown] = useState(false);
@@ -47,12 +48,7 @@ const Topbar = ({ user, onLogout, onNavigateToProfile, onToggleSidebar, isSideba
         ? "Manager Workspace"
         : "Employee Workspace";
 
-  const liveTimeLabel = currentTime.toLocaleTimeString("en-IN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
+  const liveTimeLabel = formatTimeIST(currentTime, "--:--:--");
 
   const dropdownStyle = {
     position: "fixed",
