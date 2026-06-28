@@ -33,7 +33,7 @@ def render_email_template(template_name, context=None):
     context = dict(context or {})
     context.setdefault(
         "portal_url",
-        os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "http://localhost:3000",
+        os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "https://me.naxrita.com",
     )
     context.setdefault("company_name", "Naxrita HRMS")
     context.setdefault("generated_at", datetime.utcnow())

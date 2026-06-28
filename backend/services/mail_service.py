@@ -385,7 +385,7 @@ def _leave_context(leave, employee=None, approver=None, extra=None):
     employee = employee or {}
     approver = approver or {}
     leave_id = str(leave.get("_id", ""))
-    portal_url = os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "http://localhost:3000"
+    portal_url = os.getenv("FRONTEND_URL") or os.getenv("APP_URL") or "https://me.naxrita.com"
     return {
         "leave_id": leave_id,
         "recipient_name": approver.get("name") or employee.get("name") or "there",
