@@ -852,6 +852,25 @@ const normalizeAdjustmentPayload = (adjustments = {}) =>
       .map(([date, value]) => [normalizeDateKey(date), Math.min(Math.max(Number(value), 0), DAILY_WORK_HOUR_LIMIT)])
   );
 
+const getDefaultWorkScheduleValue = (dateStr) => (isWeekendDate(dateStr) ? 0 : DAILY_WORK_HOUR_LIMIT);
+
+const buildDefaultWorkSchedule = (dates = []) =>
+  Object.fromEntries(dates.map((date) => [date, getDefaultWorkScheduleValue(date)]));
+
+const getTimesheetWorkScheduleByDate = (source = {}, dates = []) => {
+  const normalized = normalizeAdjustmentPayload(
+    source.work_schedule_by_date
+    || source.work_schedule
+    || {}
+  );
+  return dates.reduce((acc, date) => {
+    acc[date] = Object.prototype.hasOwnProperty.call(normalized, date)
+      ? normalized[date]
+      : getDefaultWorkScheduleValue(date);
+    return acc;
+  }, {});
+};
+
 const formatTimesheetHourValue = (hours) => {
   const numericHours = Number(hours);
   if (!Number.isFinite(numericHours) || numericHours <= 0) return '';
@@ -1114,6 +1133,7 @@ function TimesheetGrid({
   assignmentMeta = {},
   workLocationsByDate = {},
   assignedLocationsByDate = {},
+  workScheduleByDate = {},
   dailyOvertime = {},
   holidayPayout = {},
   onAdjustmentChange,
@@ -1156,10 +1176,6 @@ function TimesheetGrid({
   );
   const leaveByDate = Object.fromEntries(approvedLeaveEntries.map((leave) => [leave.date, leave]));
   const holidayDates = Object.keys(holidayByDate);
-  const isWeekday = (dateStr) => {
-    const day = parseISO(dateStr).getDay();
-    return day >= 1 && day <= 5;
-  };
   const formatHoursValue = (hours) => {
     const numericHours = Number(hours);
     if (!Number.isFinite(numericHours)) return '';
@@ -1180,6 +1196,7 @@ function TimesheetGrid({
   const leaveHoursForDate = (dateStr) => (leaveByDate[dateStr]?.hours || 0);
   const workHourLimitForDate = (dateStr) =>
     Math.max(0, WORKDAY_HOURS - holidayHoursForDate(dateStr) - leaveHoursForDate(dateStr));
+  const workScheduleForDate = (dateStr) => getAdjustmentValue(workScheduleByDate, dateStr, getDefaultWorkScheduleValue(dateStr));
   const maxHoursForRowOnDate = (rowId, dateStr) => {
     const otherRowHours = rows.reduce((sum, currentRow) => {
       if (currentRow.id === rowId) return sum;
@@ -1188,9 +1205,6 @@ function TimesheetGrid({
     return Math.max(0, workHourLimitForDate(dateStr) - otherRowHours);
   };
   const totalHoursForDate = (dateStr) => getColTotal(dateStr) + holidayHoursForDate(dateStr) + leaveHoursForDate(dateStr);
-  const workScheduleForDate = (dateStr) => (isWeekday(dateStr) ? WORKDAY_HOURS : 0);
-  const dailyOvertimeHoursForDate = (dateStr) => Math.max(getColTotal(dateStr) - workScheduleForDate(dateStr), 0);
-  const holidayPayoutHoursForDate = (dateStr) => (isWeekendDate(dateStr) ? getColTotal(dateStr) : 0);
   const supportCheckboxRows = [
     'Shift Allowance – Shift Type A',
     'Shift Allowance – Shift Type B',
@@ -1209,6 +1223,13 @@ function TimesheetGrid({
     if (!value) return '';
     return formatHoursValue(value);
   };
+  const getAdjustmentLabel = (kind) => (
+    kind === 'daily_overtime'
+      ? 'Daily overtime'
+      : kind === 'holiday_payout'
+      ? 'Holiday payout'
+      : 'Work schedule'
+  );
   const setAdjustmentValue = (kind, dateStr, rawValue) => {
     const typedHours = parseFloat(rawValue);
     const cappedHours = Number.isFinite(typedHours)
@@ -1219,7 +1240,7 @@ function TimesheetGrid({
       const alertKey = `${kind}-${dateStr}-${typedHours}`;
       if (limitAlertRef.current !== alertKey) {
         limitAlertRef.current = alertKey;
-        notify(`Per-day ${kind === 'daily_overtime' ? 'overtime' : 'holiday payout'} cannot exceed ${WORKDAY_HOURS} hours on ${dateStr}.`, 'warning');
+        notify(`Per-day ${getAdjustmentLabel(kind).toLowerCase()} cannot exceed ${WORKDAY_HOURS} hours on ${dateStr}.`, 'warning');
       }
     }
 
@@ -1227,7 +1248,7 @@ function TimesheetGrid({
   };
 
   const renderAdjustmentCell = (kind, dateStr, source, fallback) => {
-    const disabled = readOnly || isWeekendDate(dateStr);
+    const disabled = readOnly;
     const cellKey = `${kind}-${dateStr}`;
     const isEditing = editingCell === cellKey && !disabled;
     const value = getAdjustmentValue(source, dateStr, fallback);
@@ -1236,7 +1257,7 @@ function TimesheetGrid({
     if (isEditing) {
       return (
         <input
-          className="mte-sheet-adjustment-input"
+        className="mte-sheet-adjustment-input"
           type="number"
           min="0"
           max={WORKDAY_HOURS}
@@ -1265,7 +1286,7 @@ function TimesheetGrid({
         className={`mte-sheet-edit-cell mte-sheet-adjustment-display ${displayValue ? 'has-value' : ''}`}
         disabled={disabled}
         onDoubleClick={() => setEditingCell(cellKey)}
-        aria-label={`${kind === 'daily_overtime' ? 'Daily overtime' : 'Holiday payout'} ${dateStr}`}
+        aria-label={`${getAdjustmentLabel(kind)} ${dateStr}`}
       >
         {displayValue}
       </button>
@@ -1478,7 +1499,7 @@ function TimesheetGrid({
                         borderLeft: `1px solid ${C.borderLight}`,
                         background: isHol || isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
                       }}>
-                        {isHol || isWeekend ? null : isFullDayLeave ? (
+                        {isHol ? null : isFullDayLeave ? (
                           <span
                             style={{
                               display: 'inline-flex',
@@ -1535,7 +1556,7 @@ function TimesheetGrid({
                             max={rowHourLimit}
                             step="0.25"
                             value={entry.value ?? ''}
-                            disabled={readOnly || isWeekend}
+                            disabled={readOnly}
                             autoFocus
                             title={leaveEntry ? `${leaveEntry.label} covers ${displayHours(leaveEntry.hours)} hours on this date` : undefined}
                             onBlur={() => setEditingCell('')}
@@ -1685,7 +1706,7 @@ function TimesheetGrid({
               </td>
               {dates.map((d) => (
                 <td key={`work-schedule-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
-                  {displayHours(workScheduleForDate(d))}
+                  {renderAdjustmentCell('work_schedule', d, workScheduleByDate, getDefaultWorkScheduleValue(d))}
                 </td>
               ))}
               <td className="mte-sheet-static-total-cell">{displayHours(dates.reduce((sum, dateStr) => sum + workScheduleForDate(dateStr), 0))}</td>
@@ -1704,11 +1725,11 @@ function TimesheetGrid({
               </td>
               {dates.map((d) => (
                 <td key={`daily-overtime-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
-                  {renderAdjustmentCell('daily_overtime', d, dailyOvertime, dailyOvertimeHoursForDate(d))}
+                  {renderAdjustmentCell('daily_overtime', d, dailyOvertime, 0)}
                 </td>
               ))}
               <td className="mte-sheet-static-total-cell">
-                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(dailyOvertime, dateStr, dailyOvertimeHoursForDate(dateStr)), 0))}
+                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(dailyOvertime, dateStr, 0), 0))}
               </td>
             </tr>
 
@@ -1725,11 +1746,11 @@ function TimesheetGrid({
               </td>
               {dates.map((d) => (
                 <td key={`holiday-payout-${d}`} className="mte-sheet-static-value-cell" style={nonWorkingDayCellStyle(d)}>
-                  {renderAdjustmentCell('holiday_payout', d, holidayPayout, holidayPayoutHoursForDate(d))}
+                  {renderAdjustmentCell('holiday_payout', d, holidayPayout, 0)}
                 </td>
               ))}
               <td className="mte-sheet-static-total-cell">
-                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(holidayPayout, dateStr, holidayPayoutHoursForDate(dateStr)), 0))}
+                {displayHours(dates.reduce((sum, dateStr) => sum + getAdjustmentValue(holidayPayout, dateStr, 0), 0))}
               </td>
             </tr>
 
@@ -1747,7 +1768,7 @@ function TimesheetGrid({
                 </td>
                 {dates.map((d) => (
                   <td key={`${label}-${d}`} className="mte-sheet-checkbox-cell" style={nonWorkingDayCellStyle(d)}>
-                    <input type="checkbox" className="mte-sheet-checkbox" disabled={readOnly || isWeekendDate(d)} />
+                    <input type="checkbox" className="mte-sheet-checkbox" disabled={readOnly} />
                   </td>
                 ))}
                 <td className="mte-sheet-static-total-cell" />
@@ -1777,6 +1798,7 @@ function TimesheetPage({
   const [selectedRowId, setSelectedRowId]       = useState('');
   const [dailyOvertime, setDailyOvertime]       = useState({});
   const [holidayPayout, setHolidayPayout]       = useState({});
+  const [workScheduleByDate, setWorkScheduleByDate] = useState({});
   const [validationErrors, setValidationErrors] = useState([]);
   const [chargeCodes, setChargeCodes]           = useState([]);
   const [approvedLeaves, setApprovedLeaves]     = useState([]);
@@ -1803,6 +1825,7 @@ function TimesheetPage({
     setSelectedRowId('');
     setDailyOvertime({});
     setHolidayPayout({});
+    setWorkScheduleByDate({});
     setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
     setHasSavedCurrentDraft(false);
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
@@ -1876,6 +1899,10 @@ function TimesheetPage({
     employee_work_locations_by_date: periodWorkLocationsByDate,
     employee_assigned_locations_by_date: periodAssignedLocationsByDate,
   }), [periodAssignedLocationsByDate, periodWorkLocationsByDate]);
+  const buildWorkSchedulePayload = useCallback(
+    () => normalizeAdjustmentPayload(workScheduleByDate),
+    [workScheduleByDate]
+  );
 
   const approvedLeaveEntries = useMemo(
     () => buildApprovedLeaveEntries(approvedLeaves, dates),
@@ -1895,13 +1922,12 @@ function TimesheetPage({
   );
   const lockedDateSet = useMemo(
     () => new Set([
-      ...dates.filter(isWeekendDate),
       ...Object.keys(holidayByDate),
       ...Object.values(approvedLeaveByDate)
         .filter((leave) => !leave.isHalfDay)
         .map((leave) => leave.date),
     ]),
-    [dates, holidayByDate, approvedLeaveByDate]
+    [holidayByDate, approvedLeaveByDate]
   );
   const halfDayWorkDefaultsByDate = useMemo(
     () => Object.fromEntries(
@@ -2000,6 +2026,7 @@ function TimesheetPage({
           setTimesheetStatus(match.status || 'draft');
           setDailyOvertime(match.daily_overtime || {});
           setHolidayPayout(match.holiday_payout || {});
+          setWorkScheduleByDate(getTimesheetWorkScheduleByDate(match, dates));
           setTimesheetLocationMaps({
             workLocationsByDate: matchedWorkLocationsByDate,
             assignedLocationsByDate: matchedAssignedLocationsByDate,
@@ -2066,6 +2093,7 @@ function TimesheetPage({
           setTimesheetStatus('draft');
           setDailyOvertime({});
           setHolidayPayout({});
+          setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
           setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
           setHasSavedCurrentDraft(false);
           setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
@@ -2074,6 +2102,7 @@ function TimesheetPage({
       .catch(() => {
         setDailyOvertime({});
         setHolidayPayout({});
+        setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
         setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
         setHasSavedCurrentDraft(false);
         setRows([createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)]);
@@ -2120,9 +2149,6 @@ function TimesheetPage({
       }, 0);
       const approvedLeave = approvedLeaveByDate[date];
       const systemHours = (approvedLeave?.hours || 0) + (holidayByDate[date] ? DAILY_WORK_HOUR_LIMIT : 0);
-      if (isWeekendDate(date) && total > 0) {
-        errors.push(`${date} is a weekend and cannot contain work hours`);
-      }
       if (approvedLeave && !approvedLeave.isHalfDay && total > 0) {
         errors.push(`${date} is already marked as ${approvedLeaveByDate[date].label} (${approvedLeaveByDate[date].code})`);
       }
@@ -2183,7 +2209,6 @@ function TimesheetPage({
         if (numHrs > DAILY_WORK_HOUR_LIMIT) {
           throw new Error(`Working hours for any charge code cannot exceed ${DAILY_WORK_HOUR_LIMIT} hours on ${e.date}`);
         }
-        if (isWeekendDate(e.date)) throw new Error(`${e.date} is a weekend and cannot contain work hours`);
         if (lockedDateSet.has(e.date)) {
           const leaveEntry = approvedLeaveByDate[e.date];
           if (leaveEntry) throw new Error(`${e.date} is already marked as ${leaveEntry.label} (${leaveEntry.code})`);
@@ -2250,6 +2275,7 @@ function TimesheetPage({
       work_hours: getEntriesWorkHours(liveSummaryEntries),
       daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
       holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+      work_schedule_by_date: buildWorkSchedulePayload(),
       status: timesheetStatus,
       employee_external_id: profile.employeeId || '',
       employee_work_location: profile.workLocation || '',
@@ -2261,6 +2287,7 @@ function TimesheetPage({
     });
   }, [
     activePeriod,
+    buildWorkSchedulePayload,
     dailyOvertime,
     dates,
     holidayPayout,
@@ -2289,6 +2316,7 @@ function TimesheetPage({
           entries,
           daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
           holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+          work_schedule_by_date: buildWorkSchedulePayload(),
           ...buildLocationPayload(),
         }),
       });
@@ -2298,7 +2326,7 @@ function TimesheetPage({
     } catch (_) {
       // Silent autosave should never interrupt typing or replace validation.
     }
-  }, [buildLocationPayload, buildWorkEntries, dailyOvertime, dates, hasSelectedRowsWithoutHours, holidayPayout, isReadOnly, userId]);
+  }, [buildLocationPayload, buildWorkEntries, buildWorkSchedulePayload, dailyOvertime, dates, hasSelectedRowsWithoutHours, holidayPayout, isReadOnly, userId]);
 
   useEffect(() => {
     if (!hasLocalTimesheetEditsRef.current || isReadOnly) return undefined;
@@ -2306,7 +2334,7 @@ function TimesheetPage({
       saveDraftSilently();
     }, 1500);
     return () => clearTimeout(autoSaveTimer);
-  }, [rows, saveDraftSilently, isReadOnly]);
+  }, [rows, dailyOvertime, holidayPayout, workScheduleByDate, periodWorkLocationsByDate, periodAssignedLocationsByDate, saveDraftSilently, isReadOnly]);
 
   useEffect(() => {
     saveDraftSilentlyRef.current = saveDraftSilently;
@@ -2377,6 +2405,7 @@ function TimesheetPage({
             entries,
             daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
             holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+            work_schedule_by_date: buildWorkSchedulePayload(),
             ...buildLocationPayload(),
           }),
         });
@@ -2391,6 +2420,7 @@ function TimesheetPage({
             entries,
             daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
             holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+            work_schedule_by_date: buildWorkSchedulePayload(),
             ...buildLocationPayload(),
           }),
         });
@@ -2420,6 +2450,7 @@ function TimesheetPage({
           entries,
           daily_overtime: normalizeAdjustmentPayload(dailyOvertime),
           holiday_payout: normalizeAdjustmentPayload(holidayPayout),
+          work_schedule_by_date: buildWorkSchedulePayload(),
           ...buildLocationPayload(),
         }),
       });
@@ -2464,7 +2495,11 @@ function TimesheetPage({
   const handleAdjustmentChange = (kind, dateStr, value) => {
     hasLocalTimesheetEditsRef.current = true;
     setHasSavedCurrentDraft(false);
-    const setter = kind === 'daily_overtime' ? setDailyOvertime : setHolidayPayout;
+    const setter = kind === 'daily_overtime'
+      ? setDailyOvertime
+      : kind === 'holiday_payout'
+      ? setHolidayPayout
+      : setWorkScheduleByDate;
     setter((previous) => ({
       ...previous,
       [dateStr]: value === '' ? 0 : value,
@@ -2659,6 +2694,7 @@ function TimesheetPage({
         assignmentMeta={assignmentMeta}
         workLocationsByDate={periodWorkLocationsByDate}
         assignedLocationsByDate={periodAssignedLocationsByDate}
+        workScheduleByDate={workScheduleByDate}
         dailyOvertime={dailyOvertime}
         holidayPayout={holidayPayout}
         onAdjustmentChange={handleAdjustmentChange}
@@ -6856,7 +6892,6 @@ function LocationsPanel({
 
     const nextDailyLocations = dates.reduce((acc, day) => {
       const key = format(day, 'yyyy-MM-dd');
-      if (isWeekendDate(key)) return acc;
       acc[key] = dailyLocations[key] || locationOne;
       return acc;
     }, {});
@@ -6901,8 +6936,7 @@ function LocationsPanel({
     const targetDates = selectedDates.length
       ? selectedDates
       : dates
-        .map((day) => format(day, 'yyyy-MM-dd'))
-        .filter((dateKey) => !isWeekendDate(dateKey));
+        .map((day) => format(day, 'yyyy-MM-dd'));
     const nextDailyLocations = {
       ...dailyLocations,
       ...targetDates.reduce((acc, dateKey) => {
@@ -6915,7 +6949,6 @@ function LocationsPanel({
   };
 
   const toggleSelectedDate = (dateKey) => {
-    if (isWeekendDate(dateKey)) return;
     setSelectedDates((previous) => (
       previous.includes(dateKey)
         ? previous.filter((item) => item !== dateKey)
@@ -7033,14 +7066,13 @@ function LocationsPanel({
               const isWeekend = isWeekendDate(key);
               return (
                 <article key={key} className={`${isSelected ? 'is-selected' : ''} ${isWeekend ? 'is-weekend' : ''}`.trim()}>
-                  <button type="button" onClick={() => toggleSelectedDate(key)} disabled={isWeekend}>
+                  <button type="button" onClick={() => toggleSelectedDate(key)}>
                     <span>{format(day, 'EEE')}</span>
                     <strong>{format(day, 'dd MMM')}</strong>
                   </button>
                   <select
-                    value={isWeekend ? '' : dailyLocations[key] || assignmentMeta.workLocation || ''}
+                    value={dailyLocations[key] || assignmentMeta.workLocation || ''}
                     onChange={(event) => updateDailyLocation(key, event.target.value)}
-                    disabled={isWeekend}
                   >
                     <option value="">Select location</option>
                     {locationOptions.map((option) => <option key={option}>{option}</option>)}
@@ -7747,26 +7779,13 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
   const absenceEntries = entries.filter((entry) => ['leave', 'holiday'].includes(entry.entry_type));
   const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const workHours = workEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
-  const weekendWorkHours = workEntries.reduce((sum, entry) => (
-    entry.date && isWeekendDate(entry.date)
-      ? sum + Number(entry.hours || 0)
-      : sum
-  ), 0);
-  const weekdayWorkHours = Math.max(workHours - weekendWorkHours, 0);
   const absenceHours = absenceEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
-  const weekdayAbsenceHours = absenceEntries.reduce((sum, entry) => (
-    entry.date && !isWeekendDate(entry.date)
-      ? sum + Number(entry.hours || 0)
-      : sum
-  ), 0);
-  const weekdayCount = dates.filter((date) => {
-    const day = date.getDay();
-    return day >= 1 && day <= 5;
-  }).length;
-  const workSchedule = weekdayCount * DAILY_WORK_HOUR_LIMIT;
-  const standardAvailable = Math.max(workSchedule - weekdayAbsenceHours, 0);
-  const totalWorkingHours = workHours + weekdayAbsenceHours;
-  const overtime = weekendWorkHours + Math.max(weekdayWorkHours - standardAvailable, 0);
+  const workScheduleByDate = getTimesheetWorkScheduleByDate(summaryTimesheet || {}, dates.map((date) => format(date, 'yyyy-MM-dd')));
+  const workSchedule = Object.values(workScheduleByDate).reduce((sum, value) => sum + Number(value || 0), 0);
+  const explicitDailyOvertime = Object.values(summaryTimesheet?.daily_overtime || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+  const totalWorkingHours = workHours;
+  const overtime = explicitDailyOvertime;
+  const standardAvailable = workSchedule;
   const availablePercent = standardAvailable ? Math.round((workHours / standardAvailable) * 100) : 0;
   const assignmentMeta = getTimesheetAssignmentMeta({ ...profile, ...summaryTimesheet });
   const country = profile.countryRegion || profile.country || 'India';

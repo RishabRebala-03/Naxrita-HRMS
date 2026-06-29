@@ -190,8 +190,6 @@ def validate_daily_work_hours(entries):
         date_key = entry.get("date")
         if not date_key:
             continue
-        if not is_weekday_date(date_key):
-            return f"Work hours cannot be entered on weekends: {date_key}"
         try:
             hours = float(entry.get("hours") or 0)
         except (TypeError, ValueError):
@@ -266,6 +264,11 @@ def normalize_daily_adjustments(adjustments, period_start, period_end, field_lab
         normalized[date_key] = round(hours, 2)
 
     return normalized, None
+
+
+def normalize_work_schedule(adjustments, period_start, period_end):
+    """Validate editable daily work schedule values stored with a timesheet."""
+    return normalize_daily_adjustments(adjustments, period_start, period_end, "Work schedule")
 
 
 def normalize_location_map(locations, period_start, period_end):
@@ -868,6 +871,14 @@ def create_timesheet():
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_schedule_by_date, adjustment_error = normalize_work_schedule(
+            data.get("work_schedule_by_date", data.get("work_schedule", {})),
+            period_start,
+            period_end,
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         work_locations_by_date = normalize_location_map(
             data.get("employee_work_locations_by_date")
             or data.get("work_locations_by_date")
@@ -922,6 +933,7 @@ def create_timesheet():
             "entries":             validated_entries,
             "daily_overtime":      daily_overtime,
             "holiday_payout":      holiday_payout,
+            "work_schedule_by_date": work_schedule_by_date,
             "employee_work_locations_by_date": work_locations_by_date,
             "employee_assigned_locations_by_date": assigned_locations_by_date,
             "total_hours":         total_hours,
@@ -1008,6 +1020,14 @@ def update_timesheet(timesheet_id):
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_schedule_by_date, adjustment_error = normalize_work_schedule(
+            data.get("work_schedule_by_date", data.get("work_schedule", ts.get("work_schedule_by_date", {}))),
+            ts.get("period_start"),
+            ts.get("period_end"),
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         validated_entries, total_hours, entry_error = build_validated_timesheet_entries(
             ts["employee_id"],
             ts.get("period_start"),
@@ -1021,6 +1041,7 @@ def update_timesheet(timesheet_id):
             "entries":        validated_entries,
             "daily_overtime": daily_overtime,
             "holiday_payout": holiday_payout,
+            "work_schedule_by_date": work_schedule_by_date,
             "total_hours":    total_hours,
             "work_hours":     get_work_hours_total(validated_entries),
             "updated_at":     datetime.utcnow(),
@@ -1090,6 +1111,14 @@ def save_timesheet_draft():
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_schedule_by_date, adjustment_error = normalize_work_schedule(
+            data.get("work_schedule_by_date", data.get("work_schedule", {})),
+            period_start,
+            period_end,
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         work_locations_by_date = normalize_location_map(
             data.get("employee_work_locations_by_date")
             or data.get("work_locations_by_date")
@@ -1137,6 +1166,7 @@ def save_timesheet_draft():
             "entries": validated_entries,
             "daily_overtime": daily_overtime,
             "holiday_payout": holiday_payout,
+            "work_schedule_by_date": work_schedule_by_date,
             "employee_work_locations_by_date": work_locations_by_date,
             "employee_assigned_locations_by_date": assigned_locations_by_date,
             "total_hours": total_hours,
@@ -1223,6 +1253,14 @@ def submit_timesheet(timesheet_id):
         if adjustment_error:
             return jsonify({"error": adjustment_error}), 400
 
+        work_schedule_by_date, adjustment_error = normalize_work_schedule(
+            ts.get("work_schedule_by_date", {}),
+            ts.get("period_start"),
+            ts.get("period_end"),
+        )
+        if adjustment_error:
+            return jsonify({"error": adjustment_error}), 400
+
         work_entries = [
             entry for entry in (ts.get("entries") or [])
             if entry.get("entry_type", "work") == "work"
@@ -1241,6 +1279,7 @@ def submit_timesheet(timesheet_id):
             "entries":       validated_entries,
             "daily_overtime": daily_overtime,
             "holiday_payout": holiday_payout,
+            "work_schedule_by_date": work_schedule_by_date,
             "total_hours":   total_hours,
             "work_hours":    get_work_hours_total(validated_entries),
             "status":       "pending_lead",

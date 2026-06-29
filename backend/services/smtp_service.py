@@ -4,7 +4,9 @@ import logging
 import os
 import smtplib
 import ssl
+import unicodedata
 from datetime import datetime
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -121,13 +123,13 @@ def _env_settings(tenant_id):
     return {
         "tenant_id": tenant_id,
         "provider": os.getenv("SMTP_PROVIDER", DEFAULT_SMTP_PROVIDER),
-        "smtp_host": smtp_host,
+        "smtp_host": _sanitize_mail_text(smtp_host),
         "smtp_port": int(os.getenv("SMTP_PORT", str(DEFAULT_SMTP_PORT))),
-        "smtp_user": smtp_user or "",
-        "smtp_password": smtp_password or "",
-        "encryption": os.getenv("SMTP_ENCRYPTION", "starttls"),
-        "from_email": from_email,
-        "from_name": os.getenv("SMTP_FROM_NAME", DEFAULT_FROM_NAME),
+        "smtp_user": _sanitize_mail_text(smtp_user or ""),
+        "smtp_password": _sanitize_mail_text(smtp_password or ""),
+        "encryption": _sanitize_mail_text(os.getenv("SMTP_ENCRYPTION", "starttls")),
+        "from_email": _sanitize_mail_text(from_email),
+        "from_name": _sanitize_mail_text(os.getenv("SMTP_FROM_NAME", DEFAULT_FROM_NAME)),
         "is_active": os.getenv("MAIL_ENABLED", "true").lower() == "true",
         "source": "env",
     }
@@ -141,7 +143,12 @@ def get_active_mail_settings(tenant_id=None):
     settings = mongo.db.mail_settings.find_one(query, sort=[("updated_at", -1)])
     if settings:
         settings = dict(settings)
-        settings["smtp_password"] = decrypt_secret(settings.get("smtp_password", ""))
+        settings["smtp_host"] = _sanitize_mail_text(settings.get("smtp_host"))
+        settings["smtp_user"] = _sanitize_mail_text(settings.get("smtp_user"))
+        settings["smtp_password"] = _sanitize_mail_text(decrypt_secret(settings.get("smtp_password", "")))
+        settings["encryption"] = _sanitize_mail_text(settings.get("encryption"))
+        settings["from_email"] = _sanitize_mail_text(settings.get("from_email"))
+        settings["from_name"] = _sanitize_mail_text(settings.get("from_name"))
         settings["source"] = "database"
         return settings
 
@@ -209,10 +216,13 @@ def validate_smtp_connection(settings):
 
     server = _connect(settings)
     try:
-        smtp_user = settings.get("smtp_user")
-        smtp_password = settings.get("smtp_password")
+        smtp_user = _sanitize_mail_text(settings.get("smtp_user"))
+        smtp_password = _sanitize_mail_text(settings.get("smtp_password"))
         if smtp_user and smtp_password:
-            server.login(smtp_user, smtp_password)
+            try:
+                server.login(smtp_user, smtp_password)
+            except Exception as exc:
+                raise MailConfigurationError(f"SMTP login failed: {exc}") from exc
     finally:
         try:
             server.quit()
@@ -220,6 +230,20 @@ def validate_smtp_connection(settings):
             server.close()
 
     return True
+
+
+def _sanitize_mail_text(value):
+    if value is None:
+        return ""
+    text = unicodedata.normalize("NFKC", str(value))
+    return text.replace("\xa0", " ").strip()
+
+
+def _header_value(value):
+    sanitized = _sanitize_mail_text(value)
+    if not sanitized:
+        return ""
+    return Header(sanitized, "utf-8").encode()
 
 
 def send_mail(settings, recipients, subject, html_content, cc=None, text_content=None):
@@ -231,14 +255,17 @@ def send_mail(settings, recipients, subject, html_content, cc=None, text_content
     if not settings.get("is_active", True):
         raise MailConfigurationError("SMTP settings are disabled")
 
-    from_email = settings.get("from_email") or settings.get("smtp_user")
-    from_name = settings.get("from_name") or "Naxrita HRMS"
+    from_email = _sanitize_mail_text(settings.get("from_email") or settings.get("smtp_user"))
+    from_name = _sanitize_mail_text(settings.get("from_name") or "Naxrita HRMS")
+    subject = _sanitize_mail_text(subject)
+    html_content = _sanitize_mail_text(html_content)
+    text_content = _sanitize_mail_text(text_content) if text_content is not None else None
     if not from_email:
         raise MailConfigurationError("From email is required")
 
     message = MIMEMultipart("alternative")
-    message["Subject"] = subject
-    message["From"] = formataddr((from_name, from_email))
+    message["Subject"] = _header_value(subject)
+    message["From"] = formataddr((_header_value(from_name), from_email))
     message["To"] = ", ".join(recipients)
     if cc:
         message["Cc"] = ", ".join(cc)
@@ -249,11 +276,17 @@ def send_mail(settings, recipients, subject, html_content, cc=None, text_content
 
     server = _connect(settings)
     try:
-        smtp_user = settings.get("smtp_user")
-        smtp_password = settings.get("smtp_password")
+        smtp_user = _sanitize_mail_text(settings.get("smtp_user"))
+        smtp_password = _sanitize_mail_text(settings.get("smtp_password"))
         if smtp_user and smtp_password:
-            server.login(smtp_user, smtp_password)
-        server.sendmail(from_email, recipients + cc, message.as_string())
+            try:
+                server.login(smtp_user, smtp_password)
+            except Exception as exc:
+                raise MailConfigurationError(f"SMTP login failed: {exc}") from exc
+        try:
+            server.sendmail(from_email, recipients + cc, message.as_string())
+        except Exception as exc:
+            raise MailConfigurationError(f"SMTP send failed: {exc}") from exc
     finally:
         try:
             server.quit()
@@ -306,7 +339,7 @@ def _normalize_addresses(value):
     normalized = []
     seen = set()
     for item in value:
-        address = str(item or "").strip()
+        address = _sanitize_mail_text(item)
         if not address:
             continue
         key = address.lower()
