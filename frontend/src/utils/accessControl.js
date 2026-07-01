@@ -5,6 +5,7 @@ export const ASSIGNABLE_ADMIN_MENUS = [
   "holidays",
   "apply-behalf",
   "projects",
+  "tea-coffee",
   "timesheets",
   "payslips",
   "mail",

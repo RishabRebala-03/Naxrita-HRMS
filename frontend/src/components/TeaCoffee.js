@@ -1138,7 +1138,11 @@ const AdminView = ({
   );
 };
 
-const TeaCoffee = ({ user }) => {
+const TeaCoffee = ({ user, adminView = false }) => {
+  const effectiveUser = adminView
+    && !["Admin", "admin", "System Administrator", "Administrator", "system-admin"].includes((user?.role || "").trim())
+    ? { ...user, role: "Admin" }
+    : user;
   const [orders, setOrders] = useState({});
   const [historyOrders, setHistoryOrders] = useState([]);
   const [adminHistoryOrders, setAdminHistoryOrders] = useState([]);
@@ -1183,9 +1187,9 @@ const TeaCoffee = ({ user }) => {
   const [employeeHistoryPage, setEmployeeHistoryPage] = useState(1);
 
   const isAdmin = ["Admin", "admin", "System Administrator", "Administrator", "system-admin"].includes(
-    (user?.role || "").trim()
+    (effectiveUser?.role || "").trim()
   );
-  const userId = user?._id || user?.id;
+  const userId = effectiveUser?._id || effectiveUser?.id;
 
   const showToast = (nextMessage) => {
     setMessage(nextMessage);
@@ -1428,8 +1432,8 @@ const TeaCoffee = ({ user }) => {
           date: selectedDate,
           morning: tempSelection.morning,
           evening: tempSelection.evening,
-          employee_name: user.name,
-          employee_email: user.email,
+          employee_name: effectiveUser.name,
+          employee_email: effectiveUser.email,
         },
       }));
 

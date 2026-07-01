@@ -3352,7 +3352,7 @@ button:hover:not(:disabled) {
   width: fit-content;
   max-width: 100%;
   align-self: flex-start;
-  margin-top: 2px;
+  margin: 2px 0 0 14px;
   padding: 7px;
   border-radius: 16px;
   box-shadow: 0 10px 24px rgba(34, 53, 72, 0.06);

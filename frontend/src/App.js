@@ -151,6 +151,47 @@ const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
   );
 };
 
+const SharedAdminWorkspace = ({
+  personalLabel,
+  adminLabel,
+  renderPersonal,
+  renderAdmin,
+  ariaLabel,
+}) => {
+  const [activeTab, setActiveTab] = useState("personal");
+
+  return (
+    <section className="delegated-leaves-workspace">
+      <nav
+        className="page-subtab-strip delegated-leaves-tab-strip"
+        role="tablist"
+        aria-label={ariaLabel}
+      >
+        <button
+          type="button"
+          className={`page-subtab-button delegated-leaves-tab-button ${activeTab === "personal" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("personal")}
+          role="tab"
+          aria-selected={activeTab === "personal"}
+        >
+          {personalLabel}
+        </button>
+        <button
+          type="button"
+          className={`page-subtab-button delegated-leaves-tab-button ${activeTab === "admin" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("admin")}
+          role="tab"
+          aria-selected={activeTab === "admin"}
+        >
+          {adminLabel}
+        </button>
+      </nav>
+
+      {activeTab === "personal" ? renderPersonal() : renderAdmin()}
+    </section>
+  );
+};
+
 function App() {
   const IDLE_TIMEOUT_MS = 2 * 60 * 1000;
   const IDLE_WARNING_MS = 30 * 1000;
@@ -593,7 +634,17 @@ function App() {
         return <Calendar user={currentUser} setSection={handleSectionChange} navigationState={sectionState} />;
 
       case "tea-coffee":
-        return <TeaCoffee user={currentUser} />;
+        return hasAdminMenuAccess(currentUser, "tea-coffee") && role !== "Admin"
+          ? (
+            <SharedAdminWorkspace
+              personalLabel="My Tea & Coffee"
+              adminLabel="Admin Tea & Coffee"
+              ariaLabel="Tea and coffee workspace tabs"
+              renderPersonal={() => <TeaCoffee user={currentUser} />}
+              renderAdmin={() => <TeaCoffee user={currentUser} adminView />}
+            />
+          )
+          : <TeaCoffee user={currentUser} adminView={hasAdminMenuAccess(currentUser, "tea-coffee")} />;
 
       case "policy":
         return <Policy user={currentUser} />;
@@ -608,12 +659,32 @@ function App() {
       case "timesheets":
         return (
           <div className="timesheets-page-shell">
-            <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} />
+            {hasAdminMenuAccess(currentUser, "timesheets") && role !== "Admin" ? (
+              <SharedAdminWorkspace
+                personalLabel="My Timesheets"
+                adminLabel="Admin Timesheets"
+                ariaLabel="Timesheet workspace tabs"
+                renderPersonal={() => <Timesheets user={currentUser} />}
+                renderAdmin={() => <Timesheets user={currentUser} adminView />}
+              />
+            ) : (
+              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} />
+            )}
           </div>
         );
 
       case "payslips":
-        return <Payslips user={currentUser} adminView={hasAdminMenuAccess(currentUser, "payslips")} />;
+        return hasAdminMenuAccess(currentUser, "payslips") && role !== "Admin"
+          ? (
+            <SharedAdminWorkspace
+              personalLabel="My Payslips"
+              adminLabel="Admin Payslips"
+              ariaLabel="Payslip workspace tabs"
+              renderPersonal={() => <Payslips user={currentUser} />}
+              renderAdmin={() => <Payslips user={currentUser} adminView />}
+            />
+          )
+          : <Payslips user={currentUser} adminView={hasAdminMenuAccess(currentUser, "payslips")} />;
 
       default:
         if (role === "Admin") {
