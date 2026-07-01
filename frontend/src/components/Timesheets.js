@@ -678,7 +678,6 @@ const LEAVE_TYPE_TO_ABSENCE_KEY = {
   'maternity leave': 'maternity_leave',
   optional: 'optional_holiday',
   'optional holiday': 'optional_holiday',
-  'early logout': 'other_approved_absence',
   'other approved absence': 'other_approved_absence',
   'overseas holiday': 'overseas_holiday',
   paternity: 'paternity_leave',
@@ -704,6 +703,8 @@ const normalizeAbsenceLabel = (value) =>
     .split(/\s+/)
     .filter(Boolean)
     .join(' ');
+
+const isEarlyLogoutLeaveType = (value) => normalizeAbsenceLabel(value) === 'early logout';
 
 const getAbsenceChargeCode = (leaveType) => {
   const normalized = normalizeAbsenceLabel(leaveType);
@@ -782,6 +783,8 @@ const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
   const leaveByDate = new Map();
 
   approvedLeaves.forEach((leave) => {
+    if (isEarlyLogoutLeaveType(leave.leave_type)) return;
+
     const start = normalizeDateKey(leave.approved_start_date || leave.start_date);
     const end = normalizeDateKey(leave.approved_end_date || leave.end_date || start);
     if (!start || !end) return;
@@ -3333,6 +3336,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
 // ─── Approvals ────────────────────────────────────────────────────────────────
 function Approvals({ user }) {
   const { notify, confirmAction, promptAction } = useTimesheetUi();
+  const [activeSubtab,        setActiveSubtab]        = useState('queue');
   const [searchTerm,          setSearchTerm]          = useState('');
   const [statusFilter,        setStatusFilter]        = useState('pending_lead');
   const [typeFilter,          setTypeFilter]          = useState('all');
@@ -3473,6 +3477,30 @@ function Approvals({ user }) {
             <h1 style={S.pageTitle}>Timesheet Approvals</h1>
             <p style={S.pageSub}>Review and action your direct reports' timesheets</p>
           </div>
+
+          <div style={{ ...S.card, ...S.cardPadSm, marginBottom: '14px' }}>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setActiveSubtab('queue')}
+                style={activeSubtab === 'queue' ? S.btnPrimary : S.btnSecondary}
+              >
+                Pending Queue
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSubtab('history')}
+                style={activeSubtab === 'history' ? S.btnPrimary : S.btnSecondary}
+              >
+                Approvals History
+              </button>
+            </div>
+          </div>
+
+          {activeSubtab === 'history' ? (
+            <ApprovalsHistoryWorkspace user={user} />
+          ) : (
+            <>
 
           <div style={S.statsGrid}>
             {[
@@ -3760,9 +3788,397 @@ function Approvals({ user }) {
               ].map((t, i) => <li key={i} style={S.infoItem}>• {t}</li>)}
             </ul>
           </div>
+            </>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function ApprovalsHistoryWorkspace({ user }) {
+  const { notify } = useTimesheetUi();
+  const [historyTimesheets, setHistoryTimesheets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [collapsedFortnights, setCollapsedFortnights] = useState({});
+  const [searchTerm, setSearchTerm] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [periodRange, setPeriodRange] = useState(blankDateRange);
+  const [approvedRange, setApprovedRange] = useState(blankDateRange);
+  const [selectedEmployee, setSelectedEmployee] = useState('all');
+  const [departmentFilter, setDepartmentFilter] = useState('all');
+  const [leadFilter, setLeadFilter] = useState('all');
+  const [viewingTimesheet, setViewingTimesheet] = useState(null);
+  const [fullPageView, setFullPageView] = useState(false);
+
+  const ccLookup = useCcLookup();
+  const userEmail = String(user?.email || '').trim();
+
+  const loadHistory = useCallback(() => {
+    if (!userEmail) return;
+    setLoading(true);
+    fetchAPI(`/timesheets/team/${encodeURIComponent(userEmail)}`)
+      .then((data) => {
+        const items = Array.isArray(data) ? data : [];
+        setHistoryTimesheets(items.filter((timesheet) => timesheet.status === 'approved'));
+      })
+      .catch((err) => notify(`Failed to load approval history: ${err.message}`, 'error'))
+      .finally(() => setLoading(false));
+  }, [notify, userEmail]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const filtered = useMemo(() => historyTimesheets.filter((timesheet) => {
+    const name = String(timesheet.employee_name || '').toLowerCase();
+    const email = String(timesheet.employee_email || '').toLowerCase();
+    const department = String(timesheet.employee_department || 'Unassigned');
+    const leadLabel = getReportingLeadLabel(timesheet);
+    const approvedAt = getApprovedTimestamp(timesheet);
+    const fortnight = getTimesheetFortnightMeta(timesheet);
+    const query = searchTerm.toLowerCase().trim();
+
+    const matchesSearch = !query || [
+      name,
+      email,
+      department.toLowerCase(),
+      String(leadLabel || '').toLowerCase(),
+      String(fortnight.label || '').toLowerCase(),
+    ].some((value) => value.includes(query));
+
+    return matchesSearch
+      && (selectedEmployee === 'all' || (timesheet.employee_id || '') === selectedEmployee)
+      && (departmentFilter === 'all' || department === departmentFilter)
+      && (leadFilter === 'all' || (timesheet.reporting_lead_id || getReportingLeadLabel(timesheet)) === leadFilter)
+      && timesheetHasEntryType(timesheet, typeFilter)
+      && isTimesheetInRange(timesheet, periodRange)
+      && (!approvedRange.start && !approvedRange.end ? true : isDateValueInRange(approvedAt, approvedRange));
+  }), [
+    approvedRange,
+    departmentFilter,
+    historyTimesheets,
+    leadFilter,
+    periodRange,
+    searchTerm,
+    selectedEmployee,
+    typeFilter,
+  ]);
+
+  const departmentOptions = useMemo(
+    () => Array.from(new Set(historyTimesheets.map((item) => item.employee_department || 'Unassigned')))
+      .sort((a, b) => a.localeCompare(b)),
+    [historyTimesheets]
+  );
+
+  const employeeOptions = useMemo(
+    () => Array.from(new Map(
+      historyTimesheets.map((item) => [
+        item.employee_id || item.employee_email || item.employee_name,
+        {
+          value: item.employee_id || '',
+          label: item.employee_name || item.employee_email || 'Unknown employee',
+        },
+      ])
+    ).values()).sort((a, b) => a.label.localeCompare(b.label)),
+    [historyTimesheets]
+  );
+
+  const leadOptions = useMemo(() => {
+    const map = new Map();
+    historyTimesheets.forEach((item) => {
+      const value = item.reporting_lead_id || getReportingLeadLabel(item);
+      if (!map.has(value)) {
+        map.set(value, getReportingLeadLabel(item));
+      }
+    });
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [historyTimesheets]);
+
+  const searchSuggestions = useMemo(
+    () => uniqSuggestions(historyTimesheets, ['employee_name', 'employee_email', 'employee_department', 'reporting_lead_name']),
+    [historyTimesheets]
+  );
+
+  const groupedFortnights = useMemo(() => {
+    const groups = new Map();
+    filtered.forEach((timesheet) => {
+      const fortnight = getTimesheetFortnightMeta(timesheet);
+      if (!groups.has(fortnight.key)) {
+        groups.set(fortnight.key, {
+          key: fortnight.key,
+          label: fortnight.label,
+          sortKey: fortnight.sortKey,
+          items: [],
+        });
+      }
+      groups.get(fortnight.key).items.push(timesheet);
+    });
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        items: [...group.items].sort((first, second) => (
+          String(first.employee_name || '').localeCompare(String(second.employee_name || ''))
+        )),
+      }))
+      .sort((first, second) => String(second.sortKey || '').localeCompare(String(first.sortKey || '')));
+  }, [filtered]);
+
+  const stats = useMemo(() => ({
+    fortnights: groupedFortnights.length,
+    timesheets: filtered.length,
+    teamMembers: new Set(filtered.map((item) => item.employee_id || item.employee_email || item.employee_name)).size,
+    hours: filtered.reduce((sum, item) => sum + Number(item.total_hours || 0), 0),
+  }), [filtered, groupedFortnights]);
+
+  useEffect(() => {
+    setCollapsedFortnights((previous) => {
+      const next = {};
+      groupedFortnights.forEach((group, index) => {
+        next[group.key] = Object.prototype.hasOwnProperty.call(previous, group.key)
+          ? previous[group.key]
+          : index !== 0;
+      });
+      return next;
+    });
+  }, [groupedFortnights]);
+
+  const resetFilters = () => {
+    setSearchTerm('');
+    setTypeFilter('all');
+    setPeriodRange({ ...blankDateRange });
+    setApprovedRange({ ...blankDateRange });
+    setSelectedEmployee('all');
+    setDepartmentFilter('all');
+    setLeadFilter('all');
+  };
+
+  return (
+    <>
+      <div style={S.statsGrid}>
+        {[
+          { label: 'Approved Fortnights', value: stats.fortnights, sub: 'Filtered periods', Icon: CalendarRange, color: C.text },
+          { label: 'Timesheets', value: stats.timesheets, sub: 'Approved entries', Icon: FileText, color: C.green },
+          { label: 'Team Members', value: stats.teamMembers, sub: 'Represented in view', Icon: Users, color: C.text },
+          { label: 'Approved Hours', value: formatTimesheetHoursWithSuffix(stats.hours), sub: 'Across selected fortnights', Icon: TrendingUp, color: C.text },
+        ].map(({ label, value, sub, Icon, color }) => (
+          <div key={label} style={S.statCard}>
+            <div style={S.statRow}>
+              <span style={S.statLabel}>{label}</span>
+              <Icon size={18} style={{ color: C.purpleMid }} />
+            </div>
+            <div style={{ ...S.statValue, color }}>{value}</div>
+            <div style={S.statSub}>{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mte-history-card mte-manager-filter-card">
+        <div className="mte-history-filterbar mte-manager-filterbar">
+          <div className="mte-history-filter-search">
+            <ValueHelpSearch
+              value={searchTerm}
+              onChange={setSearchTerm}
+              suggestions={searchSuggestions}
+              placeholder="Employee, email, department, lead, or fortnight"
+              style={{ width: '100%' }}
+            />
+          </div>
+          <SelectWrap value={selectedEmployee} onChange={(e) => setSelectedEmployee(e.target.value)} style={{ width: '100%', minWidth: 0 }}>
+            <option value="all">All Employees</option>
+            {employeeOptions.map((option) => (
+              <option key={option.value || option.label} value={option.value}>{option.label}</option>
+            ))}
+          </SelectWrap>
+          <SelectWrap value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} style={{ width: '100%', minWidth: 0 }}>
+            <option value="all">All Departments</option>
+            {departmentOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </SelectWrap>
+          <SelectWrap value={leadFilter} onChange={(e) => setLeadFilter(e.target.value)} style={{ width: '100%', minWidth: 0 }}>
+            <option value="all">All Reporting Leads</option>
+            {leadOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </SelectWrap>
+          <SelectWrap value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} style={{ width: '100%', minWidth: 0 }}>
+            <option value="all">All Types</option>
+            <option value="work">Work</option>
+            <option value="holiday">Holiday</option>
+            <option value="leave">Leave</option>
+          </SelectWrap>
+          <input
+            className="mte-history-date-input"
+            type="date"
+            value={periodRange.start}
+            onChange={(e) => setPeriodRange((previous) => ({ ...previous, start: e.target.value }))}
+            title="Fortnight start from"
+          />
+          <input
+            className="mte-history-date-input"
+            type="date"
+            value={periodRange.end}
+            onChange={(e) => setPeriodRange((previous) => ({ ...previous, end: e.target.value }))}
+            title="Fortnight end to"
+          />
+          <input
+            className="mte-history-date-input"
+            type="date"
+            value={approvedRange.start}
+            onChange={(e) => setApprovedRange((previous) => ({ ...previous, start: e.target.value }))}
+            title="Approved from"
+          />
+          <input
+            className="mte-history-date-input"
+            type="date"
+            value={approvedRange.end}
+            onChange={(e) => setApprovedRange((previous) => ({ ...previous, end: e.target.value }))}
+            title="Approved to"
+          />
+          <button type="button" onClick={loadHistory} className="mte-manager-filter-button" title="Refresh">
+            <RefreshCw size={14} />
+          </button>
+          <button type="button" onClick={resetFilters} className="mte-manager-filter-button" title="Reset filters">
+            Reset
+          </button>
+        </div>
+      </div>
+
+      {groupedFortnights.length === 0 ? (
+        <div style={{ ...S.card, ...S.cardPad, textAlign: 'center', color: C.textMid }}>
+          {loading ? 'Loading approval history…' : 'No approved fortnights match the current filters.'}
+        </div>
+      ) : (
+        groupedFortnights.map((group) => {
+          const totalHours = group.items.reduce((sum, item) => sum + Number(item.total_hours || 0), 0);
+          const approvedDates = group.items
+            .map((item) => getApprovedTimestamp(item))
+            .filter(Boolean)
+            .sort();
+          const latestApproved = approvedDates.length ? approvedDates[approvedDates.length - 1] : '';
+          const isCollapsed = collapsedFortnights[group.key];
+
+          return (
+            <div key={group.key} style={{ ...S.card, overflow: 'hidden', marginBottom: '18px' }}>
+              <button
+                type="button"
+                onClick={() => setCollapsedFortnights((previous) => ({
+                  ...previous,
+                  [group.key]: !previous[group.key],
+                }))}
+                style={{
+                  ...S.cardPadSm,
+                  width: '100%',
+                  border: 'none',
+                  borderBottom: isCollapsed ? 'none' : `1px solid ${C.border}`,
+                  background: C.headerBg,
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={S.rowBetween}>
+                  <div>
+                    <div style={{ fontSize: '18px', fontWeight: '600', color: C.text }}>{group.label}</div>
+                    <div style={{ fontSize: '12px', color: C.textMid, marginTop: '4px' }}>
+                      {group.items.length} approved timesheet{group.items.length !== 1 ? 's' : ''} · {formatTimesheetHoursWithSuffix(totalHours)} · Latest approval {latestApproved ? formatDateTime(latestApproved) : '—'}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '20px', color: C.purple, fontWeight: '600' }}>
+                    {isCollapsed ? '+' : '-'}
+                  </div>
+                </div>
+              </button>
+
+              {!isCollapsed ? (
+                <div style={S.tableScroll}>
+                  <table style={{ ...S.table, minWidth: '1080px' }}>
+                    <thead style={S.thead}>
+                      <tr>
+                        {['Employee', 'Department', 'Reporting Lead', 'Period', 'Total Hours', 'Submitted', 'Approved', 'Types', 'Actions'].map((header) => (
+                          <th
+                            key={header}
+                            style={header === 'Total Hours' ? S.thRight : header === 'Actions' ? S.thCenter : S.th}
+                          >
+                            {header}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {group.items.map((timesheet, index) => {
+                        const id = timesheet._id || timesheet.id;
+                        const approvedAt = getApprovedTimestamp(timesheet);
+                        const hasWork = timesheetHasEntryType(timesheet, 'work');
+                        const hasLeave = timesheetHasEntryType(timesheet, 'leave');
+                        const hasHoliday = timesheetHasEntryType(timesheet, 'holiday');
+                        const typeTokens = [
+                          hasWork ? 'Work' : '',
+                          hasLeave ? 'Leave' : '',
+                          hasHoliday ? 'Holiday' : '',
+                        ].filter(Boolean);
+
+                        return (
+                          <tr key={id} style={index % 2 === 0 ? S.trEven : S.trOdd}>
+                            <td style={S.td}>
+                              <div style={{ fontWeight: '500' }}>{timesheet.employee_name}</div>
+                              <div style={{ fontSize: '12px', color: C.textMid }}>{timesheet.employee_email}</div>
+                            </td>
+                            <td style={S.td}>{timesheet.employee_department || 'Unassigned'}</td>
+                            <td style={S.td}>{getReportingLeadLabel(timesheet)}</td>
+                            <td style={S.td}>{getTimesheetFortnightMeta(timesheet).label}</td>
+                            <td style={S.tdRight}><strong>{formatTimesheetHoursWithSuffix(timesheet.total_hours)}</strong></td>
+                            <td style={S.tdMid}>{formatDateTime(timesheet.submitted_at)}</td>
+                            <td style={S.tdMid}>{formatDateTime(approvedAt)}</td>
+                            <td style={S.td}>
+                              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                                {typeTokens.map((token) => (
+                                  <span key={token} style={{ ...S.tag, background: C.purpleLight, color: C.purple }}>{token}</span>
+                                ))}
+                              </div>
+                            </td>
+                            <td style={S.tdCenter}>
+                              <button
+                                type="button"
+                                style={{ ...S.btnIcon, color: C.purple }}
+                                title="View full timesheet"
+                                onClick={async () => {
+                                  try {
+                                    const full = await fetchAPI(`/timesheets/${id}`);
+                                    setViewingTimesheet(full);
+                                  } catch (_) {
+                                    setViewingTimesheet(timesheet);
+                                  }
+                                  setFullPageView(true);
+                                }}
+                              >
+                                <Eye size={15} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          );
+        })
+      )}
+
+      {viewingTimesheet && fullPageView ? (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: C.bg, overflowY: 'auto' }}>
+          <TimesheetFullPageView
+            timesheet={viewingTimesheet}
+            user={user}
+            ccLookup={ccLookup}
+            onClose={() => { setViewingTimesheet(null); setFullPageView(false); }}
+          />
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -4499,6 +4915,38 @@ const getReportingLeadLabel = (timesheet) =>
   timesheet.reporting_lead_name
   || getLeadApprovalMeta(timesheet).name
   || 'Unassigned lead';
+
+const getTimesheetFortnightMeta = (timesheet) => {
+  const start = timesheet?.period_start ? new Date(timesheet.period_start) : null;
+  const end = timesheet?.period_end ? new Date(timesheet.period_end) : null;
+  if (!start || Number.isNaN(start.getTime()) || !end || Number.isNaN(end.getTime())) {
+    return { key: 'unknown', label: 'Unknown fortnight', sortKey: '' };
+  }
+  return {
+    key: `${timesheet.period_start}__${timesheet.period_end}`,
+    label: `${format(start, 'MMM d, yyyy')} – ${format(end, 'MMM d, yyyy')}`,
+    sortKey: timesheet.period_start,
+  };
+};
+
+const getLatestApprovedEntry = (timesheet) => {
+  const history = Array.isArray(timesheet?.approval_history) ? timesheet.approval_history : [];
+  return [...history].reverse().find((entry) => entry.action === 'approved') || null;
+};
+
+const getApprovedTimestamp = (timesheet) =>
+  getLatestApprovedEntry(timesheet)?.timestamp
+  || timesheet?.manager_approved_at
+  || timesheet?.lead_approved_at
+  || '';
+
+const isDateValueInRange = (value, range = blankDateRange) => {
+  const dateKey = String(value || '').slice(0, 10);
+  if (!dateKey) return false;
+  if (range.start && dateKey < range.start) return false;
+  if (range.end && dateKey > range.end) return false;
+  return true;
+};
 
 // ─── AdminTimesheets ──────────────────────────────────────────────────────────
 function AdminTimesheets() {

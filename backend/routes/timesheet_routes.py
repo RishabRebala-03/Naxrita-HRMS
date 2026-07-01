@@ -54,7 +54,6 @@ LEAVE_TYPE_TO_ABSENCE_KEY = {
     "maternity leave": "maternity_leave",
     "optional": "optional_holiday",
     "optional holiday": "optional_holiday",
-    "early logout": "other_approved_absence",
     "other approved absence": "other_approved_absence",
     "overseas holiday": "overseas_holiday",
     "paternity": "paternity_leave",
@@ -300,6 +299,10 @@ def normalize_absence_label(value):
     )
 
 
+def is_early_logout_leave_type(value):
+    return normalize_absence_label(value) == "early logout"
+
+
 def is_lop_entry(entry):
     """Identify loss-of-pay rows generated from approved leave/timesheet entries."""
     values = [
@@ -539,6 +542,9 @@ def build_system_generated_entries(employee_id, period_start, period_end):
 
     leave_entries = []
     for leave in leave_docs:
+        if is_early_logout_leave_type(leave.get("leave_type")):
+            continue
+
         effective_start = normalize_date_key(leave.get("approved_start_date") or leave.get("start_date"))
         effective_end = normalize_date_key(leave.get("approved_end_date") or leave.get("end_date"))
         if not effective_start or not effective_end:
