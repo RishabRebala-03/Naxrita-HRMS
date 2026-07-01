@@ -704,7 +704,21 @@ const normalizeAbsenceLabel = (value) =>
     .filter(Boolean)
     .join(' ');
 
-const isEarlyLogoutLeaveType = (value) => normalizeAbsenceLabel(value) === 'early logout';
+const isEarlyLogoutLikeLeave = (leave = {}) => {
+  const values = [
+    leave?.leave_type,
+    leave?.leaveType,
+    leave?.charge_code_name,
+    leave?.description,
+    leave?.display_code,
+    leave?.code,
+    leave?.charge_code,
+  ];
+  return values.some((value) => {
+    const normalized = normalizeAbsenceLabel(value);
+    return normalized === 'early logout' || normalized === 'el';
+  });
+};
 
 const getAbsenceChargeCode = (leaveType) => {
   const normalized = normalizeAbsenceLabel(leaveType);
@@ -747,7 +761,6 @@ const LEAVE_TYPE_DISPLAY_CODE_MAP = {
   lop: 'LWP',
   'leave without pay': 'LWP',
   'leave with loss of pay': 'LWP',
-  'early logout': 'EL',
 };
 
 const getLeaveTypeDisplayCode = (leaveType) => {
@@ -783,7 +796,7 @@ const buildApprovedLeaveEntries = (approvedLeaves = [], dates = []) => {
   const leaveByDate = new Map();
 
   approvedLeaves.forEach((leave) => {
-    if (isEarlyLogoutLeaveType(leave.leave_type)) return;
+    if (isEarlyLogoutLikeLeave(leave)) return;
 
     const start = normalizeDateKey(leave.approved_start_date || leave.start_date);
     const end = normalizeDateKey(leave.approved_end_date || leave.end_date || start);
@@ -1953,7 +1966,11 @@ function TimesheetPage({
       .catch((err) => { console.error('Charge codes error:', err); setChargeCodes([]); });
 
     fetchAPI(`/leaves/history/${userId}`)
-      .then((d) => setApprovedLeaves(Array.isArray(d) ? d.filter((l) => l.status === 'Approved') : []))
+      .then((d) => setApprovedLeaves(
+        Array.isArray(d)
+          ? d.filter((leave) => leave.status === 'Approved' && !isEarlyLogoutLikeLeave(leave))
+          : []
+      ))
       .catch(console.error);
 
     fetchAPI(`/users/${userId}`)
