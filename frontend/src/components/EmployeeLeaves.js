@@ -119,6 +119,23 @@ const getLeaveTypeDisplayLabel = (value, fallback = "Leave") => {
   return normalizeLeaveTypeFilter(normalized) === "lop" ? "LOP" : normalized;
 };
 
+const getLeaveApproverLabel = (leave = {}) => {
+  const approvedBy = String(leave.approved_by || "").trim();
+  if (approvedBy) return approvedBy;
+
+  const currentApproverName = String(
+    leave.current_approver_name
+    || leave.currentApproverName
+    || leave.current_approver_email
+    || leave.currentApproverEmail
+    || ""
+  ).trim();
+  if (currentApproverName) return currentApproverName;
+
+  if (leave.status === "Pending") return "Pending approval";
+  return "Not available";
+};
+
 const matchesLeaveTypeFilter = (leaveType, selectedType) =>
   selectedType === "all" || normalizeLeaveTypeFilter(leaveType) === normalizeLeaveTypeFilter(selectedType);
 
@@ -1168,6 +1185,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                       <th>Period</th>
                       <th>Days</th>
                       <th>Status</th>
+                      <th>Approver</th>
                       <th>Applied On</th>
                       <th>Actions</th>
                     </tr>
@@ -1208,6 +1226,9 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                           <span className={`fiori-status-pill ${statusToneMap[item.status] || "is-neutral"}`}>
                             {item.status}
                           </span>
+                        </td>
+                        <td className="employee-history-approver-cell">
+                          {getLeaveApproverLabel(item)}
                         </td>
                         <td>{formatDateTime(item.applied_on)}</td>
                         <td className="employee-history-actions-cell">

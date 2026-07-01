@@ -5628,12 +5628,12 @@ button:hover:not(:disabled) {
 
 .employee-history-table th:nth-child(1),
 .employee-history-table td:nth-child(1) {
-  width: 28%;
+  width: 24%;
 }
 
 .employee-history-table th:nth-child(2),
 .employee-history-table td:nth-child(2) {
-  width: 24%;
+  width: 18%;
 }
 
 .employee-history-table th:nth-child(3),
@@ -5643,16 +5643,21 @@ button:hover:not(:disabled) {
 
 .employee-history-table th:nth-child(4),
 .employee-history-table td:nth-child(4) {
-  width: 14%;
+  width: 12%;
 }
 
 .employee-history-table th:nth-child(5),
 .employee-history-table td:nth-child(5) {
-  width: 12%;
+  width: 16%;
 }
 
 .employee-history-table th:nth-child(6),
 .employee-history-table td:nth-child(6) {
+  width: 10%;
+}
+
+.employee-history-table th:nth-child(7),
+.employee-history-table td:nth-child(7) {
   width: 12%;
 }
 
@@ -5676,6 +5681,13 @@ button:hover:not(:disabled) {
 .employee-history-period span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.employee-history-approver-cell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  color: #2f3b48;
 }
 
 .employee-history-days-cell,
@@ -8574,7 +8586,7 @@ button:hover:not(:disabled) {
 
 .employee-history-panel .employee-history-table {
   font-size: 12px;
-  min-width: 860px;
+  min-width: 1020px;
   width: 100%;
   table-layout: fixed;
 }
@@ -8627,12 +8639,12 @@ button:hover:not(:disabled) {
 
 .employee-history-panel .employee-history-table th:nth-child(1),
 .employee-history-panel .employee-history-table td:nth-child(1) {
-  width: 26%;
+  width: 22%;
 }
 
 .employee-history-panel .employee-history-table th:nth-child(2),
 .employee-history-panel .employee-history-table td:nth-child(2) {
-  width: 17%;
+  width: 15%;
 }
 
 .employee-history-panel .employee-history-table th:nth-child(3),
@@ -8642,21 +8654,31 @@ button:hover:not(:disabled) {
 
 .employee-history-panel .employee-history-table th:nth-child(4),
 .employee-history-panel .employee-history-table td:nth-child(4) {
-  width: 12%;
+  width: 10%;
 }
 
 .employee-history-panel .employee-history-table th:nth-child(5),
 .employee-history-panel .employee-history-table td:nth-child(5) {
-  width: 12%;
+  width: 17%;
 }
 
 .employee-history-panel .employee-history-table th:nth-child(6),
 .employee-history-panel .employee-history-table td:nth-child(6) {
-  width: 25%;
+  width: 10%;
+}
+
+.employee-history-panel .employee-history-table th:nth-child(7),
+.employee-history-panel .employee-history-table td:nth-child(7) {
+  width: 18%;
 }
 
 .employee-history-panel .employee-history-type-cell,
 .employee-history-panel .employee-history-period-cell {
+  overflow-wrap: anywhere;
+}
+
+.employee-history-panel .employee-history-approver-cell {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
