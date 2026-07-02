@@ -10,6 +10,8 @@ const OrganizationHierarchy = ({ user, onClose }) => {
   const [userWithLevel, setUserWithLevel] = useState(user);
   const CARD_WIDTH = 260;
   const CHILD_VERTICAL_GAP = 40;
+  const SIBLING_GAP = 40;
+  const TREE_EDGE_PADDING = 32;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -288,6 +290,25 @@ const OrganizationHierarchy = ({ user, onClose }) => {
     }
   };
 
+  const getSubtreeWidth = (node) => {
+    if (!node) return CARD_WIDTH;
+
+    const nodeId = node._id || node.email;
+    const isExpanded = expandedNodes.has(nodeId);
+    const hasChildren = node.children && node.children.length > 0;
+
+    if (!hasChildren || !isExpanded) {
+      return CARD_WIDTH;
+    }
+
+    const childrenWidth = node.children.reduce((sum, child, index) => {
+      const childWidth = getSubtreeWidth(child);
+      return sum + childWidth + (index > 0 ? SIBLING_GAP : 0);
+    }, 0);
+
+    return Math.max(CARD_WIDTH, childrenWidth);
+  };
+
   const renderNode = (node, level = 0) => {
     if (!node) return null;
 
@@ -296,7 +317,11 @@ const OrganizationHierarchy = ({ user, onClose }) => {
     const hasChildren = node.children && node.children.length > 0;
     const isCurrentUser = String(node._id) === String(user.id) || node.isCurrentUser;
     const isVirtual = node.isVirtual;
-    
+    const subtreeWidth = getSubtreeWidth(node);
+    const childWidths = hasChildren ? node.children.map((child) => getSubtreeWidth(child)) : [];
+    const childrenRowWidth = childWidths.reduce((sum, width, index) => (
+      sum + width + (index > 0 ? SIBLING_GAP : 0)
+    ), 0);
     const levelStyle = getLevelBadgeStyle(node.level);
     
     return (
@@ -304,6 +329,8 @@ const OrganizationHierarchy = ({ user, onClose }) => {
         display: 'flex', 
         flexDirection: 'column', 
         alignItems: 'center',
+        width: 'max-content',
+        minWidth: subtreeWidth,
         minHeight: 'fit-content',
       }}>
         {/* Node Card */}
@@ -516,18 +543,29 @@ const OrganizationHierarchy = ({ user, onClose }) => {
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            width: '100%',
+            width: subtreeWidth,
+            minWidth: '100%',
+            position: 'relative',
           }}>
             {node.children.length > 1 && (
               <div
                 style={{
                   position: 'relative',
-                  width: `${(node.children.length - 1) * (CARD_WIDTH + 40)}px`,
-                  height: 2,
-                  background: '#d1d5db',
-                  marginBottom: CHILD_VERTICAL_GAP,
+                  width: childrenRowWidth,
+                  height: CHILD_VERTICAL_GAP,
                 }}
-              />
+              >
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: childWidths[0] / 2,
+                    right: childWidths[childWidths.length - 1] / 2,
+                    height: 2,
+                    background: '#d1d5db',
+                  }}
+                />
+              </div>
             )}
 
             <div
@@ -535,17 +573,18 @@ const OrganizationHierarchy = ({ user, onClose }) => {
                 display: 'flex',
                 justifyContent: 'center',
                 alignItems: 'flex-start',
-                gap: 40,
+                gap: SIBLING_GAP,
                 flexWrap: 'nowrap',
-                width: 'fit-content',
+                width: childrenRowWidth || 'fit-content',
               }}
             >
               {node.children.map((child, index) => (
-                <div key={child._id} style={{ 
+                <div key={child._id || child.email} style={{ 
                   position: 'relative',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
+                  width: childWidths[index],
                 }}>
                   {node.children.length > 1 && (
                     <div
@@ -598,7 +637,9 @@ const OrganizationHierarchy = ({ user, onClose }) => {
           maxWidth: 1280,
           width: '100%',
           maxHeight: '90vh',
-          overflow: 'auto',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
           boxShadow: '0 1.5rem 4rem rgba(31, 50, 69, 0.24)',
         }}
         onClick={(e) => e.stopPropagation()}
@@ -658,7 +699,15 @@ const OrganizationHierarchy = ({ user, onClose }) => {
           </button>
         </div>
 
-        <div style={{ padding: 32 }}>
+        <div
+          style={{
+            padding: 32,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            flex: '1 1 auto',
+            minHeight: 0,
+          }}
+        >
           {loading ? (
             <div style={{ textAlign: 'center', padding: '60px 20px', color: '#9ca3af' }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>⏳</div>
@@ -853,10 +902,17 @@ const OrganizationHierarchy = ({ user, onClose }) => {
                     borderRadius: 16,
                     padding: 20,
                     background: 'linear-gradient(180deg, #ffffff, #f8fafc)',
+                    WebkitOverflowScrolling: 'touch',
                   }}
                 >
                   <div
                     style={{
+                      display: 'inline-block',
+                      minWidth: '100%',
+                      width: 'max-content',
+                      paddingLeft: TREE_EDGE_PADDING,
+                      paddingRight: TREE_EDGE_PADDING,
+                      boxSizing: 'border-box',
                       zoom: scale,
                     }}
                   >
