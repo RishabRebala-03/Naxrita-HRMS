@@ -1433,7 +1433,7 @@ function TimesheetGrid({
                 zIndex: 9,
                 borderRight: `1px solid ${C.borderLight}`,
               }}>
-                Employee Id
+                Employee ID
               </td>
               {dates.map((d) => (
                 <td key={`employee-id-${d}`} className="mte-sheet-meta-cell" style={nonWorkingDayCellStyle(d)}>{employeeId}</td>
@@ -2953,7 +2953,7 @@ function TimesheetDetailModal({ timesheet, onClose, ccLookup = {} }) {
                 </tr>
                 <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
                   <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
-                    Employee Id
+                    Employee ID
                   </td>
                   {allDates.map((date) => (
                     <td key={`detail-employee-id-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.employeeId}</td>
@@ -3251,7 +3251,7 @@ function TimesheetFullPageView({ timesheet, onClose, onApprove, onReject, user, 
                   </tr>
                   <tr className="mte-sheet-meta-row mte-sheet-meta-row-last">
                     <td style={{ ...stickyLeft, padding: '10px 16px', background: C.white, borderRight: `1px solid ${C.borderLight}` }}>
-                      Employee Id
+                      Employee ID
                     </td>
                     {allDates.map((date) => (
                       <td key={`full-employee-id-${date}`} className="mte-sheet-meta-cell">{assignmentMeta.employeeId}</td>
