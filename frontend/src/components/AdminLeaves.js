@@ -33,9 +33,14 @@ import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
 import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
 
-const chartPalette = ["#0a6ed1", "#5b738b", "#8fb5d9", "#d1e3f8", "#0f2742", "#91c8f6"];
 const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Early Logout", "LWP"];
 const lopAliases = new Set(["lop", "lwp", "leave without pay", "leave with loss of pay"]);
+const leaveStatusColors = {
+  Approved: "#107e3e",
+  Pending: "#f0ab00",
+  Cancelled: "#8b95a5",
+  Rejected: "#bb0000",
+};
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -133,10 +138,17 @@ const getDaysLabel = (leave) => {
 
 const ChartTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
+  const tooltipLabel =
+    payload[0]?.payload?.fullName ||
+    payload[0]?.payload?.statusLabel ||
+    payload[0]?.payload?.monthLabel ||
+    payload[0]?.payload?.departmentLabel ||
+    payload[0]?.payload?.leaveTypeLabel ||
+    label;
 
   return (
     <div className="fiori-chart-tooltip">
-      {label ? <div className="fiori-chart-tooltip-label">{label}</div> : null}
+      {tooltipLabel ? <div className="fiori-chart-tooltip-label">{tooltipLabel}</div> : null}
       {payload.map((entry) => (
         <div key={`${entry.name}-${entry.dataKey}`} className="fiori-chart-tooltip-row">
           <span>{entry.name}</span>
@@ -147,11 +159,22 @@ const ChartTooltip = ({ active, payload, label }) => {
   );
 };
 
+const chartAxisTick = { fill: "#5b738b", fontSize: 12 };
+const chartAxisLabel = { fill: "#5b738b", fontSize: 12, fontWeight: 600 };
+
 const handleCardKeyDown = (event, action) => {
   if (event.key === "Enter" || event.key === " ") {
     event.preventDefault();
     action();
   }
+};
+
+const formatMonthKeyLabel = (monthKey) => {
+  if (!monthKey) return "";
+  const [year, month] = String(monthKey).split("-");
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  if (Number.isNaN(date.getTime())) return monthKey;
+  return date.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 };
 
 const AdminLeaves = ({ user }) => {
@@ -167,6 +190,7 @@ const AdminLeaves = ({ user }) => {
   const [typeFilter, setTypeFilter] = useState("all");
   const [dateRange, setDateRange] = useState({ start: "", end: "" });
   const [sortBy, setSortBy] = useState("newest");
+  const [selectedFortnightMonth, setSelectedFortnightMonth] = useState("");
   const [escalationSearch, setEscalationSearch] = useState("");
   const [selectedEscalationOwner, setSelectedEscalationOwner] = useState(null);
   const [rejectModal, setRejectModal] = useState({ show: false, leaveId: null, reason: "" });
@@ -332,20 +356,18 @@ const AdminLeaves = ({ user }) => {
   );
 
   const leaveStatusData = useMemo(() => {
-    const orderedStatuses = ["Pending", "Approved", "Rejected", "Cancelled"];
+    const orderedStatuses = ["Approved", "Pending", "Cancelled", "Rejected"];
     const counts = allLeaves.reduce((accumulator, leave) => {
       const key = leave.status || "Pending";
       accumulator[key] = (accumulator[key] || 0) + 1;
       return accumulator;
     }, {});
 
-    return orderedStatuses
-      .filter((status) => counts[status])
-      .map((status, index) => ({
-        name: status,
-        value: counts[status],
-        color: chartPalette[index % chartPalette.length],
-      }));
+    return orderedStatuses.map((status) => ({
+      statusLabel: status,
+      statusCount: counts[status] || 0,
+      color: leaveStatusColors[status],
+    }));
   }, [allLeaves]);
 
   const leaveTypeData = useMemo(() => {
@@ -356,8 +378,12 @@ const AdminLeaves = ({ user }) => {
     }, {});
 
     return Object.entries(counts)
-      .map(([name, value]) => ({ name: shortLabel(name, 14), fullName: name, value }))
-      .sort((first, second) => second.value - first.value);
+      .map(([name, value]) => ({
+        leaveTypeLabel: shortLabel(name, 14),
+        fullName: name,
+        requestCount: value,
+      }))
+      .sort((first, second) => second.requestCount - first.requestCount);
   }, [allLeaves]);
 
   const departmentLoadData = useMemo(() => {
@@ -368,8 +394,12 @@ const AdminLeaves = ({ user }) => {
     }, {});
 
     return Object.entries(counts)
-      .map(([name, value]) => ({ name: shortLabel(name, 14), fullName: name, value }))
-      .sort((first, second) => second.value - first.value)
+      .map(([name, value]) => ({
+        departmentLabel: shortLabel(name, 14),
+        fullName: name,
+        requestCount: value,
+      }))
+      .sort((first, second) => second.requestCount - first.requestCount)
       .slice(0, 8);
   }, [allLeaves]);
 
@@ -382,7 +412,7 @@ const AdminLeaves = ({ user }) => {
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
       buckets.push({
         key,
-        name: date.toLocaleDateString("en-IN", { month: "short" }),
+        monthLabel: date.toLocaleDateString("en-IN", { month: "short" }),
         requests: 0,
         approved: 0,
         rejected: 0,
@@ -416,6 +446,67 @@ const AdminLeaves = ({ user }) => {
 
     return buckets;
   }, [allLeaves]);
+
+  const availableAnalyticsMonths = useMemo(() => {
+    const monthKeys = new Set();
+
+    allLeaves.forEach((leave) => {
+      const referenceDate = new Date(leave.applied_on || leave.start_date || "");
+      if (Number.isNaN(referenceDate.getTime())) return;
+      monthKeys.add(
+        `${referenceDate.getFullYear()}-${String(referenceDate.getMonth() + 1).padStart(2, "0")}`
+      );
+    });
+
+    return Array.from(monthKeys)
+      .sort((first, second) => second.localeCompare(first))
+      .map((monthKey) => ({
+        value: monthKey,
+        label: formatMonthKeyLabel(monthKey),
+      }));
+  }, [allLeaves]);
+
+  useEffect(() => {
+    if (!availableAnalyticsMonths.length) {
+      if (selectedFortnightMonth) setSelectedFortnightMonth("");
+      return;
+    }
+
+    const hasSelection = availableAnalyticsMonths.some((option) => option.value === selectedFortnightMonth);
+    if (!hasSelection) {
+      setSelectedFortnightMonth(availableAnalyticsMonths[0].value);
+    }
+  }, [availableAnalyticsMonths, selectedFortnightMonth]);
+
+  const fortnightStatusData = useMemo(() => {
+    const selectedMonth = selectedFortnightMonth || availableAnalyticsMonths[0]?.value || "";
+    const initialBuckets = [
+      { fortnightLabel: "First Half", approvedCount: 0, pendingCount: 0, windowLabel: "1 - 15" },
+      { fortnightLabel: "Second Half", approvedCount: 0, pendingCount: 0, windowLabel: "16 - End" },
+    ];
+
+    if (!selectedMonth) return initialBuckets;
+
+    allLeaves.forEach((leave) => {
+      if (!["Approved", "Pending"].includes(leave.status)) return;
+
+      const referenceDate = new Date(leave.applied_on || leave.start_date || "");
+      if (Number.isNaN(referenceDate.getTime())) return;
+
+      const monthKey = `${referenceDate.getFullYear()}-${String(referenceDate.getMonth() + 1).padStart(2, "0")}`;
+      if (monthKey !== selectedMonth) return;
+
+      const bucketIndex = referenceDate.getDate() <= 15 ? 0 : 1;
+      if (leave.status === "Approved") {
+        initialBuckets[bucketIndex].approvedCount += 1;
+      }
+      if (leave.status === "Pending") {
+        initialBuckets[bucketIndex].pendingCount += 1;
+      }
+    });
+
+    return initialBuckets;
+  }, [allLeaves, availableAnalyticsMonths, selectedFortnightMonth]);
 
   const escalationEvents = useMemo(() => {
     return allLeaves.flatMap((leave) => {
@@ -501,11 +592,11 @@ const AdminLeaves = ({ user }) => {
 
     return Object.entries(grouped)
       .map(([name, bucket]) => ({
-        name: shortLabel(name, 14),
+        leaveTypeLabel: shortLabel(name, 14),
         fullName: name,
-        value: Number((bucket.totalDays / bucket.count).toFixed(1)),
+        averageDays: Number((bucket.totalDays / bucket.count).toFixed(1)),
       }))
-      .sort((first, second) => second.value - first.value);
+      .sort((first, second) => second.averageDays - first.averageDays);
   }, [allLeaves]);
 
   const escalationOwners = useMemo(() => {
@@ -1054,16 +1145,91 @@ const AdminLeaves = ({ user }) => {
                 <BarChart3 size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <PieChart>
-                    <Pie data={leaveStatusData} dataKey="value" nameKey="name" innerRadius={60} outerRadius={94} paddingAngle={3}>
-                      {leaveStatusData.map((entry) => (
-                        <Cell key={entry.name} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip content={<ChartTooltip />} />
-                  </PieChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas leave-chart-canvas-pie">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={leaveStatusData}
+                        dataKey="statusCount"
+                        nameKey="statusLabel"
+                        innerRadius={60}
+                        outerRadius={94}
+                        paddingAngle={3}
+                      >
+                        {leaveStatusData.map((entry) => (
+                          <Cell key={entry.statusLabel} fill={entry.color} />
+                        ))}
+                      </Pie>
+                      <Tooltip content={<ChartTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="leave-status-legend">
+                  {leaveStatusData.map((entry) => (
+                    <div key={entry.statusLabel} className="leave-status-legend-item">
+                      <span className="leave-status-legend-dot" style={{ backgroundColor: entry.color }} />
+                      <span>{entry.statusLabel}</span>
+                      <strong>{entry.statusCount}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </article>
+
+            <article className="fiori-panel fiori-chart-card leave-fortnight-card">
+              <div className="fiori-panel-header leave-analytics-card-header">
+                <div>
+                  <h3>Fortnight-wise leave report</h3>
+                  <p>Approved versus pending leave requests split into the first and second half of the selected month</p>
+                </div>
+                <div className="leave-analytics-card-control" onClick={(event) => event.stopPropagation()}>
+                  <label className="fiori-form-field">
+                    <span className="leave-field-label">Month</span>
+                    <ValueHelpSelect
+                      value={selectedFortnightMonth}
+                      onChange={setSelectedFortnightMonth}
+                      searchPlaceholder="Search months"
+                      placeholder="Select month"
+                      options={availableAnalyticsMonths}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className="fiori-chart-shell">
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={fortnightStatusData} barCategoryGap={30} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="fortnightLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Fortnight", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Requests", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="approvedCount" fill="#107e3e" radius={[8, 8, 0, 0]} name="Approved" />
+                      <Bar dataKey="pendingCount" fill="#f0ab00" radius={[8, 8, 0, 0]} name="Pending" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="leave-fortnight-summary">
+                  {fortnightStatusData.map((entry) => (
+                    <div key={entry.fortnightLabel} className="leave-fortnight-summary-item">
+                      <strong>{entry.fortnightLabel}</strong>
+                      <span>{entry.windowLabel}</span>
+                      <span>Approved: {entry.approvedCount}</span>
+                      <span>Pending: {entry.pendingCount}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </article>
 
@@ -1086,17 +1252,31 @@ const AdminLeaves = ({ user }) => {
                 <Activity size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <AreaChart data={monthlyTrendData}>
-                    <CartesianGrid stroke="#e8edf3" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Area type="monotone" dataKey="requests" stroke="#0a6ed1" fill="rgba(10, 110, 209, 0.18)" name="Requests" strokeWidth={2} />
-                    <Area type="monotone" dataKey="approved" stroke="#5b738b" fill="rgba(91, 115, 139, 0.14)" name="Approved" strokeWidth={2} />
-                    <Area type="monotone" dataKey="rejected" stroke="#bb0000" fill="rgba(187, 0, 0, 0.08)" name="Rejected" strokeWidth={2} />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={monthlyTrendData} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="monthLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Month", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Requests", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Area type="monotone" dataKey="requests" stroke="#0a6ed1" fill="rgba(10, 110, 209, 0.18)" name="Requests" strokeWidth={2} />
+                      <Area type="monotone" dataKey="approved" stroke="#5b738b" fill="rgba(91, 115, 139, 0.14)" name="Approved" strokeWidth={2} />
+                      <Area type="monotone" dataKey="rejected" stroke="#bb0000" fill="rgba(187, 0, 0, 0.08)" name="Rejected" strokeWidth={2} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </article>
 
@@ -1119,15 +1299,29 @@ const AdminLeaves = ({ user }) => {
                 <CalendarClock size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={leaveTypeData} barCategoryGap={18}>
-                    <CartesianGrid stroke="#e8edf3" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="value" fill="#0a6ed1" radius={[8, 8, 0, 0]} name="Requests" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={leaveTypeData} barCategoryGap={18} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="leaveTypeLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Leave Type", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Requests", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="requestCount" fill="#0a6ed1" radius={[8, 8, 0, 0]} name="Requests" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </article>
 
@@ -1150,15 +1344,29 @@ const AdminLeaves = ({ user }) => {
                 <Users size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={departmentLoadData} barCategoryGap={18}>
-                    <CartesianGrid stroke="#e8edf3" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="value" fill="#5b738b" radius={[8, 8, 0, 0]} name="Requests" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={departmentLoadData} barCategoryGap={18} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="departmentLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Department", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Requests", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="requestCount" fill="#5b738b" radius={[8, 8, 0, 0]} name="Requests" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </article>
 
@@ -1177,15 +1385,29 @@ const AdminLeaves = ({ user }) => {
                 <GitBranch size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <LineChart data={escalationMonthlyData}>
-                    <CartesianGrid stroke="#e8edf3" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Line type="monotone" dataKey="escalations" stroke="#0f2742" strokeWidth={2.5} dot={{ r: 4 }} name="Escalations" />
-                  </LineChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={escalationMonthlyData} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="name"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Month", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Escalations", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Line type="monotone" dataKey="escalations" stroke="#0f2742" strokeWidth={2.5} dot={{ r: 4 }} name="Escalations" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </article>
 
@@ -1208,15 +1430,28 @@ const AdminLeaves = ({ user }) => {
                 <Clock3 size={18} />
               </div>
               <div className="fiori-chart-shell">
-                <ResponsiveContainer width="100%" height={260}>
-                  <BarChart data={resolutionTurnaroundData} barCategoryGap={18}>
-                    <CartesianGrid stroke="#e8edf3" vertical={false} />
-                    <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                    <YAxis tickLine={false} axisLine={false} />
-                    <Tooltip content={<ChartTooltip />} />
-                    <Bar dataKey="value" fill="#91c8f6" radius={[8, 8, 0, 0]} name="Avg days" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="leave-chart-canvas">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={resolutionTurnaroundData} barCategoryGap={18} margin={{ top: 12, right: 16, left: 24, bottom: 28 }}>
+                      <CartesianGrid stroke="#e8edf3" vertical={false} />
+                      <XAxis
+                        dataKey="leaveTypeLabel"
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Leave Type", position: "bottom", offset: 8 }}
+                      />
+                      <YAxis
+                        tickLine={false}
+                        axisLine={false}
+                        tick={chartAxisTick}
+                        label={{ ...chartAxisLabel, value: "Average Days", angle: -90, position: "left", offset: 6 }}
+                      />
+                      <Tooltip content={<ChartTooltip />} />
+                      <Bar dataKey="averageDays" fill="#91c8f6" radius={[8, 8, 0, 0]} name="Avg days" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
             </article>
           </div>

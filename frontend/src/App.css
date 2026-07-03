@@ -1671,6 +1671,30 @@ body {
   overflow: hidden;
 }
 
+.leave-analytics-grid .fiori-chart-shell {
+  height: auto;
+  min-height: 320px;
+  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 6px 2px 2px;
+}
+
+.leave-chart-canvas {
+  width: 100%;
+  height: 280px;
+  min-width: 0;
+  padding: 4px 0 0;
+}
+
+.leave-chart-canvas-pie {
+  height: 250px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .fiori-chart-tooltip {
   min-width: 140px;
   background: rgba(255, 255, 255, 0.98);
@@ -1694,6 +1718,42 @@ body {
   gap: 12px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.leave-status-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 20px;
+  margin-top: 6px;
+  padding: 6px 2px 2px;
+}
+
+.leave-status-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.leave-status-legend-item span:nth-of-type(2) {
+  flex: 1;
+  min-width: 0;
+}
+
+.leave-status-legend-item strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.leave-status-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex-shrink: 0;
 }
 
 .admin-dashboard-layout {
@@ -5934,6 +5994,92 @@ button:hover:not(:disabled) {
 
 .leave-analytics-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.leave-analytics-grid .fiori-chart-card {
+  padding: 18px 20px 20px;
+  border-radius: 16px;
+}
+
+.leave-analytics-grid .fiori-panel-header {
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.leave-analytics-grid .fiori-panel-header h3 {
+  line-height: 1.2;
+}
+
+.leave-analytics-grid .fiori-panel-header p {
+  display: block;
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+.leave-analytics-grid .fiori-panel-header svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.leave-analytics-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  align-items: start;
+}
+
+.leave-analytics-card-control {
+  min-width: 0;
+}
+
+.leave-analytics-card-control .fiori-form-field {
+  width: 100%;
+}
+
+.leave-analytics-card-control .leave-field-label {
+  margin-bottom: 6px;
+}
+
+.leave-fortnight-card {
+  cursor: default;
+}
+
+.leave-fortnight-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 6px 2px 2px;
+}
+
+.leave-fortnight-summary-item {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid #e5ebf1;
+  background: #f8fafc;
+}
+
+.leave-fortnight-summary-item strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.leave-fortnight-summary-item span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@media (max-width: 900px) {
+  .leave-analytics-card-header {
+    grid-template-columns: 1fr;
+  }
+
+  .leave-fortnight-summary {
+    grid-template-columns: 1fr;
+  }
 }
 
 .leave-escalation-grid {
