@@ -33,7 +33,13 @@ const statusToneMap = {
   Pending: "is-pending",
 };
 
-const fioriChartPalette = ["#0a6ed1", "#5b738b", "#8fb5d9", "#d1e3f8", "#0f2742", "#91c8f6"];
+const leaveStatusColors = {
+  Approved: "#107e3e",
+  Pending: "#f0ab00",
+  Cancelled: "#4b5563",
+  Rejected: "#bb0000",
+};
+const departmentChartPalette = ["#0a6ed1", "#188918", "#d97706", "#bb0000", "#5b738b", "#91c8f6"];
 
 const getTimeBasedGreeting = () => {
   const hour = new Date().getHours();
@@ -315,13 +321,18 @@ const AdminDashboard = ({ user, onNavigate }) => {
     }, {});
 
     return Object.entries(counts)
-      .map(([name, value]) => ({ name: shortLabel(name), fullName: name, value }))
+      .map(([name, value], index) => ({
+        name: shortLabel(name),
+        fullName: name,
+        value,
+        color: departmentChartPalette[index % departmentChartPalette.length],
+      }))
       .sort((first, second) => second.value - first.value)
       .slice(0, 6);
   }, [allEmployees]);
 
   const leaveStatusData = useMemo(() => {
-    const statusOrder = ["Pending", "Approved", "Rejected", "Cancelled"];
+    const statusOrder = ["Approved", "Pending", "Cancelled", "Rejected"];
     const counts = allLeaves.reduce((accumulator, leave) => {
       const status = leave.status || "Pending";
       accumulator[status] = (accumulator[status] || 0) + 1;
@@ -330,10 +341,10 @@ const AdminDashboard = ({ user, onNavigate }) => {
 
     return statusOrder
       .filter((status) => counts[status])
-      .map((status, index) => ({
+      .map((status) => ({
         name: status,
         value: counts[status],
-        color: fioriChartPalette[index % fioriChartPalette.length],
+        color: leaveStatusColors[status],
       }));
   }, [allLeaves]);
 
@@ -549,7 +560,11 @@ const AdminDashboard = ({ user, onNavigate }) => {
                 <XAxis dataKey="name" tickLine={false} axisLine={false} />
                 <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
                 <Tooltip content={<ChartTooltip />} />
-                <Bar dataKey="value" radius={[8, 8, 0, 0]} fill="#0a6ed1" />
+                <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                  {departmentHeadcountData.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>

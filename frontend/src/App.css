@@ -1549,6 +1549,7 @@ body {
 
 .admin-overview-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
 }
 
 .admin-dashboard-grid-compact {
@@ -1557,8 +1558,8 @@ body {
 }
 
 .fiori-stat-card {
-  padding: 14px;
-  border-radius: 10px;
+  padding: 16px 18px;
+  border-radius: 14px;
   border: 1px solid var(--panel-border);
   background: #fff;
   box-shadow: var(--shadow);
@@ -1623,8 +1624,36 @@ body {
 .admin-analytics-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 18px;
   align-items: stretch;
+}
+
+.admin-dashboard .admin-analytics-grid .fiori-chart-card {
+  padding: 18px 20px 20px;
+  border-radius: 16px;
+}
+
+.admin-dashboard .admin-analytics-grid .fiori-panel-header {
+  margin-bottom: 16px;
+  gap: 16px;
+}
+
+.admin-dashboard .admin-analytics-grid .fiori-panel-header h3 {
+  line-height: 1.2;
+}
+
+.admin-dashboard .admin-analytics-grid .fiori-panel-header p {
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+.admin-dashboard .admin-analytics-grid .fiori-chart-shell {
+  height: 250px;
+  padding: 4px 2px 2px;
+}
+
+.admin-dashboard-layout {
+  gap: 18px;
 }
 
 .fiori-chart-card {
