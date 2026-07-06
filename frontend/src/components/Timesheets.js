@@ -1826,6 +1826,9 @@ function TimesheetPage({
     workLocationsByDate: {},
     assignedLocationsByDate: {},
   });
+  const [approvedEditWindowOpen, setApprovedEditWindowOpen] = useState(false);
+  const [approvedEditWindowLabel, setApprovedEditWindowLabel] = useState('');
+  const [isEmployeeEditable, setIsEmployeeEditable] = useState(true);
   const [hasSavedCurrentDraft, setHasSavedCurrentDraft] = useState(false);
   const [sheetLoaded, setSheetLoaded]           = useState(false);
   // FIX 2: reload trigger — incrementing forces the timesheet data useEffect to re-run
@@ -1843,6 +1846,9 @@ function TimesheetPage({
     setHolidayPayout({});
     setWorkScheduleByDate({});
     setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
+    setApprovedEditWindowOpen(false);
+    setApprovedEditWindowLabel('');
+    setIsEmployeeEditable(true);
     setHasSavedCurrentDraft(false);
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
@@ -1861,6 +1867,9 @@ function TimesheetPage({
     saveDraftSilentlyRef.current?.();
     setActivePeriod(nextPeriod.value);
     setTimesheetStatus('draft');
+    setApprovedEditWindowOpen(false);
+    setApprovedEditWindowLabel('');
+    setIsEmployeeEditable(true);
   };
   const assignmentMeta = useMemo(() => getTimesheetAssignmentMeta(profile), [profile]);
 
@@ -2044,6 +2053,9 @@ function TimesheetPage({
             && !areLocationMapsEqual(localAssignedLocationsByDate, matchedAssignedLocationsByDate)
           );
           setTimesheetStatus(match.status || 'draft');
+          setApprovedEditWindowOpen(Boolean(match.approved_edit_window_open));
+          setApprovedEditWindowLabel(match.approved_edit_window_label || '');
+          setIsEmployeeEditable(match.is_employee_editable !== false);
           setDailyOvertime(match.daily_overtime || {});
           setHolidayPayout(match.holiday_payout || {});
           setWorkScheduleByDate(getTimesheetWorkScheduleByDate(match, dates));
@@ -2052,7 +2064,10 @@ function TimesheetPage({
             assignedLocationsByDate: matchedAssignedLocationsByDate,
           });
           setHasSavedCurrentDraft(
-            ['draft', 'rejected_by_lead', 'rejected_by_manager'].includes(match.status || 'draft')
+            (
+              ['draft', 'rejected_by_lead', 'rejected_by_manager'].includes(match.status || 'draft')
+              || Boolean(match.approved_edit_window_open)
+            )
             && !hasUnsavedLocationChanges
           );
 
@@ -2111,6 +2126,9 @@ function TimesheetPage({
           }
         } else {
           setTimesheetStatus('draft');
+          setApprovedEditWindowOpen(false);
+          setApprovedEditWindowLabel('');
+          setIsEmployeeEditable(true);
           setDailyOvertime({});
           setHolidayPayout({});
           setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2120,6 +2138,9 @@ function TimesheetPage({
         }
       })
       .catch(() => {
+        setApprovedEditWindowOpen(false);
+        setApprovedEditWindowLabel('');
+        setIsEmployeeEditable(true);
         setDailyOvertime({});
         setHolidayPayout({});
         setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2202,10 +2223,11 @@ function TimesheetPage({
     }
   }, [rows, selectedRowId]);
 
-  const isReadOnly   = ['approved', 'pending_lead'].includes(timesheetStatus);
-  const canSubmit    = timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected');
+  const canEditApprovedTimesheet = timesheetStatus === 'approved' && approvedEditWindowOpen;
+  const isReadOnly   = !isEmployeeEditable || timesheetStatus === 'pending_lead' || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
+  const canSubmit    = isEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
   const errors       = validationErrors;
-  const submitDisabled = loading || errors.length > 0 || !hasSavedCurrentDraft;
+  const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
   const rowHasPositiveHours = useCallback((row) =>
     row.entries.some((entry) => {
       const rawValue = entry?.value !== undefined ? entry.value : String(entry?.hours ?? '');
@@ -2482,6 +2504,9 @@ function TimesheetPage({
         hasLocalTimesheetEditsRef.current = false;
         setReloadTrigger((t) => t + 1);
       }
+      if (canEditApprovedTimesheet) {
+        setApprovedEditWindowOpen(false);
+      }
       notify('Draft saved successfully.', 'success');
     } catch (err) {
       notify(`Save failed: ${err.message}`, 'error');
@@ -2569,7 +2594,14 @@ function TimesheetPage({
       : isLegacyPending
       ? (<><strong>Pending Manager Approval:</strong> Awaiting final manager sign-off.</>)
       : isApproved
-      ? (<><strong>Approved:</strong> This timesheet is permanently locked. Contact your lead for corrections.</>)
+      ? canEditApprovedTimesheet
+        ? (
+          <>
+            <strong>Approved:</strong> This timesheet is in the correction window.
+            {' '}Make changes and resubmit it for lead approval again.
+          </>
+        )
+        : (<><strong>Approved:</strong> This timesheet is permanently locked. Contact your lead for corrections.</>)
       : (<><strong>Rejected:</strong> Review the feedback, make corrections, and resubmit.</>);
 
     return (
@@ -2664,9 +2696,9 @@ function TimesheetPage({
                 className="mte-submit-button"
                 onClick={handleSubmit}
                 disabled={submitDisabled}
-                title={!hasSavedCurrentDraft ? 'Save the timesheet before submitting.' : undefined}
+                title={!hasSavedCurrentDraft && !canEditApprovedTimesheet ? 'Save the timesheet before submitting.' : undefined}
               >
-                {loading ? 'Submitting' : 'Submit'}
+                {loading ? 'Submitting' : canEditApprovedTimesheet ? 'Resubmit' : 'Submit'}
               </button>
             ) : (
               <div className="mte-status-inline">
@@ -2682,6 +2714,15 @@ function TimesheetPage({
           <span>Pending with your reporting lead.</span>
           <button type="button" className="mte-inline-banner-button" onClick={handleRecall} disabled={loading}>
             {loading ? 'Updating' : 'Edit Timesheet'}
+          </button>
+        </div>
+      ) : null}
+
+      {canEditApprovedTimesheet ? (
+        <div className="mte-inline-banner">
+          <span>{approvedEditWindowLabel || 'This approved timesheet is temporarily editable during the correction window.'}</span>
+          <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
+            {loading ? 'Updating' : 'Save Revision'}
           </button>
         </div>
       ) : null}

@@ -8,6 +8,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from config.db import mongo
 from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester
+from utils.timezone import now_ist
 
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
@@ -216,6 +217,98 @@ def normalize_date_key(value):
     if value is None:
         return ""
     return str(value)[:10]
+
+
+def get_timesheet_period_bounds(timesheet):
+    """Parse the stored period bounds for fortnight-aware edit rules."""
+    try:
+        start_key = normalize_date_key(timesheet.get("period_start"))
+        end_key = normalize_date_key(timesheet.get("period_end"))
+        if not start_key or not end_key:
+            return None, None
+        return (
+            datetime.strptime(start_key, "%Y-%m-%d").date(),
+            datetime.strptime(end_key, "%Y-%m-%d").date(),
+        )
+    except Exception:
+        return None, None
+
+
+def is_approved_edit_window_open(timesheet, reference=None):
+    """Allow approved employee edits only on the configured payroll correction days."""
+    if not timesheet or timesheet.get("status") != "approved":
+        return False
+
+    return is_correction_window_open_for_timesheet(timesheet, reference=reference)
+
+
+def is_correction_window_open_for_timesheet(timesheet, reference=None):
+    """Return True when the fortnight's correction dates are open."""
+    if not timesheet:
+        return False
+
+    period_start, period_end = get_timesheet_period_bounds(timesheet)
+    if not period_start or not period_end:
+        return False
+
+    current_date = (reference or now_ist()).date()
+    if current_date.year != period_start.year or current_date.month != period_start.month:
+        return False
+
+    if period_start.day == 1 and period_end.day == 15:
+        return current_date.day in (13, 14)
+
+    if period_start.day == 16:
+        return current_date.day in (27, 28)
+
+    return False
+
+
+def get_approved_edit_window_label(timesheet):
+    period_start, period_end = get_timesheet_period_bounds(timesheet)
+    if not period_start or not period_end:
+        return ""
+    if period_start.day == 1 and period_end.day == 15:
+        return "Editable on the 13th and 14th of the same month after approval."
+    if period_start.day == 16:
+        return "Editable on the 27th and 28th of the same month after approval."
+    return ""
+
+
+def is_employee_editable_timesheet(timesheet):
+    status = (timesheet or {}).get("status")
+    if status in ("rejected_by_lead", "rejected_by_manager"):
+        return True
+    if status == "draft":
+        if timesheet.get("reopened_from_approved"):
+            return is_correction_window_open_for_timesheet(timesheet)
+        return True
+    return status == "approved" and is_correction_window_open_for_timesheet(timesheet)
+
+
+def build_resubmission_update(ts, update_data):
+    """Convert an approved timesheet into a draft revision during the reopen window."""
+    if ts.get("status") != "approved":
+        return update_data
+
+    next_data = dict(update_data)
+    next_data.update({
+        "status": "draft",
+        "is_locked": False,
+        "reopened_from_approved": True,
+        "approved_edit_window_used_at": datetime.utcnow(),
+    })
+    return next_data
+
+
+def annotate_timesheet_editability(timesheet):
+    if not isinstance(timesheet, dict):
+        return timesheet
+
+    timesheet["approved_edit_window_open"] = is_approved_edit_window_open(timesheet)
+    timesheet["approved_edit_window_label"] = get_approved_edit_window_label(timesheet)
+    timesheet["is_employee_editable"] = is_employee_editable_timesheet(timesheet)
+    return timesheet
 
 
 def is_weekday_date(date_key):
@@ -913,7 +1006,7 @@ def create_timesheet():
             "period_start": period_start,
             "period_end":   period_end,
         })
-        if existing and existing.get("status") == "approved":
+        if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
             return jsonify({
                 "error": "This timesheet has already been approved and is locked."
             }), 400
@@ -955,6 +1048,10 @@ def create_timesheet():
         apply_employee_assignment_snapshot(timesheet, employee)
 
         if existing:
+            if existing.get("status") == "approved":
+                timesheet["reopened_from_approved"] = True
+                timesheet["approved_edit_window_used_at"] = now
+                timesheet["is_locked"] = False
             mongo.db.timesheets.update_one({"_id": existing["_id"]}, {"$set": timesheet})
             timesheet_id = existing["_id"]
         else:
@@ -1005,8 +1102,8 @@ def update_timesheet(timesheet_id):
         ts = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
-        if ts.get("status") not in ("draft", "rejected_by_lead", "rejected_by_manager"):
-            return jsonify({"error": "Only draft or rejected timesheets can be updated"}), 400
+        if not is_employee_editable_timesheet(ts):
+            return jsonify({"error": "Only draft, rejected, or eligible approved timesheets can be updated"}), 400
 
         daily_overtime, adjustment_error = normalize_daily_adjustments(
             data.get("daily_overtime", ts.get("daily_overtime", {})),
@@ -1076,6 +1173,8 @@ def update_timesheet(timesheet_id):
         employee = mongo.db.users.find_one({"_id": ts["employee_id"]})
         if employee:
             apply_employee_assignment_snapshot(update_data, employee)
+
+        update_data = build_resubmission_update(ts, update_data)
 
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
@@ -1153,8 +1252,12 @@ def save_timesheet_draft():
             "period_start": period_start,
             "period_end": period_end,
         })
-        if existing and existing.get("status") in ("approved", "pending_lead", "pending_manager"):
+        if existing and existing.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be saved as drafts"}), 400
+        if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
+            return jsonify({"error": "Approved timesheets can only be edited during the configured correction window"}), 400
+        if existing and existing.get("status") == "draft" and existing.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(existing):
+            return jsonify({"error": "The correction window has closed for this previously approved timesheet"}), 400
 
         validated_entries, total_hours, entry_error = build_validated_timesheet_entries(
             emp_obj_id, period_start, period_end, entries
@@ -1183,6 +1286,10 @@ def save_timesheet_draft():
             "updated_at": now,
             "approval_history": existing.get("approval_history", []) if existing else [],
         }
+        if existing and existing.get("status") == "approved":
+            draft["reopened_from_approved"] = True
+            draft["approved_edit_window_used_at"] = now
+            draft["is_locked"] = False
         apply_employee_assignment_snapshot(draft, employee)
 
         if existing:
@@ -1212,8 +1319,10 @@ def delete_timesheet(timesheet_id):
         ts = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
-        if ts.get("status") in ("approved", "pending_lead", "pending_manager"):
+        if ts.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be deleted"}), 400
+        if ts.get("reopened_from_approved"):
+            return jsonify({"error": "Previously approved timesheets cannot be deleted"}), 400
 
         mongo.db.timesheets.delete_one({"_id": ObjectId(timesheet_id)})
         return jsonify({"message": "Timesheet deleted successfully"}), 200
@@ -1234,8 +1343,10 @@ def submit_timesheet(timesheet_id):
         ts = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
-        if ts.get("status") == "approved":
+        if ts.get("status") == "approved" and not is_approved_edit_window_open(ts):
             return jsonify({"error": "Timesheet is already approved"}), 400
+        if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(ts):
+            return jsonify({"error": "The correction window has closed for this previously approved timesheet"}), 400
 
         limit_error = validate_daily_work_hours(ts.get("entries", []))
         if limit_error:
@@ -1291,7 +1402,10 @@ def submit_timesheet(timesheet_id):
             "status":       "pending_lead",
             "submitted_at": now,
             "updated_at":   now,
+            "is_locked":    False,
         }
+        if ts.get("status") == "approved":
+            update_data["resubmitted_after_approval_at"] = now
         employee = mongo.db.users.find_one({"_id": ts["employee_id"]})
         if employee:
             apply_employee_assignment_snapshot(update_data, employee)
@@ -1368,6 +1482,7 @@ def get_employee_timesheets(employee_id):
         )
         timesheets = [refresh_timesheet_for_read(ts) for ts in timesheets]
         timesheets = [enrich_timesheet_with_employee_assignments(ts) for ts in timesheets]
+        timesheets = [annotate_timesheet_editability(ts) for ts in timesheets]
         return jsonify(serialize_all(timesheets)), 200
 
     except Exception as e:
@@ -1397,6 +1512,7 @@ def get_pending_for_lead(user_id):
         timesheets = list(mongo.db.timesheets.find(query).sort("submitted_at", -1))
         timesheets = [refresh_timesheet_for_read(ts) for ts in timesheets]
         timesheets = [enrich_timesheet_with_employee_assignments(ts) for ts in timesheets]
+        timesheets = [annotate_timesheet_editability(ts) for ts in timesheets]
         return jsonify(serialize_all(timesheets)), 200
 
     except Exception as e:
@@ -1717,6 +1833,7 @@ def get_all_timesheets():
         for ts in timesheets:
             ts = refresh_timesheet_for_read(ts)
             ts = enrich_timesheet_with_employee_assignments(ts)
+            ts = annotate_timesheet_editability(ts)
             ts = serialize_all(ts)
             employee_id = ts.get("employee_id")
             if employee_id and (not ts.get("employee_name") or not ts.get("employee_department")):

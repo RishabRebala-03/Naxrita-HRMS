@@ -15,7 +15,7 @@ from services.mail_service import (
     queue_leave_status_email,
     send_pending_leave_reminders,
 )
-from utils.access_control import has_admin_menu_access, is_full_admin, resolve_requester
+from utils.access_control import has_admin_menu_access, is_full_admin, require_admin, resolve_requester
 
 leave_bp = Blueprint("leave_bp", __name__)
 
@@ -106,6 +106,39 @@ def calculate_working_leave_days(start, end):
         current += timedelta(days=1)
 
     return day_count
+
+
+def find_overlapping_leave(employee_id, start_date, end_date):
+    """Return an existing active leave that overlaps the provided date range."""
+    try:
+        employee_obj_id = employee_id if isinstance(employee_id, ObjectId) else ObjectId(employee_id)
+    except Exception:
+        return None
+
+    active_leaves = mongo.db.leaves.find({
+        "employee_id": employee_obj_id,
+        "status": {"$nin": ["Rejected", "Cancelled"]},
+    })
+
+    for leave in active_leaves:
+        leave_start = (
+            leave.get("approved_start_date")
+            if leave.get("status") == "Approved" and leave.get("is_partial_approval")
+            else leave.get("start_date")
+        )
+        leave_end = (
+            leave.get("approved_end_date")
+            if leave.get("status") == "Approved" and leave.get("is_partial_approval")
+            else leave.get("end_date")
+        )
+
+        if not leave_start or not leave_end:
+            continue
+
+        if leave_start <= end_date and leave_end >= start_date:
+            return leave
+
+    return None
 
 
 LEAVE_CANCELLATION_CUTOFF_HOURS = 48
@@ -1042,6 +1075,216 @@ def apply_leave():
 
     except Exception as e:
         print("❌ Error applying leave:", str(e))
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@leave_bp.route("/admin/backdated", methods=["POST"])
+def apply_backdated_leave():
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        employee_id = data.get("employee_id")
+        leave_type = normalize_leave_type(data.get("leave_type"))
+        start_date = str(data.get("start_date", "")).strip()
+        end_date = str(data.get("end_date", "")).strip()
+        reason = str(data.get("reason", "")).strip()
+        recorded_by_name = str(data.get("recorded_by_name", "")).strip()
+        is_half_day = data.get("is_half_day", False)
+        half_day_period = normalize_half_day_period(data.get("half_day_period", ""))
+        logout_time = str(data.get("logout_time", "")).strip()
+
+        if not all([employee_id, leave_type, start_date, end_date, recorded_by_name]):
+            return jsonify({"error": "Employee, leave type, dates, and recorded by name are mandatory"}), 400
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
+        if not employee:
+            return jsonify({"error": "Employee not found"}), 404
+
+        employment_type = employee.get("employment_type", "Employee")
+        if employment_type == "Intern" and leave_type.lower() not in ["sick", "lwp", "early logout"]:
+            return jsonify({
+                "error": f"Interns can only apply for Sick Leave, Leave Without Pay, or Early Logout. {leave_type} is not allowed."
+            }), 403
+
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+
+        if end < start:
+            return jsonify({"error": "End date cannot be before start date."}), 400
+
+        today = ist_today()
+        if end.date() >= today:
+            return jsonify({
+                "error": "Backdated leave regularization is only allowed for dates before today."
+            }), 400
+
+        if is_half_day:
+            if start_date != end_date:
+                return jsonify({"error": "Half-day leave can only be applied for a single day"}), 400
+            if half_day_period not in ["morning", "afternoon"]:
+                return jsonify({"error": "Please select half-day period (morning or afternoon)"}), 400
+            if is_weekend(start.date()):
+                return jsonify({"error": "Half-day leave cannot be applied on weekends."}), 400
+            days = 0.5
+        else:
+            days = calculate_working_leave_days(start, end)
+            if days == 0:
+                return jsonify({
+                    "error": "Selected leave range has no working days. Weekends are not counted as leave."
+                }), 400
+
+        if leave_type.lower() == "optional":
+            if is_half_day:
+                return jsonify({"error": "Half-day leave is not allowed for optional holidays"}), 400
+            if days != 1:
+                return jsonify({"error": "Optional leave can only be taken for a single optional holiday date."}), 400
+
+            dob = employee.get("dateOfBirth")
+            is_birthday = False
+            if isinstance(dob, str):
+                try:
+                    dob = datetime.fromisoformat(dob.replace("Z", "+00:00"))
+                except Exception:
+                    dob = None
+
+            if isinstance(dob, datetime):
+                is_birthday = dob.month == start.month and dob.day == start.day
+
+            if not is_birthday:
+                holiday = mongo.db.holidays.find_one({"date": start_date, "type": "optional"})
+                if not holiday:
+                    return jsonify({
+                        "error": f"No optional holiday on {start_date}. Cannot regularize optional leave."
+                    }), 400
+
+        if leave_type.lower() == "early logout":
+            if days != 1:
+                return jsonify({"error": "Early logout can only be applied for a single day."}), 400
+            if not logout_time:
+                return jsonify({"error": "Logout time is mandatory for early logout."}), 400
+
+        overlapping_leave = find_overlapping_leave(employee_id, start_date, end_date)
+        if overlapping_leave:
+            overlap_start = overlapping_leave.get("approved_start_date") or overlapping_leave.get("start_date")
+            overlap_end = overlapping_leave.get("approved_end_date") or overlapping_leave.get("end_date")
+            return jsonify({
+                "error": (
+                    f"A {overlapping_leave.get('status', 'recorded')} leave already exists for this employee "
+                    f"between {overlap_start} and {overlap_end}."
+                )
+            }), 400
+
+        leave_balance = employee.get("leaveBalance", {
+            "sick": 6, "sickTotal": 6,
+            "planned": 12, "plannedTotal": 12,
+            "optional": 2, "optionalTotal": 2,
+            "lwp": 0
+        })
+
+        leave_type_key = leave_type.lower()
+        if leave_type_key in ["sick", "planned", "optional"]:
+            available = leave_balance.get(leave_type_key, 0)
+            if days > available:
+                return jsonify({
+                    "error": f"Insufficient {leave_type} leave balance. Available: {available}, Requested: {days}"
+                }), 400
+
+        timestamp = datetime.utcnow()
+        leave_request = {
+            "employee_id": ObjectId(employee_id),
+            "employee_name": employee.get("name", "Unknown"),
+            "employee_email": employee.get("email", ""),
+            "employee_designation": employee.get("designation", ""),
+            "employee_department": employee.get("department", ""),
+            "leave_type": leave_type,
+            "start_date": start_date,
+            "end_date": end_date,
+            "days": days,
+            "approved_days": days,
+            "reason": reason,
+            "logout_time": logout_time,
+            "is_half_day": is_half_day,
+            "half_day_period": half_day_period if is_half_day else "",
+            "status": "Approved",
+            "applied_on": timestamp,
+            "approved_on": timestamp,
+            "approved_by": recorded_by_name,
+            "recorded_by_name": recorded_by_name,
+            "recorded_by_user_id": requester["_id"],
+            "recorded_by_email": requester.get("email", ""),
+            "recorded_on": timestamp,
+            "entry_mode": "backdated_regularization",
+            "escalation_level": 0,
+            "current_approver_id": requester["_id"],
+            "escalation_history": []
+        }
+
+        result = mongo.db.leaves.insert_one(leave_request)
+        leave_request["_id"] = result.inserted_id
+
+        if leave_type_key in ["sick", "planned", "optional"]:
+            leave_balance[leave_type_key] = leave_balance.get(leave_type_key, 0) - days
+        elif leave_type_key in ["lwp", "lop", "leave without pay", "leave with loss of pay"]:
+            leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
+
+        mongo.db.users.update_one(
+            {"_id": ObjectId(employee_id)},
+            {"$set": {"leaveBalance": leave_balance}}
+        )
+
+        removed_orders = 0
+        synced_timesheets = 0
+        if leave_type_key != "early logout" and not is_half_day:
+            removed_orders = remove_tea_coffee_orders_for_leave(employee_id, start_date, end_date)
+
+        try:
+            from routes.timesheet_routes import sync_timesheets_for_approved_leave
+            synced_timesheets = sync_timesheets_for_approved_leave(leave_request)
+        except Exception as sync_error:
+            print(f"⚠️ Could not sync timesheets for backdated leave {result.inserted_id}: {sync_error}")
+
+        create_notification(
+            user_id=leave_request["employee_id"],
+            notification_type="leave_approved",
+            message=(
+                f"A backdated {leave_type} record ({start_date} to {end_date}) "
+                f"was regularized by {recorded_by_name}."
+            ),
+            related_leave_id=result.inserted_id
+        )
+
+        requester_email = requester.get("email", "")
+        remarks = "Backdated leave regularization recorded by " + recorded_by_name
+        if requester_email:
+            remarks += f" via {requester_email}"
+
+        log_leave_action(
+            leave_id=str(result.inserted_id),
+            employee_id=employee_id,
+            action="Admin Regularized",
+            performed_by=recorded_by_name,
+            remarks=remarks,
+            new_data=trim_leave(leave_request)
+        )
+
+        response_message = "Backdated leave record created successfully."
+        if removed_orders:
+            response_message += f" {removed_orders} tea/coffee order(s) were discarded for the approved leave dates."
+        if synced_timesheets:
+            response_message += f" {synced_timesheets} overlapping timesheet(s) were refreshed."
+
+        return jsonify({
+            "message": response_message,
+            "id": str(result.inserted_id),
+        }), 201
+
+    except Exception as e:
+        print("❌ Error applying backdated leave:", str(e))
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
