@@ -17,7 +17,7 @@ from app import app  # noqa: E402
 from config.db import mongo  # noqa: E402
 
 
-RUN_TAG = "codex-timesheet-edit-window-2026-07-03"
+RUN_TAG = "codex-timesheet-edit-window-2026-07-06"
 
 
 def header(user_id):
@@ -194,6 +194,14 @@ def run():
             assert_status(submit_response, 200, "Resubmit reopened first-half timesheet")
             submitted_doc = mongo.db.timesheets.find_one({"_id": first_half["_id"]})
             assert_true(submitted_doc.get("status") == "pending_lead", "Resubmitted reopened timesheet should return to pending lead approval")
+            assert_true(bool(submitted_doc.get("resubmitted_after_approval_at")), "Resubmitted approved timesheet should record a reapproval submission timestamp")
+            pending_again = client.get(
+                f"/api/timesheets/pending/lead/{lead['_id']}",
+                headers=header(lead["_id"]),
+            )
+            assert_status(pending_again, 200, "Lead pending list after approved-window resubmission")
+            pending_items = pending_again.get_json()
+            assert_true(any(item.get("_id") == str(first_half["_id"]) for item in pending_items), "Resubmitted approved timesheet should reappear for the same lead approver")
             results.append("PASS: first-half approved timesheet can be edited on July 13 and resubmitted for lead approval")
 
             approve_response = client.put(
@@ -210,6 +218,24 @@ def run():
             assert_true(len(approved_actions) >= 2, "Reapproval should add a second lead approved history entry")
             results.append("PASS: resubmitted approved timesheet goes through lead approval again")
 
+        with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 14)):
+            update_response = client.put(
+                f"/api/timesheets/update/{first_half['_id']}",
+                json={"entries": [{"date": "2026-07-01", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 7.5}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(update_response, 200, "Approved first-half edit on July 14")
+            results.append("PASS: first-half approved timesheet can still be edited on July 14")
+
+        with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 15)):
+            blocked = client.put(
+                f"/api/timesheets/update/{first_half['_id']}",
+                json={"entries": [{"date": "2026-07-01", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 6}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(blocked, 400, "Approved first-half edit should be blocked after July 14 window")
+            results.append("PASS: first-half approved timesheet stays locked again on July 15")
+
         with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 27)):
             update_response = client.put(
                 f"/api/timesheets/update/{second_half['_id']}",
@@ -218,6 +244,15 @@ def run():
             )
             assert_status(update_response, 200, "Approved second-half edit in 27-28 window")
             results.append("PASS: second-half approved timesheet can be edited on July 27")
+
+        with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 28)):
+            update_response = client.put(
+                f"/api/timesheets/update/{second_half['_id']}",
+                json={"entries": [{"date": "2026-07-16", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 6.5}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(update_response, 200, "Approved second-half edit on July 28")
+            results.append("PASS: second-half approved timesheet can still be edited on July 28")
 
         with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 29)):
             blocked = client.put(

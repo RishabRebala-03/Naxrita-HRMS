@@ -1,0 +1,35 @@
+{% extends "email_base.html" %}
+{% set title = audience == "approver" and "Timesheet approval request" or "Timesheet submission notification" %}
+{% block content %}
+  <p>
+    {% if audience == "approver" %}
+      A timesheet has been submitted and is awaiting your review.
+    {% else %}
+      A timesheet has been submitted for your notification.
+    {% endif %}
+  </p>
+
+  <table class="summary-table">
+    <tr><td class="label">Employee</td><td class="value">{{ employee_name }}</td></tr>
+    <tr><td class="label">Employee Email</td><td class="value">{{ employee_email or "-" }}</td></tr>
+    <tr><td class="label">Period</td><td class="value">{{ period_start }} to {{ period_end }}</td></tr>
+    <tr><td class="label">Total Hours</td><td class="value">{{ total_hours }}</td></tr>
+    <tr><td class="label">Work Hours</td><td class="value">{{ work_hours }}</td></tr>
+    <tr><td class="label">Managed By</td><td class="value">{{ managed_by_admin_name or "-" }}</td></tr>
+  </table>
+
+  {% if reviewers %}
+    <p><strong>Reviewers:</strong> {{ reviewers|join(", ") }}</p>
+  {% endif %}
+  {% if delegates %}
+    <p><strong>Delegates:</strong> {{ delegates|join(", ") }}</p>
+  {% endif %}
+  {% if approvers %}
+    <p><strong>Approvers:</strong> {{ approvers|join(", ") }}</p>
+  {% endif %}
+  {% if notifications %}
+    <p><strong>Notifications:</strong> {{ notifications|join(", ") }}</p>
+  {% endif %}
+
+  <p>Please use the HRMS timesheets workspace for any review or follow-up.</p>
+{% endblock %}

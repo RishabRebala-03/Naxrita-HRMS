@@ -177,7 +177,7 @@ const formatMonthKeyLabel = (monthKey) => {
   return date.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 };
 
-const AdminLeaves = ({ user }) => {
+const AdminLeaves = ({ user, onNavigateToProfile }) => {
   const [activeTab, setActiveTab] = useState("pending");
   const [pendingLeaves, setPendingLeaves] = useState([]);
   const [allLeaves, setAllLeaves] = useState([]);
@@ -246,6 +246,12 @@ const AdminLeaves = ({ user }) => {
       }, {}),
     [allUsers]
   );
+
+  const openEmployeeProfile = (leave) => {
+    const employeeId = String(leave?.employee_id || "").trim();
+    if (!employeeId || !onNavigateToProfile) return;
+    onNavigateToProfile(employeeId);
+  };
 
   const summaryMetrics = useMemo(() => {
     const totalRequests = allLeaves.length;
@@ -1059,21 +1065,49 @@ const AdminLeaves = ({ user }) => {
                       return (
                         <tr key={leave._id}>
                           <td>
-                            <div className="fiori-primary-cell">
+                            <button
+                              type="button"
+                              className="fiori-primary-cell"
+                              onClick={() => openEmployeeProfile(leave)}
+                              style={{
+                                width: "100%",
+                                textAlign: "left",
+                                background: "transparent",
+                                border: "none",
+                                padding: 0,
+                                cursor: leave.employee_id ? "pointer" : "default",
+                              }}
+                              disabled={!leave.employee_id}
+                              title={leave.employee_id ? "Open employee profile and project details" : undefined}
+                            >
                               <strong>{leave.employee_name || "Unknown employee"}</strong>
                               <span>
                                 {leave.employee_designation || "Designation unavailable"} •{" "}
                                 {leave.employee_department || "Department unavailable"}
                               </span>
                               <span>{leave.employee_email || "No email on record"}</span>
-                            </div>
+                            </button>
                           </td>
                           <td>
-                            <div className="fiori-primary-cell">
+                            <button
+                              type="button"
+                              className="fiori-primary-cell"
+                              onClick={() => openEmployeeProfile(leave)}
+                              style={{
+                                width: "100%",
+                                textAlign: "left",
+                                background: "transparent",
+                                border: "none",
+                                padding: 0,
+                                cursor: leave.employee_id ? "pointer" : "default",
+                              }}
+                              disabled={!leave.employee_id}
+                              title={leave.employee_id ? "Open employee profile and project details" : undefined}
+                            >
                               <strong>{getLeaveTypeDisplayLabel(leave.leave_type)}</strong>
                               <span>{getDaysLabel(leave)}</span>
                               {escalationCount > 0 ? <span>{escalationCount} escalation event(s)</span> : null}
-                            </div>
+                            </button>
                           </td>
                           <td>
                             <div className="fiori-primary-cell">

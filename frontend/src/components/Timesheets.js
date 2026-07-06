@@ -7620,9 +7620,13 @@ function AdjustmentsPanel({ user }) {
   );
 }
 
-function PreferencesPanel({ user }) {
-  const reviewer = user?.reportsToEmail || user?.reportsTo || user?.managerEmail || '';
-  const email = user?.email || '';
+function PreferencesPanel({ user, periods, selectedPeriod }) {
+  const { notify } = useTimesheetUi();
+  const isAdmin = user?.role === 'Admin';
+  const [employees, setEmployees] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [selectedPeriodValue, setSelectedPeriodValue] = useState(selectedPeriod || periods?.[0]?.value || '');
   const [drafts, setDrafts] = useState({
     reviewer: '',
     notification: '',
@@ -7630,20 +7634,49 @@ function PreferencesPanel({ user }) {
     approver: '',
   });
   const [selected, setSelected] = useState({
-    reviewers: reviewer,
-    notifications: email,
+    reviewers: '',
+    notifications: '',
     delegates: '',
-    approvers: reviewer,
+    approvers: '',
   });
 
   useEffect(() => {
-    setSelected((previous) => ({
-      ...previous,
-      reviewers: previous.reviewers || reviewer,
-      notifications: previous.notifications || email,
-      approvers: previous.approvers || reviewer,
-    }));
-  }, [email, reviewer]);
+    setSelectedPeriodValue(selectedPeriod || periods?.[0]?.value || '');
+  }, [periods, selectedPeriod]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetchAPI('/users/get_all_employees')
+      .then((data) => {
+        const items = Array.isArray(data) ? data : [];
+        setEmployees(items);
+        if (!selectedEmployeeId && items[0]?._id) {
+          setSelectedEmployeeId(items[0]._id);
+        }
+      })
+      .catch((err) => notify(`Failed to load employees: ${err.message}`, 'error'));
+  }, [isAdmin, notify, selectedEmployeeId]);
+
+  const selectedPeriodOption = useMemo(
+    () => periods.find((item) => item.value === selectedPeriodValue) || periods[0],
+    [periods, selectedPeriodValue]
+  );
+
+  useEffect(() => {
+    if (!isAdmin || !selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) return;
+    setLoading(true);
+    fetchAPI(`/timesheets/preferences?employee_id=${selectedEmployeeId}&period_start=${selectedPeriodOption.start}&period_end=${selectedPeriodOption.end}`)
+      .then((data) => {
+        setSelected({
+          reviewers: (data.reviewers || []).join('\n'),
+          notifications: (data.notifications || []).join('\n'),
+          delegates: (data.delegates || []).join('\n'),
+          approvers: (data.approvers || []).join('\n'),
+        });
+      })
+      .catch((err) => notify(`Failed to load workflow preferences: ${err.message}`, 'error'))
+      .finally(() => setLoading(false));
+  }, [isAdmin, notify, selectedEmployeeId, selectedPeriodOption]);
 
   const updateDraft = (key, value) => {
     setDrafts((previous) => ({ ...previous, [key]: value }));
@@ -7663,128 +7696,135 @@ function PreferencesPanel({ user }) {
     setDrafts((previous) => ({ ...previous, [draftKey]: '' }));
   };
 
+  const savePreferences = async () => {
+    if (!selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) {
+      notify('Select an employee and fortnight before saving workflow preferences.', 'warning');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await fetchAPI('/timesheets/preferences', {
+        method: 'PUT',
+        body: JSON.stringify({
+          employee_id: selectedEmployeeId,
+          period_start: selectedPeriodOption.start,
+          period_end: selectedPeriodOption.end,
+          reviewers: splitPreferenceEntries(selected.reviewers),
+          notifications: splitPreferenceEntries(selected.notifications),
+          delegates: splitPreferenceEntries(selected.delegates),
+          approvers: splitPreferenceEntries(selected.approvers),
+        }),
+      });
+      notify('Timesheet workflow preferences saved.', 'success');
+    } catch (err) {
+      notify(`Failed to save workflow preferences: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isAdmin) {
+    return (
+      <div className="mte-module-card">
+        <div className="mte-module-card-header">
+          <div>
+            <h3>Workflow Preferences</h3>
+            <p>This module is managed by admins. Approvers, reviewers, delegates, and notification recipients are assigned centrally per employee and fortnight.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="mte-module-card mte-preferences-shell">
+      <div className="mte-module-card-header">
+        <div>
+          <h3>Admin Workflow Preferences</h3>
+          <p>Select an employee and fortnight, then define the notification and approval routing moderated by admin.</p>
+        </div>
+        <button type="button" style={loading ? S.btnDisabled : S.btnPrimary} onClick={savePreferences} disabled={loading}>
+          {loading ? 'Saving...' : 'Save Preferences'}
+        </button>
+      </div>
+
+      <div className="mte-preferences-grid" style={{ marginBottom: '18px' }}>
+        <div className="mte-pref-field">
+          <label>Employee:</label>
+          <select className="input" value={selectedEmployeeId} onChange={(event) => setSelectedEmployeeId(event.target.value)}>
+            {employees.map((employee) => (
+              <option key={employee._id} value={employee._id}>
+                {employee.name || employee.email || employee._id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div />
+        <div className="mte-pref-field">
+          <label>Fortnight:</label>
+          <select className="input" value={selectedPeriodValue} onChange={(event) => setSelectedPeriodValue(event.target.value)}>
+            {periods.map((period) => (
+              <option key={period.value} value={period.value}>{period.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="mte-pref-field">
+          <label>Mode:</label>
+          <input className="input" value="Admin managed" readOnly />
+        </div>
+      </div>
+
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
-          <label>Time Report Reviewer(s):</label>
-          <input
-            className="input"
-            value={drafts.reviewer}
-            onChange={(event) => updateDraft('reviewer', event.target.value)}
-            placeholder="e.g. john.a.smith"
-          />
+          <label>Reviewer Email(s):</label>
+          <input className="input" value={drafts.reviewer} onChange={(event) => updateDraft('reviewer', event.target.value)} placeholder="name@company.com" />
         </div>
-        <button
-          type="button"
-          className="mte-pref-arrow"
-          aria-label="Add reviewer"
-          onClick={() => addPreference('reviewer', 'reviewers')}
-          disabled={!drafts.reviewer.trim()}
-        >
+        <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
           <ChevronRight size={15} />
         </button>
         <div className="mte-pref-field">
           <label>Selected Reviewers:</label>
-          <textarea
-            className="input"
-            value={selected.reviewers}
-            onChange={(event) => updateSelected('reviewers', event.target.value)}
-            rows={3}
-          />
+          <textarea className="input" value={selected.reviewers} onChange={(event) => updateSelected('reviewers', event.target.value)} rows={4} />
         </div>
-        <div className="mte-pref-field">
-          <label>Theme:</label>
-          <select className="input" defaultValue="Default">
-            <option>Default</option>
-            <option>Classic</option>
-          </select>
-        </div>
+        <div />
 
         <div className="mte-pref-field">
-          <label>Notify of Submission:</label>
-          <input
-            className="input"
-            value={drafts.notification}
-            onChange={(event) => updateDraft('notification', event.target.value)}
-            placeholder="e.g. john.a.smith@company.com"
-          />
+          <label>Notification Email(s):</label>
+          <input className="input" value={drafts.notification} onChange={(event) => updateDraft('notification', event.target.value)} placeholder="notify@company.com" />
         </div>
-        <button
-          type="button"
-          className="mte-pref-arrow"
-          aria-label="Add notification"
-          onClick={() => addPreference('notification', 'notifications')}
-          disabled={!drafts.notification.trim()}
-        >
+        <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
           <ChevronRight size={15} />
         </button>
         <div className="mte-pref-field">
           <label>Selected Notifications:</label>
-          <textarea
-            className="input"
-            value={selected.notifications}
-            onChange={(event) => updateSelected('notifications', event.target.value)}
-            rows={3}
-          />
+          <textarea className="input" value={selected.notifications} onChange={(event) => updateSelected('notifications', event.target.value)} rows={4} />
         </div>
         <div />
 
         <div className="mte-pref-field">
-          <label>Delegate(s):</label>
-          <input
-            className="input"
-            value={drafts.delegate}
-            onChange={(event) => updateDraft('delegate', event.target.value)}
-            placeholder="e.g. john.a.smith"
-          />
+          <label>Delegate Email(s):</label>
+          <input className="input" value={drafts.delegate} onChange={(event) => updateDraft('delegate', event.target.value)} placeholder="delegate@company.com" />
         </div>
-        <button
-          type="button"
-          className="mte-pref-arrow"
-          aria-label="Add delegate"
-          onClick={() => addPreference('delegate', 'delegates')}
-          disabled={!drafts.delegate.trim()}
-        >
+        <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
           <ChevronRight size={15} />
         </button>
         <div className="mte-pref-field">
           <label>Selected Delegates:</label>
-          <textarea
-            className="input"
-            value={selected.delegates}
-            onChange={(event) => updateSelected('delegates', event.target.value)}
-            rows={3}
-          />
+          <textarea className="input" value={selected.delegates} onChange={(event) => updateSelected('delegates', event.target.value)} rows={4} />
         </div>
         <div />
 
         <div className="mte-pref-field">
-          <label>Approver(s):</label>
-          <input
-            className="input"
-            value={drafts.approver}
-            onChange={(event) => updateDraft('approver', event.target.value)}
-            placeholder="e.g. john.a.smith"
-          />
+          <label>Approver Email(s):</label>
+          <input className="input" value={drafts.approver} onChange={(event) => updateDraft('approver', event.target.value)} placeholder="approver@company.com" />
         </div>
-        <button
-          type="button"
-          className="mte-pref-arrow"
-          aria-label="Add approver"
-          onClick={() => addPreference('approver', 'approvers')}
-          disabled={!drafts.approver.trim()}
-        >
+        <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
           <ChevronRight size={15} />
         </button>
         <div className="mte-pref-field">
           <label>Selected Approvers:</label>
-          <textarea
-            className="input"
-            value={selected.approvers}
-            onChange={(event) => updateSelected('approvers', event.target.value)}
-            rows={3}
-          />
+          <textarea className="input" value={selected.approvers} onChange={(event) => updateSelected('approvers', event.target.value)} rows={4} />
         </div>
         <div />
       </div>
@@ -8974,7 +9014,7 @@ function TimesheetsContent({ user }) {
           />
         );
       case 'preferences':
-        return <PreferencesPanel user={user} />;
+        return <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />;
       case 'reports':
         return user?.role === 'Admin' ? <ReportsPanel user={user} /> : (
           <PortalTimeWorkspace

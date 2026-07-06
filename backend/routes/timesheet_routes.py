@@ -7,6 +7,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from config.db import mongo
+from services.queue_service import enqueue_mail
+from services.smtp_service import resolve_tenant_id
 from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester
 from utils.timezone import now_ist
 
@@ -219,6 +221,173 @@ def normalize_date_key(value):
     return str(value)[:10]
 
 
+def normalize_email_address(value):
+    return str(value or "").strip().lower()
+
+
+def normalize_email_list(value):
+    if not value:
+        return []
+    if isinstance(value, str):
+        raw_items = value.replace("\n", ",").split(",")
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = [value]
+
+    normalized = []
+    seen = set()
+    for item in raw_items:
+        email = normalize_email_address(item)
+        if not email or "@" not in email or email in seen:
+            continue
+        seen.add(email)
+        normalized.append(email)
+    return normalized
+
+
+def find_user_by_email(email):
+    normalized_email = normalize_email_address(email)
+    if not normalized_email:
+        return None
+    return mongo.db.users.find_one({"email": {"$regex": f"^{normalized_email}$", "$options": "i"}})
+
+
+def build_timesheet_preference_document(employee_id, period_start, period_end, payload, managed_by=None):
+    now = datetime.utcnow()
+    return {
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "reviewers": normalize_email_list(payload.get("reviewers")),
+        "notifications": normalize_email_list(payload.get("notifications")),
+        "delegates": normalize_email_list(payload.get("delegates")),
+        "approvers": normalize_email_list(payload.get("approvers")),
+        "managed_by_admin_id": managed_by.get("_id") if managed_by else None,
+        "managed_by_admin_name": (managed_by or {}).get("name", ""),
+        "updated_at": now,
+    }
+
+
+def get_timesheet_preference(employee_id, period_start, period_end):
+    if not employee_id or not period_start or not period_end:
+        return None
+    return mongo.db.timesheet_preferences.find_one({
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+    })
+
+
+def apply_timesheet_workflow_preference(timesheet_doc, employee=None):
+    if not isinstance(timesheet_doc, dict):
+        return timesheet_doc
+
+    preference = get_timesheet_preference(
+        timesheet_doc.get("employee_id"),
+        timesheet_doc.get("period_start"),
+        timesheet_doc.get("period_end"),
+    )
+    if not preference:
+        return timesheet_doc
+
+    approver_emails = normalize_email_list(preference.get("approvers"))
+    notification_emails = normalize_email_list(preference.get("notifications"))
+    reviewer_emails = normalize_email_list(preference.get("reviewers"))
+    delegate_emails = normalize_email_list(preference.get("delegates"))
+
+    matched_approver = None
+    for approver_email in approver_emails:
+        matched_approver = find_user_by_email(approver_email)
+        if matched_approver:
+            break
+
+    if matched_approver:
+        timesheet_doc["reporting_lead_id"] = matched_approver["_id"]
+        timesheet_doc["reporting_lead_name"] = matched_approver.get("name", "")
+        timesheet_doc["reporting_lead_email"] = matched_approver.get("email", "")
+    elif employee and employee.get("reportsTo"):
+        fallback_lead = mongo.db.users.find_one({"_id": employee.get("reportsTo")})
+        if fallback_lead:
+            timesheet_doc["reporting_lead_name"] = fallback_lead.get("name", "")
+            timesheet_doc["reporting_lead_email"] = fallback_lead.get("email", "")
+
+    timesheet_doc["timesheet_workflow_preferences"] = {
+        "reviewers": reviewer_emails,
+        "notifications": notification_emails,
+        "delegates": delegate_emails,
+        "approvers": approver_emails,
+        "managed_by_admin_id": preference.get("managed_by_admin_id"),
+        "managed_by_admin_name": preference.get("managed_by_admin_name", ""),
+        "updated_at": preference.get("updated_at"),
+    }
+    return timesheet_doc
+
+
+def queue_timesheet_submission_emails(timesheet_doc, employee=None):
+    preference = (timesheet_doc or {}).get("timesheet_workflow_preferences") or {}
+    approvers = normalize_email_list(preference.get("approvers"))
+    notifications = normalize_email_list(preference.get("notifications"))
+    reviewers = normalize_email_list(preference.get("reviewers"))
+    delegates = normalize_email_list(preference.get("delegates"))
+
+    if not approvers and not notifications:
+        return 0
+
+    employee = employee or mongo.db.users.find_one({"_id": timesheet_doc.get("employee_id")})
+    tenant_id = resolve_tenant_id(timesheet_doc, employee)
+    context = {
+        "employee_name": timesheet_doc.get("employee_name", "Employee"),
+        "employee_email": timesheet_doc.get("employee_email", ""),
+        "period_start": timesheet_doc.get("period_start", ""),
+        "period_end": timesheet_doc.get("period_end", ""),
+        "total_hours": timesheet_doc.get("total_hours", 0),
+        "work_hours": timesheet_doc.get("work_hours", 0),
+        "reviewers": reviewers,
+        "notifications": notifications,
+        "delegates": delegates,
+        "approvers": approvers,
+        "managed_by_admin_name": preference.get("managed_by_admin_name", ""),
+    }
+
+    queued = 0
+    timesheet_id = timesheet_doc.get("_id")
+
+    if approvers:
+        enqueue_mail(
+            tenant_id=tenant_id,
+            employee_id=timesheet_doc.get("employee_id"),
+            leave_id=str(timesheet_id) if timesheet_id else None,
+            mail_type="timesheet_approval_request",
+            recipients=approvers,
+            cc=reviewers + delegates,
+            subject=f"Timesheet approval request: {context['employee_name']}",
+            template_name="timesheet_submitted.html",
+            context={**context, "audience": "approver"},
+            idempotency_key=f"{tenant_id}:timesheet:{timesheet_id}:submit:approvers:v1",
+            metadata={"timesheet_id": str(timesheet_id) if timesheet_id else ""},
+        )
+        queued += 1
+
+    if notifications:
+        enqueue_mail(
+            tenant_id=tenant_id,
+            employee_id=timesheet_doc.get("employee_id"),
+            leave_id=str(timesheet_id) if timesheet_id else None,
+            mail_type="timesheet_submission_notification",
+            recipients=notifications,
+            cc=delegates,
+            subject=f"Timesheet submitted: {context['employee_name']}",
+            template_name="timesheet_submitted.html",
+            context={**context, "audience": "notification"},
+            idempotency_key=f"{tenant_id}:timesheet:{timesheet_id}:submit:notifications:v1",
+            metadata={"timesheet_id": str(timesheet_id) if timesheet_id else ""},
+        )
+        queued += 1
+
+    return queued
+
+
 def get_timesheet_period_bounds(timesheet):
     """Parse the stored period bounds for fortnight-aware edit rules."""
     try:
@@ -257,8 +426,7 @@ def is_correction_window_open_for_timesheet(timesheet, reference=None):
 
     if period_start.day == 1 and period_end.day == 15:
         return current_date.day in (13, 14)
-
-    if period_start.day == 16:
+    if period_start.day == 16 and period_end.day >= 28:
         return current_date.day in (27, 28)
 
     return False
@@ -296,6 +464,7 @@ def build_resubmission_update(ts, update_data):
         "status": "draft",
         "is_locked": False,
         "reopened_from_approved": True,
+        "requires_reapproval": True,
         "approved_edit_window_used_at": datetime.utcnow(),
     })
     return next_data
@@ -816,6 +985,117 @@ def fit_work_entries_around_system_entries(work_entries, system_entries):
     return adjusted
 
 
+def get_fortnight_bounds_for_date(date_value):
+    """Return YYYY-MM-DD fortnight bounds for the provided date."""
+    if isinstance(date_value, str):
+        date_value = datetime.strptime(date_value[:10], "%Y-%m-%d").date()
+    elif isinstance(date_value, datetime):
+        date_value = date_value.date()
+
+    if date_value.day <= 15:
+        period_start = date_value.replace(day=1)
+        period_end = date_value.replace(day=15)
+    else:
+        period_start = date_value.replace(day=16)
+        next_month = date_value.replace(day=28) + timedelta(days=4)
+        period_end = next_month.replace(day=1) - timedelta(days=1)
+
+    return (
+        period_start.strftime("%Y-%m-%d"),
+        period_end.strftime("%Y-%m-%d"),
+    )
+
+
+def iter_fortnight_periods(start_key, end_key):
+    """Yield fortnight periods overlapping the supplied date range."""
+    current = datetime.strptime(start_key, "%Y-%m-%d").date()
+    end_date = datetime.strptime(end_key, "%Y-%m-%d").date()
+    seen = set()
+
+    while current <= end_date:
+        period_start, period_end = get_fortnight_bounds_for_date(current)
+        if (period_start, period_end) not in seen:
+            seen.add((period_start, period_end))
+            yield period_start, period_end
+        current = datetime.strptime(period_end, "%Y-%m-%d").date() + timedelta(days=1)
+
+
+def create_system_generated_timesheet(employee, period_start, period_end):
+    """Create a draft timesheet shell so synced leave/holiday entries are visible to employees."""
+    if not employee:
+        return None
+
+    holiday_entries, leave_entries, _ = build_system_generated_entries(
+        employee["_id"],
+        period_start,
+        period_end,
+    )
+    merged_entries = leave_entries + holiday_entries
+    total_hours = sum(float(item.get("hours", 0) or 0) for item in merged_entries)
+    now = datetime.utcnow()
+
+    timesheet = {
+        "employee_id": employee["_id"],
+        "employee_name": employee.get("name", ""),
+        "employee_email": employee.get("email", ""),
+        "employee_department": employee.get("department", ""),
+        "period_start": period_start,
+        "period_end": period_end,
+        "entries": merged_entries,
+        "daily_overtime": {},
+        "holiday_payout": {},
+        "work_schedule_by_date": {},
+        "employee_work_locations_by_date": {},
+        "employee_assigned_locations_by_date": {},
+        "total_hours": total_hours,
+        "work_hours": 0,
+        "status": "draft",
+        "reporting_lead_id": employee.get("reportsTo"),
+        "manager_id": employee.get("peopleLead"),
+        "created_at": now,
+        "updated_at": now,
+        "system_entries_refreshed_at": now,
+        "approval_history": [],
+        "is_locked": False,
+        "auto_created_from_leave_sync": True,
+    }
+    apply_employee_assignment_snapshot(timesheet, employee)
+    return timesheet
+
+
+def ensure_timesheets_exist_for_leave(employee_id, leave_start, leave_end):
+    """Create missing fortnight timesheets so backdated approved leave appears in employee views."""
+    if not employee_id or not leave_start or not leave_end:
+        return 0
+
+    employee = mongo.db.users.find_one({"_id": employee_id})
+    if not employee:
+        return 0
+
+    created_count = 0
+    for period_start, period_end in iter_fortnight_periods(leave_start, leave_end):
+        existing = mongo.db.timesheets.find_one({
+            "employee_id": employee_id,
+            "period_start": period_start,
+            "period_end": period_end,
+        })
+        if existing:
+            continue
+
+        seed_timesheet = create_system_generated_timesheet(employee, period_start, period_end)
+        if not seed_timesheet:
+            continue
+        if not any(entry.get("entry_type") in ("leave", "holiday") for entry in seed_timesheet.get("entries", [])):
+            continue
+
+        mongo.db.timesheets.insert_one(seed_timesheet)
+        created_count += 1
+
+    if created_count:
+        print(f"✅ Created {created_count} missing timesheet(s) for approved leave sync")
+    return created_count
+
+
 def refresh_timesheet_system_entries(timesheet):
     """Rebuild approved leave/holiday entries for an existing timesheet."""
     if not timesheet:
@@ -865,6 +1145,7 @@ def sync_timesheets_for_approved_leave(leave_record):
     if not employee_id or not leave_start or not leave_end:
         return 0
 
+    created_count = ensure_timesheets_exist_for_leave(employee_id, leave_start, leave_end)
     query = {
         "employee_id": employee_id,
         "period_start": {"$lte": leave_end},
@@ -882,9 +1163,10 @@ def sync_timesheets_for_approved_leave(leave_record):
         )
         updated_count += 1
 
-    if updated_count:
-        print(f"✅ Synced {updated_count} timesheet(s) for approved leave {leave_record.get('_id')}")
-    return updated_count
+    total_count = updated_count + created_count
+    if total_count:
+        print(f"✅ Synced {total_count} timesheet(s) for approved leave {leave_record.get('_id')}")
+    return total_count
 
 
 def sync_timesheets_for_cancelled_leave(leave_record):
@@ -928,14 +1210,14 @@ def refresh_timesheet_for_read(timesheet):
     """Refresh system entries before returning a timesheet to the UI."""
     refreshed = refresh_timesheet_system_entries(timesheet)
     if not refreshed:
-        return timesheet
+        return apply_timesheet_workflow_preference(timesheet)
 
     mongo.db.timesheets.update_one(
         {"_id": timesheet["_id"]},
         {"$set": refreshed},
     )
     timesheet.update(refreshed)
-    return timesheet
+    return apply_timesheet_workflow_preference(timesheet)
 
 
 # ========================================
@@ -1046,6 +1328,7 @@ def create_timesheet():
             "approval_history":    [],
         }
         apply_employee_assignment_snapshot(timesheet, employee)
+        apply_timesheet_workflow_preference(timesheet, employee=employee)
 
         if existing:
             if existing.get("status") == "approved":
@@ -1057,20 +1340,23 @@ def create_timesheet():
         else:
             result = mongo.db.timesheets.insert_one(timesheet)
             timesheet_id = result.inserted_id
+        timesheet["_id"] = timesheet_id
 
         # Notify the reporting lead
-        reporting_lead = mongo.db.users.find_one({"_id": reporting_lead_id})
+        effective_reporting_lead_id = timesheet.get("reporting_lead_id") or reporting_lead_id
+        reporting_lead = mongo.db.users.find_one({"_id": effective_reporting_lead_id})
         if reporting_lead:
             msg = (
                 f"{employee.get('name')} submitted a timesheet for "
                 f"{period_start} to {period_end} ({total_hours}h)"
             )
             create_notification(
-                user_id=reporting_lead_id,
+                user_id=effective_reporting_lead_id,
                 notification_type="timesheet_submitted",
                 message=msg,
                 related_timesheet_id=timesheet_id,
             )
+        queue_timesheet_submission_emails(timesheet, employee=employee)
 
         return jsonify({
             "message": "Timesheet submitted successfully",
@@ -1291,6 +1577,7 @@ def save_timesheet_draft():
             draft["approved_edit_window_used_at"] = now
             draft["is_locked"] = False
         apply_employee_assignment_snapshot(draft, employee)
+        apply_timesheet_workflow_preference(draft, employee=employee)
 
         if existing:
             mongo.db.timesheets.update_one({"_id": existing["_id"]}, {"$set": draft})
@@ -1404,11 +1691,22 @@ def submit_timesheet(timesheet_id):
             "updated_at":   now,
             "is_locked":    False,
         }
-        if ts.get("status") == "approved":
+        if ts.get("status") == "approved" or ts.get("reopened_from_approved") or ts.get("requires_reapproval"):
             update_data["resubmitted_after_approval_at"] = now
+            update_data["requires_reapproval"] = True
         employee = mongo.db.users.find_one({"_id": ts["employee_id"]})
         if employee:
             apply_employee_assignment_snapshot(update_data, employee)
+        working_copy = dict(ts)
+        working_copy.update(update_data)
+        apply_timesheet_workflow_preference(working_copy, employee=employee)
+        update_data["reporting_lead_id"] = working_copy.get("reporting_lead_id")
+        if "reporting_lead_name" in working_copy:
+            update_data["reporting_lead_name"] = working_copy.get("reporting_lead_name", "")
+        if "reporting_lead_email" in working_copy:
+            update_data["reporting_lead_email"] = working_copy.get("reporting_lead_email", "")
+        if "timesheet_workflow_preferences" in working_copy:
+            update_data["timesheet_workflow_preferences"] = working_copy.get("timesheet_workflow_preferences")
 
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
@@ -1427,6 +1725,8 @@ def submit_timesheet(timesheet_id):
                 ),
                 related_timesheet_id=timesheet_id,
             )
+        working_copy["_id"] = ObjectId(timesheet_id)
+        queue_timesheet_submission_emails(working_copy, employee=employee)
 
         return jsonify({
             "message":     "Timesheet submitted",
@@ -1582,6 +1882,7 @@ def lead_approve_timesheet(timesheet_id):
                     "lead_approved_by":   approver_name,
                     "lead_approved_by_id": approver_id,
                     "is_locked":          True,
+                    "requires_reapproval": False,
                     "updated_at":         now,
                 },
                 "$push": {"approval_history": approval_entry},
@@ -1861,6 +2162,78 @@ def get_all_timesheets():
 
     except Exception as e:
         print(f"❌ Error in /all: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/preferences", methods=["GET"])
+def get_timesheet_preferences():
+    try:
+        _, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
+        employee_id = request.args.get("employee_id", "").strip()
+        period_start = request.args.get("period_start", "").strip()
+        period_end = request.args.get("period_end", "").strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        preference = get_timesheet_preference(ObjectId(employee_id), period_start, period_end)
+        if not preference:
+            return jsonify({
+                "employee_id": employee_id,
+                "period_start": period_start,
+                "period_end": period_end,
+                "reviewers": [],
+                "notifications": [],
+                "delegates": [],
+                "approvers": [],
+            }), 200
+
+        return jsonify(serialize_all(preference)), 200
+    except Exception as e:
+        print(f"❌ Error fetching timesheet preferences: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/preferences", methods=["PUT"])
+def save_timesheet_preferences():
+    try:
+        requester, error_response = require_admin_menu_access("timesheets")
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        employee_id = data.get("employee_id", "")
+        period_start = str(data.get("period_start", "")).strip()
+        period_end = str(data.get("period_end", "")).strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
+        if not employee:
+            return jsonify({"error": "Employee not found"}), 404
+
+        document = build_timesheet_preference_document(
+            employee["_id"],
+            period_start,
+            period_end,
+            data,
+            managed_by=requester,
+        )
+        mongo.db.timesheet_preferences.update_one(
+            {
+                "employee_id": employee["_id"],
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            {"$set": document, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True,
+        )
+        saved = get_timesheet_preference(employee["_id"], period_start, period_end)
+        return jsonify(serialize_all(saved)), 200
+    except Exception as e:
+        print(f"❌ Error saving timesheet preferences: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

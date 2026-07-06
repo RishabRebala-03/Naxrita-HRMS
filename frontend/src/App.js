@@ -110,7 +110,7 @@ const ForceScroll = () => {
   return null;
 };
 
-const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
+const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState, onNavigateToProfile }) => {
   const [activeTab, setActiveTab] = useState("personal");
 
   const personalLabel = baseRole === "Manager" ? "Manager Leave" : "My Leave";
@@ -146,7 +146,7 @@ const DelegatedLeavesWorkspace = ({ user, baseRole, navigationState }) => {
         ? baseRole === "Manager"
           ? <ManagerLeaves user={user} />
           : <EmployeeLeaves user={user} navigationState={navigationState} />
-        : <AdminLeaves user={user} />}
+        : <AdminLeaves user={user} onNavigateToProfile={onNavigateToProfile} />}
     </section>
   );
 };
@@ -601,13 +601,14 @@ function App() {
 
       case "leaves":
         if (role === "Admin") {
-          return <AdminLeaves user={currentUser} />;
+          return <AdminLeaves user={currentUser} onNavigateToProfile={handleNavigateToProfile} />;
         } else if (hasAdminMenuAccess(currentUser, "leaves")) {
           return (
             <DelegatedLeavesWorkspace
               user={currentUser}
               baseRole={role}
               navigationState={sectionState}
+              onNavigateToProfile={handleNavigateToProfile}
             />
           );
         } else if (role === "Manager") {
