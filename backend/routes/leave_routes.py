@@ -22,6 +22,43 @@ leave_bp = Blueprint("leave_bp", __name__)
 LEAVE_NOTIFICATION_REMINDER_HOURS = 24
 
 
+def serialize_all(obj):
+    """Recursively convert Mongo values into JSON-safe values."""
+    if isinstance(obj, list):
+        return [serialize_all(item) for item in obj]
+    if isinstance(obj, dict):
+        return {key: serialize_all(value) for key, value in obj.items()}
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
+
+def enrich_leave_with_employee_details(leave):
+    employee_id = leave.get("employee_id")
+    employee_obj_id = employee_id if isinstance(employee_id, ObjectId) else None
+
+    if not employee_obj_id and isinstance(employee_id, str) and ObjectId.is_valid(employee_id):
+        employee_obj_id = ObjectId(employee_id)
+
+    if not employee_obj_id:
+        leave.setdefault("employee_name", "Unknown Employee")
+        return leave
+
+    employee = mongo.db.users.find_one({"_id": employee_obj_id})
+    if not employee:
+        leave.setdefault("employee_name", "Unknown Employee")
+        return leave
+
+    leave["employee_name"] = leave.get("employee_name") or employee.get("name", "Unknown Employee")
+    leave["employee_email"] = leave.get("employee_email") or employee.get("email", "")
+    leave["employee_designation"] = leave.get("employee_designation") or employee.get("designation", "")
+    leave["employee_department"] = leave.get("employee_department") or employee.get("department", "")
+    leave["employee_dateOfBirth"] = employee.get("dateOfBirth")
+    return leave
+
+
 def remove_tea_coffee_orders_for_leave(employee_id, start_date, end_date):
     """Delete tea/coffee orders that fall within an approved leave range."""
     if not employee_id or not start_date or not end_date:
@@ -659,6 +696,8 @@ def get_all_leaves():
         
         # ✅ CRITICAL: Serialize ALL ObjectIds and datetime objects
         for leave in leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -720,7 +759,7 @@ def get_all_leaves():
                         entry['approver_id'] = str(entry['approver_id'])
         
         print(f"✅ Found {len(leaves)} total leaves (all serialized)")
-        return jsonify(leaves), 200
+        return jsonify(serialize_all(leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching all leaves: {str(e)}")
@@ -772,6 +811,8 @@ def get_admin_pending_requests():
         
         # ✅ Serialize ALL fields
         for leave in admin_pending:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -827,7 +868,7 @@ def get_admin_pending_requests():
         
         print(f"✅ Returning {len(admin_pending)} serialized admin pending leaves")
         print(f"{'='*60}\n")
-        return jsonify(admin_pending), 200
+        return jsonify(serialize_all(admin_pending)), 200
         
     except Exception as e:
         print(f"\n{'='*60}")
@@ -874,6 +915,8 @@ def get_leave_history(employee_id):
         
         # ✅ FIX 4: Comprehensive serialization
         for leave in leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             if '_id' in leave and isinstance(leave['_id'], ObjectId):
                 leave['_id'] = str(leave['_id'])
@@ -926,7 +969,7 @@ def get_leave_history(employee_id):
                         entry['to_approver'] = str(entry['to_approver'])
         
         print(f"✅ Successfully serialized {len(leaves)} leave records")
-        return jsonify(leaves), 200
+        return jsonify(serialize_all(leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching leave history: {str(e)}")
@@ -1855,6 +1898,8 @@ def get_pending_requests(user_email):
         }).sort("applied_on", -1))
 
         for leave in pending_leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -1903,7 +1948,7 @@ def get_pending_requests(user_email):
                         entry['to_approver'] = str(entry['to_approver'])
 
         print(f"✅ Returning {len(pending_leaves)} pending requests for {user_email}")
-        return jsonify(pending_leaves), 200
+        return jsonify(serialize_all(pending_leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching pending requests: {str(e)}")
