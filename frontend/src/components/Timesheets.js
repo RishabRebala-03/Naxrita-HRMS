@@ -7240,10 +7240,6 @@ function ExpensesPanel({ user }) {
                 </div>
               ) : null}
             </div>
-            <button type="button" className="mte-amex-import">
-              <span />
-              AMEX IMPORT
-            </button>
           </div>
 
           <div className="mte-expense-empty-banner">
