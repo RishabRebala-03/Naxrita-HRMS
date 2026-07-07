@@ -11,7 +11,7 @@ import {
   Download, TrendingUp, BarChart3, UserCheck,
 	  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
   LayoutGrid, ChevronLeft, ChevronRight, Upload, Paperclip,
-  Save,
+  Save, Search, MoreVertical,
 } from 'lucide-react';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
@@ -6857,28 +6857,70 @@ function ExpensesPanel({ user }) {
   const today = format(new Date(), 'yyyy-MM-dd');
   const fileInputRef = useRef(null);
   const expenseCategories = [
-    'Travel',
-    'Meals',
-    'Lodging',
-    'Laptop / Desktop Hardware',
-    'Software Subscription',
-    'Cloud / Hosting',
-    'Internet / Mobile Reimbursement',
-    'Office Supplies',
-    'IT Accessories',
-    'Training / Certification',
-    'Client Meeting',
-    'Courier / Shipping',
-    'Parking / Cab',
+    'Accommodation - Apartment',
+    'Accommodation - Hotel',
+    'Car Expense (Parking, Toll, Fuel)',
+    'Meals and Entertainment',
+    'Other Allowances',
+    'Other Expense',
+    'Per Diem - International',
+    'Per Diem - Local',
+    'Startup Allowance',
+    'Telecom/Internet',
+    'Travel - Public, Limo, & Other',
+    'Travel - Rail',
+  ];
+  const travelReasons = [
+    'Home <-> Airport/Train',
+    'Home <-> Home Office',
+    'Home <-> Client Site/Other Office',
+    'Client Site <-> Airport/Train',
+    'Client Site <-> Client Site',
     'Other',
   ];
+  const travelTypes = ['Car Rental', 'Public Transportation', 'Taxi', 'Other'];
+  const perDiemPurposeOptions = ['Business', 'Training'];
+  const perDiemTypeOptions = ['Breakfast', 'Lunch', 'Dinner', 'Full Day', 'Other'];
+  const perDiemMealOptions = ['-- Select one --', 'Breakfast', 'Lunch', 'Dinner', 'None'];
+  const hotelChains = [
+    '21c Hotels',
+    'Accor Hotels',
+    'AC Hotels',
+    'Adagio',
+    'Aloft',
+    'Andaz',
+    'Ascott Hotels',
+    'Autograph Collection',
+    'Best Western',
+  ];
   const [expenses, setExpenses] = useState([]);
+  const [selectedExpenseCategory, setSelectedExpenseCategory] = useState('');
+  const [isExpenseCategoryOpen, setIsExpenseCategoryOpen] = useState(false);
   const [form, setForm] = useState({
     expense_date: today,
-    category: 'Travel',
+    category: 'Travel - Public, Limo, & Other',
     client_code: '',
     amount: '',
     description: '',
+    country: 'India',
+    currency: 'INR',
+    conversion_rate: '1',
+    from_date: '',
+    to_date: '',
+    reason: '',
+    expense_type: '',
+    trip_type: 'One-Way',
+    hotel_chain: '',
+    invoice_number: '',
+    vendor_gst_number: '',
+    sgst: '',
+    cgst_igst: '',
+    purpose: '',
+    meals_provided: '',
+    daily_base_per_diem: '',
+    receipt_total: '',
+    miscellaneous_expenses: '',
+    comments: '',
     documentFile: null,
   });
   const [editingId, setEditingId] = useState('');
@@ -6911,7 +6953,46 @@ function ExpensesPanel({ user }) {
 
   const resetForm = () => {
     setEditingId('');
-    setForm({ expense_date: today, category: 'Travel', client_code: '', amount: '', description: '', documentFile: null });
+    setForm({
+      expense_date: today,
+      category: selectedExpenseCategory || 'Travel - Public, Limo, & Other',
+      client_code: '',
+      amount: '',
+      description: '',
+      country: 'India',
+      currency: 'INR',
+      conversion_rate: '1',
+      from_date: '',
+      to_date: '',
+      reason: '',
+      expense_type: '',
+      trip_type: 'One-Way',
+      hotel_chain: '',
+      invoice_number: '',
+      vendor_gst_number: '',
+      sgst: '',
+      cgst_igst: '',
+      purpose: '',
+      meals_provided: '',
+      daily_base_per_diem: '',
+      receipt_total: '',
+      miscellaneous_expenses: '',
+      comments: '',
+      documentFile: null,
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const openEmployeeExpenseCategory = (category) => {
+    setSelectedExpenseCategory(category);
+    setIsExpenseCategoryOpen(false);
+    setEditingId('');
+    setForm((previous) => ({
+      ...previous,
+      category,
+      description: '',
+      documentFile: null,
+    }));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -6920,7 +7001,11 @@ function ExpensesPanel({ user }) {
       notify('User not loaded properly.', 'error');
       return;
     }
-    if (!form.expense_date || !form.category || !form.amount || Number(form.amount) <= 0) {
+    const perDiemTotalAmount = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
+    const saveAmount = selectedExpenseCategory === 'Per Diem - Local'
+      ? (perDiemTotalAmount || Number(form.amount || 0))
+      : Number(form.amount || 0);
+    if (!form.expense_date || !form.category || saveAmount <= 0) {
       notify('Enter date, category, and an amount greater than zero.', 'warning');
       return;
     }
@@ -6932,8 +7017,27 @@ function ExpensesPanel({ user }) {
         expense_date: form.expense_date,
         category: form.category,
         client_code: form.client_code.trim(),
-        amount: Number(form.amount),
+        amount: saveAmount,
         description: form.description,
+        country: form.country,
+        currency: form.currency,
+        conversion_rate: form.conversion_rate,
+        from_date: form.from_date,
+        to_date: form.to_date,
+        reason: form.reason,
+        expense_type: form.expense_type,
+        trip_type: form.trip_type,
+        hotel_chain: form.hotel_chain,
+        invoice_number: form.invoice_number,
+        vendor_gst_number: form.vendor_gst_number,
+        sgst: form.sgst,
+        cgst_igst: form.cgst_igst,
+        purpose: form.purpose,
+        meals_provided: form.meals_provided,
+        daily_base_per_diem: form.daily_base_per_diem,
+        receipt_total: form.receipt_total,
+        miscellaneous_expenses: form.miscellaneous_expenses,
+        comments: form.comments,
       };
       let savedExpense = null;
       if (editingId) {
@@ -6947,6 +7051,7 @@ function ExpensesPanel({ user }) {
         await uploadAPI(`/expenses/${savedExpense._id}/document`, documentData);
       }
       resetForm();
+      if (!isAdmin) setSelectedExpenseCategory('');
       loadExpenses();
       notify(editingId ? 'Expense updated successfully.' : 'Expense saved successfully.', 'success');
     } catch (err) {
@@ -6958,12 +7063,32 @@ function ExpensesPanel({ user }) {
 
   const handleEditExpense = (expense) => {
     setEditingId(expense._id);
+    setSelectedExpenseCategory(expense.category || 'Travel - Public, Limo, & Other');
     setForm({
       expense_date: expense.expense_date || today,
-      category: expense.category || 'Travel',
+      category: expense.category || 'Travel - Public, Limo, & Other',
       client_code: expense.client_code || '',
       amount: String(expense.amount || ''),
       description: expense.description || '',
+      country: expense.country || 'India',
+      currency: expense.currency || 'INR',
+      conversion_rate: String(expense.conversion_rate || '1'),
+      from_date: expense.from_date || '',
+      to_date: expense.to_date || '',
+      reason: expense.reason || '',
+      expense_type: expense.expense_type || '',
+      trip_type: expense.trip_type || 'One-Way',
+      hotel_chain: expense.hotel_chain || '',
+      invoice_number: expense.invoice_number || '',
+      vendor_gst_number: expense.vendor_gst_number || '',
+      sgst: expense.sgst || '',
+      cgst_igst: expense.cgst_igst || '',
+      purpose: expense.purpose || '',
+      meals_provided: expense.meals_provided || '',
+      daily_base_per_diem: expense.daily_base_per_diem || '',
+      receipt_total: expense.receipt_total || '',
+      miscellaneous_expenses: expense.miscellaneous_expenses || '',
+      comments: expense.comments || '',
       documentFile: null,
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -7061,6 +7186,371 @@ function ExpensesPanel({ user }) {
   const totalExpenseAmount = visibleExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const attachedDocumentCount = visibleExpenses.filter((expense) => expense.document?.url).length;
   const expenseTableColSpan = isAdmin ? 8 : 7;
+  const isHotelExpense = selectedExpenseCategory === 'Accommodation - Hotel';
+  const isTravelExpense = selectedExpenseCategory === 'Travel - Public, Limo, & Other';
+  const isPerDiemLocalExpense = selectedExpenseCategory === 'Per Diem - Local';
+  const numberOfDays = form.from_date && form.to_date
+    ? Math.max(0, Math.round((parseISO(form.to_date) - parseISO(form.from_date)) / 86400000) + 1)
+    : '';
+  const perDiemTotal = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
+
+  if (!isAdmin) {
+    if (!selectedExpenseCategory) {
+      return (
+        <div className="mte-employee-expenses">
+          <div className="mte-expense-topbar">
+            <div className="mte-timesheet-context">
+              <span>Expense Workspace</span>
+              <strong>Employee Expenses</strong>
+              <small>Add receipts for the current period</small>
+            </div>
+            <div className="mte-expense-period-nav">
+              <button type="button" aria-label="Previous period"><ChevronLeft size={18} /></button>
+              <span>{format(parseISO(today), 'M/d/yyyy')}</span>
+              <button type="button" className="mte-purple-square" aria-label="Open calendar"><Calendar size={16} /></button>
+              <button type="button" aria-label="Next period"><ChevronRight size={18} /></button>
+            </div>
+            <span className="mte-expense-status">Draft</span>
+            <button type="button" className="mte-expense-submit">Submit</button>
+            <button type="button" className="mte-expense-more" aria-label="More expense actions"><MoreVertical size={18} /></button>
+          </div>
+
+          <div className="mte-expense-picker-row">
+            <div className="mte-expense-type-picker">
+              <div className="mte-expense-type-search">
+                <Search size={17} />
+                <input type="search" placeholder="Search" aria-label="Search expenses" />
+                <button
+                  type="button"
+                  className={`mte-expense-type-caret ${isExpenseCategoryOpen ? 'is-open' : ''}`}
+                  aria-label={isExpenseCategoryOpen ? 'Close expense type list' : 'Open expense type list'}
+                  aria-expanded={isExpenseCategoryOpen}
+                  onClick={() => setIsExpenseCategoryOpen((isOpen) => !isOpen)}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+              {isExpenseCategoryOpen ? (
+                <div className="mte-expense-type-menu">
+                  {expenseCategories.map((category) => (
+                    <button type="button" key={category} onClick={() => openEmployeeExpenseCategory(category)}>
+                      {category}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <button type="button" className="mte-amex-import">
+              <span />
+              AMEX IMPORT
+            </button>
+          </div>
+
+          <div className="mte-expense-empty-banner">
+            {expenses.length ? `${expenses.length} expense${expenses.length === 1 ? '' : 's'} saved for this employee` : 'There are no expenses for the selected period'}
+          </div>
+
+          {expenses.length ? (
+            <div className="mte-expense-saved-list">
+              {expenses.map((expense) => (
+                <div className="mte-expense-saved-row" key={expense._id}>
+                  <span>{expense.category}</span>
+                  <span>{expense.expense_date}</span>
+                  <strong>INR {Number(expense.amount || 0).toFixed(2)}</strong>
+                  <button type="button" onClick={() => handleEditExpense(expense)}>Edit</button>
+                  <button type="button" onClick={() => handleDeleteExpense(expense._id)}>Delete</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="mte-employee-expenses">
+        <div className="mte-expense-editor-head">
+          <div className="mte-timesheet-context">
+            <span>Expense Type</span>
+            <strong>{selectedExpenseCategory}</strong>
+            <small>Complete required details and attach receipts</small>
+          </div>
+          <div>
+            <button type="button" className="mte-expense-close" onClick={() => setSelectedExpenseCategory('')}>Close</button>
+            <button type="button" className="mte-expense-save" onClick={handleSaveExpense} disabled={loading}>Save</button>
+          </div>
+        </div>
+
+        <div className={`mte-expense-editor-layout ${isTravelExpense ? 'is-travel-public' : ''} ${isPerDiemLocalExpense ? 'is-per-diem-local' : ''}`}>
+          <section className="mte-expense-editor-form">
+            <div className="mte-expense-form-row is-wide">
+              <label>
+                <span>Charge Code*</span>
+                <select value={form.client_code} onChange={(event) => setForm({ ...form, client_code: event.target.value })}>
+                  <option value="">-- Select one --</option>
+                  {form.client_code ? <option value={form.client_code}>{form.client_code}</option> : null}
+                </select>
+              </label>
+              <label className="mte-expense-amount-field">
+                <span>Amount{isPerDiemLocalExpense ? '' : '*'}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={isPerDiemLocalExpense ? perDiemTotal.toFixed(2) : form.amount}
+                  readOnly={isPerDiemLocalExpense}
+                  onChange={(event) => setForm({ ...form, amount: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="mte-expense-form-row is-date-summary">
+              <label>
+                <span>Country/Region of Expense*</span>
+                <select value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })}>
+                  <option>India</option>
+                </select>
+              </label>
+              <label>
+                <span>Currency</span>
+                <div className="mte-expense-split-input">
+                  <strong>{form.currency}</strong>
+                  <select value={form.currency} onChange={(event) => setForm({ ...form, currency: event.target.value })}>
+                    <option value="INR">India</option>
+                  </select>
+                </div>
+              </label>
+              <label>
+                <span>Conversion Rate</span>
+                <input value={form.conversion_rate} readOnly />
+              </label>
+            </div>
+
+            <div className="mte-expense-form-row">
+              <label>
+                <span>From*</span>
+                <input type="date" value={form.from_date} onChange={(event) => setForm({ ...form, from_date: event.target.value, expense_date: event.target.value || form.expense_date })} />
+              </label>
+              <label>
+                <span>To*</span>
+                <input type="date" value={form.to_date} onChange={(event) => setForm({ ...form, to_date: event.target.value })} />
+              </label>
+              <label className="mte-expense-readonly-label">
+                <span>{isHotelExpense ? 'Number of Nights' : 'Number of Days'}</span>
+                <strong>{numberOfDays || '0'}</strong>
+              </label>
+              <label>
+                <span>Final Amount</span>
+                <div className="mte-expense-split-input">
+                  <strong>INR</strong>
+                  <input value={(isPerDiemLocalExpense ? perDiemTotal : Number(form.amount || 0)).toFixed(2)} readOnly />
+                </div>
+              </label>
+            </div>
+
+            <div className="mte-expense-divider" />
+
+            {isPerDiemLocalExpense ? (
+              <>
+                <div className="mte-expense-form-row is-per-diem-purpose">
+                  <label>
+                    <span>Purpose*</span>
+                    <select value={form.purpose} onChange={(event) => setForm({ ...form, purpose: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {perDiemPurposeOptions.map((purpose) => <option key={purpose}>{purpose}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Type*</span>
+                    <select value={form.expense_type} onChange={(event) => setForm({ ...form, expense_type: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {perDiemTypeOptions.map((type) => <option key={type}>{type}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="mte-expense-form-row is-per-diem-purpose">
+                  <label>
+                    <span>Meals Provided</span>
+                    <select value={form.meals_provided} onChange={(event) => setForm({ ...form, meals_provided: event.target.value })}>
+                      {perDiemMealOptions.map((meal) => (
+                        <option key={meal} value={meal === '-- Select one --' ? '' : meal}>{meal}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Daily Base Per Diem</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.daily_base_per_diem}
+                      onChange={(event) => setForm({ ...form, daily_base_per_diem: event.target.value })}
+                    />
+                  </label>
+                  <label className="mte-expense-readonly-label">
+                    <span>Calculated Per Diem</span>
+                    <strong>{Number(form.daily_base_per_diem || 0).toFixed(2)}</strong>
+                  </label>
+                </div>
+
+                <div className="mte-expense-divider" />
+
+                <div className="mte-expense-form-row is-per-diem-totals">
+                  <label>
+                    <span>Receipt Total</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.receipt_total}
+                      onChange={(event) => setForm({ ...form, receipt_total: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>Miscellaneous Expenses</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.miscellaneous_expenses}
+                      onChange={(event) => setForm({ ...form, miscellaneous_expenses: event.target.value })}
+                    />
+                  </label>
+                  <label className="mte-expense-readonly-label">
+                    <span>Total Amount</span>
+                    <strong>{perDiemTotal.toFixed(2)}</strong>
+                  </label>
+                </div>
+              </>
+            ) : isHotelExpense ? (
+              <div className="mte-expense-form-row is-hotel">
+                <label>
+                  <span>Hotel Chain*</span>
+                  <div className="mte-expense-search-select">
+                    <Search size={16} />
+                    <select value={form.hotel_chain} onChange={(event) => setForm({ ...form, hotel_chain: event.target.value })}>
+                      <option value="">Search</option>
+                      {hotelChains.map((chain) => <option key={chain}>{chain}</option>)}
+                    </select>
+                  </div>
+                </label>
+                <label>
+                  <span>Other</span>
+                  <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                </label>
+              </div>
+            ) : (
+              <>
+                <div className="mte-expense-form-row is-travel is-travel-details">
+                  <label>
+                    <span>Reason*</span>
+                    <select value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {travelReasons.map((reason) => <option key={reason}>{reason}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Other</span>
+                    <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                  </label>
+                  {isTravelExpense ? (
+                    <fieldset className="mte-trip-options">
+                      <label><input type="radio" checked={form.trip_type === 'One-Way'} onChange={() => setForm({ ...form, trip_type: 'One-Way' })} /> One-Way</label>
+                      <label><input type="radio" checked={form.trip_type === 'Round Trip'} onChange={() => setForm({ ...form, trip_type: 'Round Trip' })} /> Round Trip</label>
+                    </fieldset>
+                  ) : null}
+                </div>
+                <div className="mte-expense-form-row is-travel is-travel-type">
+                  <label>
+                    <span>Type*</span>
+                    <select value={form.expense_type} onChange={(event) => setForm({ ...form, expense_type: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {travelTypes.map((type) => <option key={type}>{type}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Other</span>
+                    <input value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} />
+                  </label>
+                </div>
+              </>
+            )}
+
+            {!isPerDiemLocalExpense ? (
+              <>
+                <div className="mte-expense-divider" />
+
+                <div className="mte-expense-checkbox-row">
+                  <label><input type="checkbox" /> Provided to a Public Official with value above $25?</label>
+                  <label><input type="checkbox" /> No Vendor GST Number on Invoice</label>
+                </div>
+                <p className="mte-expense-important"><strong>IMPORTANT</strong>- Once this checkbox is selected, Accenture will be liable to pay additional GST. It is advisable that you deal <u>ONLY</u> with GST registered vendors.</p>
+
+                <div className="mte-expense-form-row">
+                  <label>
+                    <span>Invoice Number*</span>
+                    <input value={form.invoice_number} onChange={(event) => setForm({ ...form, invoice_number: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>Vendor GST Number*</span>
+                    <input value={form.vendor_gst_number} onChange={(event) => setForm({ ...form, vendor_gst_number: event.target.value })} />
+                  </label>
+                </div>
+                <div className="mte-expense-form-row">
+                  <label>
+                    <span>SGST(INR)*</span>
+                    <input value={form.sgst} onChange={(event) => setForm({ ...form, sgst: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>CGST/IGST(INR)*</span>
+                    <input value={form.cgst_igst} onChange={(event) => setForm({ ...form, cgst_igst: event.target.value })} />
+                  </label>
+                </div>
+              </>
+            ) : null}
+
+            {isTravelExpense ? (
+              <div className="mte-expense-notes">
+                <strong>Important Points to be followed:</strong>
+                <p>Update comments with form/to details when claiming fuel reimbursements @ INR 10 per KM (applicable within India only).</p>
+                <p>Expense must be claimed only after it is incurred.</p>
+              </div>
+            ) : null}
+
+            <label className="mte-expense-comments">
+              <span>Comments - Optional</span>
+              <textarea value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} />
+            </label>
+          </section>
+
+          <aside className="mte-expense-receipts">
+            <div className="mte-expense-dropzone" onClick={() => fileInputRef.current?.click()} role="button" tabIndex={0}>
+              <span>Drag and Drop to Upload</span>
+              <Upload size={18} />
+            </div>
+            <button type="button" className="mte-upload-receipt" onClick={() => fileInputRef.current?.click()}>
+              Upload Receipt
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.gif,.webp,.ppt,.pptx,.zip,.msg,.eml"
+              onChange={(event) => setForm({ ...form, documentFile: event.target.files?.[0] || null })}
+              hidden
+            />
+            <div className="mte-receipt-status">
+              <Paperclip size={18} />
+              <span>{form.documentFile ? form.documentFile.name : 'No receipts have been attached'}</span>
+            </div>
+          </aside>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mte-module-card mte-expense-shell">
