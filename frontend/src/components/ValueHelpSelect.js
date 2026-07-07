@@ -75,18 +75,35 @@ export default function ValueHelpSelect({
       if (!rect) return;
 
       const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const viewportPadding = 12;
+      const offset = 6;
+      const estimatedPopoverHeight = 320;
+      const minPopoverHeight = 180;
       const targetWidth = tableHeaders.length ? 640 : 360;
-      const preferredWidth = Math.max(rect.width, Math.min(targetWidth, viewportWidth - 24));
-      const maxWidth = viewportWidth - 24;
+      const preferredWidth = Math.max(rect.width, Math.min(targetWidth, viewportWidth - (viewportPadding * 2)));
+      const maxWidth = viewportWidth - (viewportPadding * 2);
       const width = Math.min(preferredWidth, maxWidth);
-      const left = Math.max(12, Math.min(rect.left, viewportWidth - width - 12));
+      const left = Math.max(viewportPadding, Math.min(rect.left, viewportWidth - width - viewportPadding));
+      const spaceBelow = viewportHeight - rect.bottom - offset - viewportPadding;
+      const spaceAbove = rect.top - offset - viewportPadding;
+      const shouldOpenAbove = spaceBelow < minPopoverHeight && spaceAbove > spaceBelow;
+      const availableHeight = Math.max(
+        minPopoverHeight,
+        Math.min(estimatedPopoverHeight, shouldOpenAbove ? spaceAbove : spaceBelow)
+      );
 
       setPopoverStyle({
         position: "fixed",
-        top: rect.bottom + 6,
+        top: shouldOpenAbove
+          ? Math.max(viewportPadding, rect.top - availableHeight - offset)
+          : Math.max(viewportPadding, rect.bottom + offset),
         left,
         width,
         minWidth: width,
+        maxHeight: availableHeight,
+        "--value-help-list-max-height": `${Math.max(120, availableHeight - 60)}px`,
+        marginTop: 0,
         right: "auto",
         zIndex: 4000,
       });

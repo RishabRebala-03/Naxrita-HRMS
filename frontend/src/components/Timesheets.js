@@ -7644,6 +7644,42 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
     setSelectedPeriodValue(selectedPeriod || periods?.[0]?.value || '');
   }, [periods, selectedPeriod]);
 
+  const employeeValueHelpOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee._id,
+      label: employee.name || employee.email || employee.employeeId || employee._id,
+      description: [
+        employee.email,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
+
+  const periodValueHelpOptions = useMemo(
+    () => periods.map((period) => ({
+      value: period.value,
+      label: period.label,
+      description: period.start && period.end ? `${period.start} to ${period.end}` : '',
+    })),
+    [periods]
+  );
+
+  const preferenceSuggestionOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee.email || employee.name || employee._id,
+      label: employee.email || employee.name || employee._id,
+      description: [
+        employee.name,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+        employee.role || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
+
   useEffect(() => {
     if (!isAdmin) return;
     fetchAPI('/users/get_all_employees')
@@ -7752,22 +7788,24 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
       <div className="mte-preferences-grid" style={{ marginBottom: '18px' }}>
         <div className="mte-pref-field">
           <label>Employee:</label>
-          <select className="input" value={selectedEmployeeId} onChange={(event) => setSelectedEmployeeId(event.target.value)}>
-            {employees.map((employee) => (
-              <option key={employee._id} value={employee._id}>
-                {employee.name || employee.email || employee._id}
-              </option>
-            ))}
-          </select>
+          <ValueHelpSelect
+            value={selectedEmployeeId}
+            onChange={setSelectedEmployeeId}
+            options={employeeValueHelpOptions}
+            placeholder="Select employee"
+            searchPlaceholder="Search employees"
+          />
         </div>
         <div />
         <div className="mte-pref-field">
           <label>Fortnight:</label>
-          <select className="input" value={selectedPeriodValue} onChange={(event) => setSelectedPeriodValue(event.target.value)}>
-            {periods.map((period) => (
-              <option key={period.value} value={period.value}>{period.label}</option>
-            ))}
-          </select>
+          <ValueHelpSelect
+            value={selectedPeriodValue}
+            onChange={setSelectedPeriodValue}
+            options={periodValueHelpOptions}
+            placeholder="Select fortnight"
+            searchPlaceholder="Search fortnights"
+          />
         </div>
         <div className="mte-pref-field">
           <label>Mode:</label>
@@ -7778,7 +7816,13 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
           <label>Reviewer Email(s):</label>
-          <input className="input" value={drafts.reviewer} onChange={(event) => updateDraft('reviewer', event.target.value)} placeholder="name@company.com" />
+          <ValueHelpSelect
+            value={drafts.reviewer}
+            onChange={(value) => updateDraft('reviewer', value)}
+            options={preferenceSuggestionOptions}
+            placeholder="Choose reviewer"
+            searchPlaceholder="Search reviewer suggestions"
+          />
         </div>
         <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
           <ChevronRight size={15} />
@@ -7791,7 +7835,13 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
 
         <div className="mte-pref-field">
           <label>Notification Email(s):</label>
-          <input className="input" value={drafts.notification} onChange={(event) => updateDraft('notification', event.target.value)} placeholder="notify@company.com" />
+          <ValueHelpSelect
+            value={drafts.notification}
+            onChange={(value) => updateDraft('notification', value)}
+            options={preferenceSuggestionOptions}
+            placeholder="Choose notification recipient"
+            searchPlaceholder="Search notification suggestions"
+          />
         </div>
         <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
           <ChevronRight size={15} />
@@ -7804,7 +7854,13 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
 
         <div className="mte-pref-field">
           <label>Delegate Email(s):</label>
-          <input className="input" value={drafts.delegate} onChange={(event) => updateDraft('delegate', event.target.value)} placeholder="delegate@company.com" />
+          <ValueHelpSelect
+            value={drafts.delegate}
+            onChange={(value) => updateDraft('delegate', value)}
+            options={preferenceSuggestionOptions}
+            placeholder="Choose delegate"
+            searchPlaceholder="Search delegate suggestions"
+          />
         </div>
         <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
           <ChevronRight size={15} />
@@ -7817,7 +7873,13 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
 
         <div className="mte-pref-field">
           <label>Approver Email(s):</label>
-          <input className="input" value={drafts.approver} onChange={(event) => updateDraft('approver', event.target.value)} placeholder="approver@company.com" />
+          <ValueHelpSelect
+            value={drafts.approver}
+            onChange={(value) => updateDraft('approver', value)}
+            options={preferenceSuggestionOptions}
+            placeholder="Choose approver"
+            searchPlaceholder="Search approver suggestions"
+          />
         </div>
         <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
           <ChevronRight size={15} />
@@ -8995,9 +9057,15 @@ function TimesheetsContent({ user, navigationState }) {
     ...(user?.role === 'Admin' ? [{ key: 'assignments', label: 'ASSIGNMENTS' }] : []),
     { key: 'adjustments', label: 'ADJUSTMENTS' },
     { key: 'summary', label: 'SUMMARY' },
-    { key: 'preferences', label: 'PREFERENCES' },
+    ...(user?.role === 'Admin' ? [{ key: 'preferences', label: 'PREFERENCES' }] : []),
     ...(user?.role === 'Admin' ? [{ key: 'reports', label: 'REPORTS' }] : []),
   ];
+
+  useEffect(() => {
+    if (user?.role !== 'Admin' && activeModule === 'preferences') {
+      setActiveModule('time');
+    }
+  }, [activeModule, user?.role]);
 
   const renderActiveModule = () => {
     switch (activeModule) {
@@ -9051,7 +9119,17 @@ function TimesheetsContent({ user, navigationState }) {
           />
         );
       case 'preferences':
-        return <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />;
+        return user?.role === 'Admin'
+          ? <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />
+          : (
+            <PortalTimeWorkspace
+              user={user}
+              selectedPeriod={selectedPeriod}
+              onSelectedPeriodChange={setSelectedPeriod}
+              onSheetSnapshotChange={handleSheetSnapshotChange}
+              navigationState={navigationState}
+            />
+          );
       case 'reports':
         return user?.role === 'Admin' ? <ReportsPanel user={user} /> : (
           <PortalTimeWorkspace

@@ -582,7 +582,14 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
                           </div>
 
                           <div className="fiori-primary-cell">
-                            <strong>{employee.name || "Unnamed employee"}</strong>
+                            <button
+                              type="button"
+                              className="employee-name-button"
+                              onClick={() => onNavigateToProfile(employee._id)}
+                              title="Open employee profile"
+                            >
+                              {employee.name || "Unnamed employee"}
+                            </button>
                             <span>{employee.designation || "Designation not available"}</span>
                             <span>{employee.employeeId || employee._id}</span>
                             <span>
