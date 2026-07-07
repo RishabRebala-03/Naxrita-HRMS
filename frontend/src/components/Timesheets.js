@@ -8112,6 +8112,7 @@ function PortalTimeWorkspace({
   selectedPeriod,
   onSelectedPeriodChange,
   onSheetSnapshotChange,
+  navigationState,
 }) {
   const isAdmin = isAdminUser(user);
   const userEmail = String(user?.email || '').trim();
@@ -8152,6 +8153,11 @@ function PortalTimeWorkspace({
   useEffect(() => {
     setActiveView(defaultView);
   }, [defaultView]);
+
+  useEffect(() => {
+    if (!navigationState?.activeView) return;
+    setActiveView(navigationState.activeView);
+  }, [navigationState]);
 
   const views = useMemo(() => (
     isAdmin
@@ -8925,11 +8931,13 @@ function PortalSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
-function TimesheetsContent({ user }) {
+function TimesheetsContent({ user, navigationState }) {
   const periods = useMemo(() => getAvailablePeriods(), []);
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
   const [liveTimesheetSnapshots, setLiveTimesheetSnapshots] = useState({});
+  const [navigatedTimesheet, setNavigatedTimesheet] = useState(null);
+  const ccLookup = useCcLookup();
   const selectedPeriodIndex = Math.max(0, periods.findIndex((period) => period.value === selectedPeriod));
   const canGoToPreviousTimesheet = selectedPeriodIndex < periods.length - 1;
   const canGoToNextTimesheet = selectedPeriodIndex > 0;
@@ -8952,6 +8960,33 @@ function TimesheetsContent({ user }) {
     }));
   }, []);
 
+  useEffect(() => {
+    if (!navigationState?.timesheetId) return;
+
+    let isMounted = true;
+    setActiveModule('time');
+
+    if (navigationState.periodStart && periods.some((period) => period.value === navigationState.periodStart)) {
+      setSelectedPeriod(navigationState.periodStart);
+    }
+
+    fetchAPI(`/timesheets/${navigationState.timesheetId}`)
+      .then((data) => {
+        if (isMounted) {
+          setNavigatedTimesheet(data);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setNavigatedTimesheet(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [navigationState, periods]);
+
   const modules = [
     { key: 'time', label: 'TIME' },
     { key: 'expenses', label: 'EXPENSES' },
@@ -8973,6 +9008,7 @@ function TimesheetsContent({ user }) {
             selectedPeriod={selectedPeriod}
             onSelectedPeriodChange={setSelectedPeriod}
             onSheetSnapshotChange={handleSheetSnapshotChange}
+            navigationState={navigationState}
           />
         );
       case 'expenses':
@@ -9000,6 +9036,7 @@ function TimesheetsContent({ user }) {
               selectedPeriod={selectedPeriod}
               onSelectedPeriodChange={setSelectedPeriod}
               onSheetSnapshotChange={handleSheetSnapshotChange}
+              navigationState={navigationState}
             />
           );
       case 'adjustments':
@@ -9022,6 +9059,7 @@ function TimesheetsContent({ user }) {
             selectedPeriod={selectedPeriod}
             onSelectedPeriodChange={setSelectedPeriod}
             onSheetSnapshotChange={handleSheetSnapshotChange}
+            navigationState={navigationState}
           />
         );
       default:
@@ -9031,6 +9069,7 @@ function TimesheetsContent({ user }) {
             selectedPeriod={selectedPeriod}
             onSelectedPeriodChange={setSelectedPeriod}
             onSheetSnapshotChange={handleSheetSnapshotChange}
+            navigationState={navigationState}
           />
         );
     }
@@ -9054,15 +9093,26 @@ function TimesheetsContent({ user }) {
       <div className="mte-portal-content">
         {renderActiveModule()}
       </div>
+
+      {navigatedTimesheet ? (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: C.bg, overflowY: 'auto' }}>
+          <TimesheetFullPageView
+            timesheet={navigatedTimesheet}
+            user={user}
+            ccLookup={ccLookup}
+            onClose={() => setNavigatedTimesheet(null)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export default function Timesheets({ user, adminView = false }) {
+export default function Timesheets({ user, adminView = false, navigationState = null }) {
   const effectiveUser = adminView && user?.role !== 'Admin' ? { ...user, role: 'Admin' } : user;
   return (
     <TimesheetUiProvider>
-      <TimesheetsContent user={effectiveUser} />
+      <TimesheetsContent user={effectiveUser} navigationState={navigationState} />
     </TimesheetUiProvider>
   );
 }

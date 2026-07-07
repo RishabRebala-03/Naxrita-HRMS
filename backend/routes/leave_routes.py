@@ -2,6 +2,7 @@
 from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime, timedelta
+import os
 from config.db import mongo
 from utils.log_utils import log_leave_action, trim_leave
 from utils.leave_accrual import accrue_monthly_leaves
@@ -18,6 +19,7 @@ from services.mail_service import (
 from utils.access_control import has_admin_menu_access, is_full_admin, require_admin, resolve_requester
 
 leave_bp = Blueprint("leave_bp", __name__)
+LEAVE_NOTIFICATION_REMINDER_HOURS = 24
 
 
 def remove_tea_coffee_orders_for_leave(employee_id, start_date, end_date):
@@ -36,7 +38,16 @@ def remove_tea_coffee_orders_for_leave(employee_id, start_date, end_date):
 
 
 # Import notification helper
-def create_notification(user_id, notification_type, message, related_leave_id=None):
+def create_notification(
+    user_id,
+    notification_type,
+    message,
+    related_leave_id=None,
+    target=None,
+    meta=None,
+    reminder_group=None,
+    notification_origin="event",
+):
     """Helper function to create notifications"""
     try:
         if isinstance(user_id, str):
@@ -48,17 +59,116 @@ def create_notification(user_id, notification_type, message, related_leave_id=No
             "message": message,
             "read": False,
             "createdAt": datetime.utcnow(),
+            "notification_origin": notification_origin,
         }
         
         if related_leave_id:
             if isinstance(related_leave_id, str):
                 related_leave_id = ObjectId(related_leave_id)
             notification["related_leave_id"] = related_leave_id
+
+        if target:
+            notification["target"] = target
+        if meta:
+            notification["meta"] = meta
+        if reminder_group:
+            notification["reminder_group"] = reminder_group
         
         mongo.db.notifications.insert_one(notification)
         print(f"✅ Notification created: {notification_type}")
     except Exception as e:
         print(f"❌ Error creating notification: {str(e)}")
+
+
+def build_leave_notification_target(leave_id, active_tab="pending"):
+    return {
+        "section": "leaves",
+        "leaveId": str(leave_id),
+        "activeTab": active_tab,
+    }
+
+
+def clear_leave_reminder_state(leave_id):
+    mongo.db.leaves.update_one(
+        {"_id": ObjectId(leave_id)},
+        {
+            "$unset": {
+                "notification_reminder": "",
+            }
+        },
+    )
+
+
+def set_leave_escalation_reminder_state(leave_id, approver_ids, escalation_level):
+    recipient_ids = [str(approver_id) for approver_id in approver_ids if approver_id]
+    mongo.db.leaves.update_one(
+        {"_id": ObjectId(leave_id)},
+        {
+            "$set": {
+                "notification_reminder": {
+                    "kind": "leave_escalation",
+                    "recipient_ids": recipient_ids,
+                    "escalation_level": escalation_level,
+                    "last_sent_at": datetime.utcnow(),
+                    "reminder_group": f"leave:{leave_id}:escalation:{escalation_level}",
+                }
+            }
+        },
+    )
+
+
+def send_leave_escalation_notification_reminders(leave_id=None, force=False, reminder_hours=None):
+    reminder_hours = int(reminder_hours or os.getenv("LEAVE_NOTIFICATION_REMINDER_HOURS", str(LEAVE_NOTIFICATION_REMINDER_HOURS)))
+    query = {"status": "Pending", "escalation_level": {"$gt": 0}}
+    if leave_id:
+        query["_id"] = ObjectId(leave_id)
+
+    leaves = list(mongo.db.leaves.find(query))
+    now = datetime.utcnow()
+    sent = 0
+
+    for leave in leaves:
+        reminder_state = leave.get("notification_reminder") or {}
+        if reminder_state.get("kind") != "leave_escalation":
+            continue
+
+        last_sent_at = reminder_state.get("last_sent_at")
+        if not force and last_sent_at and now - last_sent_at < timedelta(hours=reminder_hours):
+            continue
+
+        recipient_ids = reminder_state.get("recipient_ids") or []
+        if not recipient_ids and leave.get("current_approver_id"):
+            recipient_ids = [str(leave.get("current_approver_id"))]
+        if not recipient_ids:
+            continue
+
+        leave_id_str = str(leave["_id"])
+        escalation_level = leave.get("escalation_level", reminder_state.get("escalation_level", 0))
+        message = (
+            f"Reminder: {leave.get('employee_name', 'An employee')}'s "
+            f"{leave.get('leave_type', 'leave')} request ({leave.get('start_date')} to {leave.get('end_date')}) "
+            "is still awaiting action."
+        )
+
+        for recipient_id in recipient_ids:
+            create_notification(
+                user_id=recipient_id,
+                notification_type="leave_escalated_reminder",
+                message=message,
+                related_leave_id=leave_id_str,
+                target=build_leave_notification_target(leave_id_str, active_tab="pending"),
+                meta={"escalation_level": escalation_level},
+                reminder_group=f"leave:{leave_id_str}:escalation:{escalation_level}",
+                notification_origin="reminder",
+            )
+            sent += 1
+
+        mongo.db.leaves.update_one(
+            {"_id": leave["_id"]},
+            {"$set": {"notification_reminder.last_sent_at": now}},
+        )
+
+    return {"pending": len(leaves), "notifications_sent": sent, "interval_hours": reminder_hours}
 
 def normalize_leave_type(leave_type):
     """Normalize alias leave types to the stored canonical value."""
@@ -371,7 +481,10 @@ def escalate_leave_request(leave_id):
             user_id=next_approver["_id"],
             notification_type="leave_escalated",
             message=notification_message,
-            related_leave_id=leave_id
+            related_leave_id=leave_id,
+            target=build_leave_notification_target(leave_id, active_tab="pending"),
+            meta={"escalation_level": new_level},
+            reminder_group=f"leave:{leave_id}:escalation:{new_level}",
         )
         
         print(f"   ✅ Notification sent to {next_approver['name']}")
@@ -385,9 +498,17 @@ def escalate_leave_request(leave_id):
                         user_id=admin["_id"],
                         notification_type="leave_escalated",
                         message=notification_message,
-                        related_leave_id=leave_id
+                        related_leave_id=leave_id,
+                        target=build_leave_notification_target(leave_id, active_tab="pending"),
+                        meta={"escalation_level": new_level},
+                        reminder_group=f"leave:{leave_id}:escalation:{new_level}",
                     )
                     print(f"   ✅ Additional notification sent to admin: {admin.get('name')}")
+
+        reminder_recipient_ids = [next_approver["_id"]]
+        if next_approver.get("role") == "Admin":
+            reminder_recipient_ids = [admin["_id"] for admin in all_admins]
+        set_leave_escalation_reminder_state(leave_id, reminder_recipient_ids, new_level)
         
         # Log action
         log_leave_action(
@@ -502,8 +623,12 @@ def escalate_leave(leave_id):
                 user_id=next_approver["_id"],
                 notification_type="leave_escalated",
                 message=notification_message,
-                related_leave_id=leave_id
+                related_leave_id=leave_id,
+                target=build_leave_notification_target(leave_id, active_tab="pending"),
+                meta={"escalation_level": new_level},
+                reminder_group=f"leave:{leave_id}:escalation:{new_level}",
             )
+            set_leave_escalation_reminder_state(leave_id, [next_approver["_id"]], new_level)
             
             try:
                 queue_leave_escalated_email(leave_id, next_approver=next_approver)
@@ -1058,7 +1183,8 @@ def apply_leave():
                         user_id=immediate_manager_id,
                         notification_type="leave_request",
                         message=notification_message,
-                        related_leave_id=result.inserted_id
+                        related_leave_id=result.inserted_id,
+                        target=build_leave_notification_target(result.inserted_id, active_tab="pending"),
                     )
                     
                     try:
@@ -1255,7 +1381,8 @@ def apply_backdated_leave():
                 f"A backdated {leave_type} record ({start_date} to {end_date}) "
                 f"was regularized by {recorded_by_name}."
             ),
-            related_leave_id=result.inserted_id
+            related_leave_id=result.inserted_id,
+            target=build_leave_notification_target(result.inserted_id, active_tab="my-leaves"),
         )
 
         requester_email = requester.get("email", "")
@@ -1520,8 +1647,10 @@ def cancel_leave(leave_id):
                         f"{leave.get('leave_type', 'leave')} request "
                         f"({leave.get('start_date')} to {leave.get('end_date')})"
                     ),
-                    related_leave_id=leave_id
+                    related_leave_id=leave_id,
+                    target=build_leave_notification_target(leave_id, active_tab="pending"),
                 )
+            clear_leave_reminder_state(leave_id)
 
             try:
                 queue_leave_cancelled_email(
@@ -1565,8 +1694,10 @@ def cancel_leave(leave_id):
                 user_id=current_approver_id,
                 notification_type="leave_cancelled",
                 message=notification_message,
-                related_leave_id=leave_id
+                related_leave_id=leave_id,
+                target=build_leave_notification_target(leave_id, active_tab="pending"),
             )
+        clear_leave_reminder_state(leave_id)
 
         try:
             queue_leave_cancelled_email(
@@ -1640,8 +1771,10 @@ def cancel_leave_by_lead(leave_id):
                 f"Your approved {leave.get('leave_type', 'leave')} request "
                 f"({leave.get('start_date')} to {leave.get('end_date')}) was cancelled by {performed_by}"
             ),
-            related_leave_id=leave_id
+            related_leave_id=leave_id,
+            target=build_leave_notification_target(leave_id, active_tab="my-leaves"),
         )
+        clear_leave_reminder_state(leave_id)
 
         try:
             queue_leave_cancelled_email(
@@ -1878,16 +2011,20 @@ def update_leave_status(leave_id):
                 user_id=leave_record["employee_id"],
                 notification_type="leave_approved",
                 message=notification_message,
-                related_leave_id=leave_id
+                related_leave_id=leave_id,
+                target=build_leave_notification_target(leave_id, active_tab="my-leaves"),
             )
+            clear_leave_reminder_state(leave_id)
         elif status == "Rejected":
             notification_message = f"Your {leave_record.get('leave_type', 'leave')} request ({leave_record.get('start_date')} to {leave_record.get('end_date')}) has been rejected. Reason: {rejection_reason}"
             create_notification(
                 user_id=leave_record["employee_id"],
                 notification_type="leave_rejected",
                 message=notification_message,
-                related_leave_id=leave_id
+                related_leave_id=leave_id,
+                target=build_leave_notification_target(leave_id, active_tab="my-leaves"),
             )
+            clear_leave_reminder_state(leave_id)
 
         removed_orders = 0
         synced_timesheets = 0

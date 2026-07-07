@@ -2,7 +2,7 @@
 from flask import Flask, request, jsonify
 from config.db import init_db
 from routes.user_routes import user_bp
-from routes.leave_routes import leave_bp  
+from routes.leave_routes import leave_bp, send_leave_escalation_notification_reminders
 from routes.auth_routes import auth_bp
 from routes.holiday_routes import holiday_bp  
 from routes.log_routes import log_bp
@@ -13,7 +13,7 @@ from routes.tea_coffee_routes import tea_coffee_bp
 from flask_cors import CORS 
 from routes.notification_routes import notification_bp
 from routes.project_routes import project_bp
-from routes.timesheet_routes import timesheet_bp  # ⭐ NEW
+from routes.timesheet_routes import timesheet_bp, send_timesheet_notification_reminders  # ⭐ NEW
 from routes.charge_code_routes import charge_code_bp  # ⭐ NEW
 from routes.expense_routes import expense_bp
 from routes.payslip_routes import payslip_bp
@@ -143,6 +143,26 @@ def send_leave_reminder_emails_job():
         print(f"❌ Leave reminder mail job error: {str(e)}")
 
 
+def send_leave_notification_reminders_job():
+    """Create recurring in-app notifications for escalated leave approvals."""
+    try:
+        with app.app_context():
+            result = send_leave_escalation_notification_reminders(force=False)
+            print(f"✅ Leave notification reminder job completed: {result}")
+    except Exception as e:
+        print(f"❌ Leave notification reminder job error: {str(e)}")
+
+
+def send_timesheet_notification_reminders_job():
+    """Create recurring in-app notifications for unresolved timesheet events."""
+    try:
+        with app.app_context():
+            result = send_timesheet_notification_reminders(force=False)
+            print(f"✅ Timesheet notification reminder job completed: {result}")
+    except Exception as e:
+        print(f"❌ Timesheet notification reminder job error: {str(e)}")
+
+
 def send_low_balance_alerts_job():
     """Queue low leave balance alerts for employees."""
     try:
@@ -213,7 +233,23 @@ scheduler.add_job(
     id="leave_mail_reminders"
 )
 
-# 6. Low balance alerts
+# 6. Escalated leave in-app reminders
+scheduler.add_job(
+    func=send_leave_notification_reminders_job,
+    trigger="interval",
+    hours=int(os.getenv("LEAVE_NOTIFICATION_REMINDER_HOURS", "24")),
+    id="leave_notification_reminders"
+)
+
+# 7. Timesheet in-app reminders
+scheduler.add_job(
+    func=send_timesheet_notification_reminders_job,
+    trigger="interval",
+    hours=int(os.getenv("TIMESHEET_NOTIFICATION_REMINDER_HOURS", "24")),
+    id="timesheet_notification_reminders"
+)
+
+# 8. Low balance alerts
 scheduler.add_job(
     func=send_low_balance_alerts_job,
     trigger="cron",
@@ -222,7 +258,7 @@ scheduler.add_job(
     id="low_balance_mail_alerts"
 )
 
-# 7. Daily leave summary
+# 9. Daily leave summary
 scheduler.add_job(
     func=send_daily_leave_summary_job,
     trigger="cron",
@@ -235,7 +271,7 @@ scheduler.add_job(
 scheduler.start()
 
 print("\n" + "="*80)
-print("✅ SCHEDULER STARTED WITH 7 AUTOMATED JOBS")
+print("✅ SCHEDULER STARTED WITH 9 AUTOMATED JOBS")
 print("="*80)
 print("\n📋 SCHEDULED JOBS:")
 print("-" * 80)
@@ -262,11 +298,19 @@ print("5️⃣  PENDING APPROVAL REMINDERS")
 print("    Schedule: Every LEAVE_REMINDER_INTERVAL_HOURS hours")
 print("    Function: Queue reminder emails for pending approvals")
 print()
-print("6️⃣  LOW BALANCE ALERTS")
+print("6️⃣  LEAVE IN-APP REMINDERS")
+print("    Schedule: Every LEAVE_NOTIFICATION_REMINDER_HOURS hours")
+print("    Function: Re-notify escalated approvers until the leave is resolved")
+print()
+print("7️⃣  TIMESHEET IN-APP REMINDERS")
+print("    Schedule: Every TIMESHEET_NOTIFICATION_REMINDER_HOURS hours")
+print("    Function: Repeat unresolved timesheet notifications until action/read")
+print()
+print("8️⃣  LOW BALANCE ALERTS")
 print("    Schedule: Daily at LOW_BALANCE_ALERT_HOUR")
 print("    Function: Queue employee low leave balance alerts")
 print()
-print("7️⃣  DAILY LEAVE SUMMARY")
+print("9️⃣  DAILY LEAVE SUMMARY")
 print("    Schedule: Daily at DAILY_LEAVE_SUMMARY_HOUR")
 print("    Function: Queue daily admin leave summary")
 print("-" * 80)

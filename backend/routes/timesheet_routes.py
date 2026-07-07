@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify, send_file
 from bson import ObjectId
 from datetime import datetime, timedelta
 from io import BytesIO
+import os
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -14,6 +15,7 @@ from utils.timezone import now_ist
 
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
+TIMESHEET_NOTIFICATION_REMINDER_HOURS = 24
 
 ABSENCE_CHARGE_CODES = {
     "adoption_leave": {"code": "955X06", "name": "Adoption Leave"},
@@ -112,7 +114,16 @@ def serialize_all(obj):
     return obj
 
 
-def create_notification(user_id, notification_type, message, related_timesheet_id=None):
+def create_notification(
+    user_id,
+    notification_type,
+    message,
+    related_timesheet_id=None,
+    target=None,
+    meta=None,
+    reminder_group=None,
+    notification_origin="event",
+):
     """Create a notification for timesheet actions."""
     try:
         if isinstance(user_id, str):
@@ -124,6 +135,7 @@ def create_notification(user_id, notification_type, message, related_timesheet_i
             "message": message,
             "read": False,
             "createdAt": datetime.utcnow(),
+            "notification_origin": notification_origin,
         }
 
         if related_timesheet_id:
@@ -131,10 +143,110 @@ def create_notification(user_id, notification_type, message, related_timesheet_i
                 related_timesheet_id = ObjectId(related_timesheet_id)
             notification["related_timesheet_id"] = related_timesheet_id
 
+        if target:
+            notification["target"] = target
+        if meta:
+            notification["meta"] = meta
+        if reminder_group:
+            notification["reminder_group"] = reminder_group
+
         mongo.db.notifications.insert_one(notification)
         print(f"✅ Timesheet notification created: {notification_type}")
     except Exception as e:
         print(f"❌ Error creating timesheet notification: {str(e)}")
+
+
+def build_timesheet_notification_target(timesheet, view="entry"):
+    timesheet_id = timesheet if isinstance(timesheet, str) else str((timesheet or {}).get("_id") or (timesheet or {}).get("id") or "")
+    target = {
+        "section": "timesheets",
+        "timesheetId": timesheet_id,
+        "activeView": view,
+    }
+    if isinstance(timesheet, dict):
+        target["periodStart"] = timesheet.get("period_start", "")
+        target["periodEnd"] = timesheet.get("period_end", "")
+    return target
+
+
+def clear_timesheet_reminder_state(timesheet_id):
+    mongo.db.timesheets.update_one(
+        {"_id": ObjectId(timesheet_id)},
+        {"$unset": {"notification_reminder": ""}},
+    )
+
+
+def set_timesheet_reminder_state(timesheet_id, *, event, mode, recipient_id, target, message, statuses=None):
+    recipient = str(recipient_id) if recipient_id else ""
+    mongo.db.timesheets.update_one(
+        {"_id": ObjectId(timesheet_id)},
+        {
+            "$set": {
+                "notification_reminder": {
+                    "event": event,
+                    "mode": mode,
+                    "recipient_id": recipient,
+                    "target": target,
+                    "message": message,
+                    "statuses": statuses or [],
+                    "last_sent_at": datetime.utcnow(),
+                    "reminder_group": f"timesheet:{timesheet_id}:{event}:{recipient}",
+                }
+            }
+        },
+    )
+
+
+def send_timesheet_notification_reminders(timesheet_id=None, force=False, reminder_hours=None):
+    reminder_hours = int(reminder_hours or os.getenv("TIMESHEET_NOTIFICATION_REMINDER_HOURS", str(TIMESHEET_NOTIFICATION_REMINDER_HOURS)))
+    query = {"notification_reminder": {"$exists": True}}
+    if timesheet_id:
+        query["_id"] = ObjectId(timesheet_id)
+
+    timesheets = list(mongo.db.timesheets.find(query))
+    now = datetime.utcnow()
+    sent = 0
+
+    for timesheet in timesheets:
+        reminder = timesheet.get("notification_reminder") or {}
+        recipient_id = reminder.get("recipient_id")
+        if not recipient_id:
+            continue
+
+        last_sent_at = reminder.get("last_sent_at")
+        if not force and last_sent_at and now - last_sent_at < timedelta(hours=reminder_hours):
+            continue
+
+        is_active = False
+        if reminder.get("mode") == "pending_status":
+            is_active = timesheet.get("status") in set(reminder.get("statuses") or [])
+        elif reminder.get("mode") == "until_read":
+            is_active = mongo.db.notifications.count_documents({
+                "user_id": ObjectId(recipient_id),
+                "reminder_group": reminder.get("reminder_group"),
+                "read": False,
+            }) > 0
+
+        if not is_active:
+            clear_timesheet_reminder_state(timesheet["_id"])
+            continue
+
+        create_notification(
+            user_id=recipient_id,
+            notification_type=f"timesheet_{reminder.get('event')}_reminder",
+            message=reminder.get("message") or "Timesheet reminder",
+            related_timesheet_id=timesheet["_id"],
+            target=reminder.get("target") or build_timesheet_notification_target(timesheet),
+            reminder_group=reminder.get("reminder_group"),
+            notification_origin="reminder",
+        )
+        mongo.db.timesheets.update_one(
+            {"_id": timesheet["_id"]},
+            {"$set": {"notification_reminder.last_sent_at": now}},
+        )
+        sent += 1
+
+    return {"tracked": len(timesheets), "notifications_sent": sent, "interval_hours": reminder_hours}
 
 
 def apply_employee_assignment_snapshot(timesheet_doc, employee):
@@ -1350,11 +1462,23 @@ def create_timesheet():
                 f"{employee.get('name')} submitted a timesheet for "
                 f"{period_start} to {period_end} ({total_hours}h)"
             )
+            target = build_timesheet_notification_target(timesheet, view="approvals")
             create_notification(
                 user_id=effective_reporting_lead_id,
                 notification_type="timesheet_submitted",
                 message=msg,
                 related_timesheet_id=timesheet_id,
+                target=target,
+                reminder_group=f"timesheet:{timesheet_id}:submitted:{effective_reporting_lead_id}",
+            )
+            set_timesheet_reminder_state(
+                timesheet_id,
+                event="submitted",
+                mode="pending_status",
+                recipient_id=effective_reporting_lead_id,
+                target=target,
+                message=msg,
+                statuses=["pending_lead", "pending_manager"],
             )
         queue_timesheet_submission_emails(timesheet, employee=employee)
 
@@ -1582,6 +1706,7 @@ def save_timesheet_draft():
         if existing:
             mongo.db.timesheets.update_one({"_id": existing["_id"]}, {"$set": draft})
             timesheet_id = existing["_id"]
+            clear_timesheet_reminder_state(timesheet_id)
         else:
             draft["created_at"] = now
             result = mongo.db.timesheets.insert_one(draft)
@@ -1716,6 +1841,9 @@ def submit_timesheet(timesheet_id):
         # Notify reporting lead
         if ts.get("reporting_lead_id"):
             employee_name = ts.get("employee_name", "An employee")
+            is_resubmission = bool(ts.get("reopened_from_approved") or ts.get("requires_reapproval") or ts.get("lead_approved_at"))
+            event_name = "resubmitted" if is_resubmission else "submitted"
+            target = build_timesheet_notification_target(working_copy, view="approvals")
             create_notification(
                 user_id=ts["reporting_lead_id"],
                 notification_type="timesheet_submitted",
@@ -1724,6 +1852,20 @@ def submit_timesheet(timesheet_id):
                     f"{ts.get('period_start')} to {ts.get('period_end')}"
                 ),
                 related_timesheet_id=timesheet_id,
+                target=target,
+                reminder_group=f"timesheet:{timesheet_id}:{event_name}:{ts['reporting_lead_id']}",
+            )
+            set_timesheet_reminder_state(
+                timesheet_id,
+                event=event_name,
+                mode="pending_status",
+                recipient_id=ts["reporting_lead_id"],
+                target=target,
+                message=(
+                    f"{employee_name} submitted a timesheet for "
+                    f"{ts.get('period_start')} to {ts.get('period_end')}"
+                ),
+                statuses=["pending_lead", "pending_manager"],
             )
         working_copy["_id"] = ObjectId(timesheet_id)
         queue_timesheet_submission_emails(working_copy, employee=employee)
@@ -1759,6 +1901,7 @@ def recall_timesheet(timesheet_id):
                 "updated_at": datetime.utcnow(),
             }}
         )
+        clear_timesheet_reminder_state(timesheet_id)
         print(f"✅ Timesheet {timesheet_id} recalled to draft")
         return jsonify({"message": "Timesheet recalled to draft"}), 200
 
@@ -1889,14 +2032,31 @@ def lead_approve_timesheet(timesheet_id):
             },
         )
 
+        approval_events = [
+            item for item in (timesheet.get("approval_history") or [])
+            if item.get("stage") == "lead" and item.get("action") == "approved"
+        ]
+        approval_event = "reapproved" if approval_events else "approved"
+        employee_target = build_timesheet_notification_target(timesheet, view="entry")
+        approval_message = (
+            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
+            f"has been approved by your lead and is now locked"
+        )
         create_notification(
             user_id=timesheet["employee_id"],
             notification_type="timesheet_approved",
-            message=(
-                f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-                f"has been approved by your lead and is now locked"
-            ),
+            message=approval_message,
             related_timesheet_id=timesheet_id,
+            target=employee_target,
+            reminder_group=f"timesheet:{timesheet_id}:{approval_event}:{timesheet['employee_id']}",
+        )
+        set_timesheet_reminder_state(
+            timesheet_id,
+            event=approval_event,
+            mode="until_read",
+            recipient_id=timesheet["employee_id"],
+            target=employee_target,
+            message=approval_message,
         )
 
         print(f"✅ Timesheet {timesheet_id} fully approved by lead/admin {approver_name}")
@@ -1967,14 +2127,26 @@ def lead_reject_timesheet(timesheet_id):
             },
         )
 
+        rejection_target = build_timesheet_notification_target(timesheet, view="entry")
+        rejection_message = (
+            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
+            f"was rejected by your lead. Reason: {rejection_reason}"
+        )
         create_notification(
             user_id=timesheet["employee_id"],
             notification_type="timesheet_rejected",
-            message=(
-                f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-                f"was rejected by your lead. Reason: {rejection_reason}"
-            ),
+            message=rejection_message,
             related_timesheet_id=timesheet_id,
+            target=rejection_target,
+            reminder_group=f"timesheet:{timesheet_id}:rejected:{timesheet['employee_id']}",
+        )
+        set_timesheet_reminder_state(
+            timesheet_id,
+            event="rejected",
+            mode="until_read",
+            recipient_id=timesheet["employee_id"],
+            target=rejection_target,
+            message=rejection_message,
         )
 
         return jsonify({"message": "Timesheet rejected by lead"}), 200
@@ -2032,14 +2204,26 @@ def manager_approve_timesheet(timesheet_id):
             },
         )
 
+        manager_target = build_timesheet_notification_target(timesheet, view="entry")
+        manager_message = (
+            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
+            f"has been fully approved and is now locked"
+        )
         create_notification(
             user_id=timesheet["employee_id"],
             notification_type="timesheet_approved",
-            message=(
-                f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-                f"has been fully approved and is now locked"
-            ),
+            message=manager_message,
             related_timesheet_id=timesheet_id,
+            target=manager_target,
+            reminder_group=f"timesheet:{timesheet_id}:approved:{timesheet['employee_id']}",
+        )
+        set_timesheet_reminder_state(
+            timesheet_id,
+            event="approved",
+            mode="until_read",
+            recipient_id=timesheet["employee_id"],
+            target=manager_target,
+            message=manager_message,
         )
 
         return jsonify({"message": "Timesheet fully approved"}), 200
@@ -2099,14 +2283,26 @@ def manager_reject_timesheet(timesheet_id):
             },
         )
 
+        manager_rejection_target = build_timesheet_notification_target(timesheet, view="entry")
+        manager_rejection_message = (
+            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
+            f"was rejected by manager. Reason: {rejection_reason}"
+        )
         create_notification(
             user_id=timesheet["employee_id"],
             notification_type="timesheet_rejected",
-            message=(
-                f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-                f"was rejected by manager. Reason: {rejection_reason}"
-            ),
+            message=manager_rejection_message,
             related_timesheet_id=timesheet_id,
+            target=manager_rejection_target,
+            reminder_group=f"timesheet:{timesheet_id}:rejected:{timesheet['employee_id']}",
+        )
+        set_timesheet_reminder_state(
+            timesheet_id,
+            event="rejected",
+            mode="until_read",
+            recipient_id=timesheet["employee_id"],
+            target=manager_rejection_target,
+            message=manager_rejection_message,
         )
 
         return jsonify({"message": "Timesheet rejected by manager"}), 200

@@ -4,7 +4,7 @@ import UniversalSearch from "./UniversalSearch";
 import Notifications from "./Notifications";
 import { formatTimeIST } from "../utils/dateTime";
 
-const Topbar = ({ user, onLogout, onNavigateToProfile, onToggleSidebar, isSidebarCollapsed }) => {
+const Topbar = ({ user, onLogout, onNavigateToProfile, onNavigate, onToggleSidebar, isSidebarCollapsed }) => {
   const [showDropdown, setShowDropdown] = useState(false);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const containerRef = useRef(null);
@@ -93,7 +93,7 @@ const Topbar = ({ user, onLogout, onNavigateToProfile, onToggleSidebar, isSideba
       </div>
 
       <div className="topbar-actions">
-        <Notifications currentUser={user} />
+        <Notifications currentUser={user} onNavigate={onNavigate} />
         <div className="topbar-live-time" aria-label={`Current time ${liveTimeLabel}`}>
           <span className="topbar-live-time-dot" />
           <span className="topbar-live-time-value">{liveTimeLabel}</span>

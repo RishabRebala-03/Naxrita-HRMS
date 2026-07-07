@@ -483,11 +483,12 @@ const fetchJson = async (path, options = {}) => {
 };
 
 function Payslips({ user, adminView = false }) {
+  const isDelegatedAdminView = adminView && user?.role !== "Admin";
   const effectiveUser = adminView && user?.role !== "Admin" ? { ...user, role: "Admin" } : user;
   const isAdmin = effectiveUser?.role === "Admin";
   const canFilterByEmployee = effectiveUser?.role !== "Employee";
   const userId = effectiveUser?._id || effectiveUser?.id || "";
-  const [activeTab, setActiveTab] = useState(isAdmin ? "upload" : "display");
+  const [activeTab, setActiveTab] = useState(isAdmin ? (isDelegatedAdminView ? "display" : "upload") : "display");
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()]);
   const [year, setYear] = useState(String(new Date().getFullYear()));
   const [uploadedData, setUploadedData] = useState([]);
@@ -553,7 +554,10 @@ function Payslips({ user, adminView = false }) {
         fetchJson(`/payslips?user_id=${encodeURIComponent(userId)}`),
         isAdmin ? fetchJson("/payslips/upload-history") : Promise.resolve({ history: [] }),
       ]);
-      const items = Array.isArray(payslipResult.payslips) ? payslipResult.payslips : [];
+      const rawItems = Array.isArray(payslipResult.payslips) ? payslipResult.payslips : [];
+      const items = isAdmin
+        ? rawItems
+        : rawItems.filter((item) => item?.published === true);
       setPayslips(items);
       setSelectedPayslipIds((previous) => previous.filter((id) => items.some((item) => item._id === id)));
       setHistory(Array.isArray(historyResult.history) ? historyResult.history : []);
@@ -567,7 +571,11 @@ function Payslips({ user, adminView = false }) {
 
   useEffect(() => {
     loadVisiblePayslips();
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId, isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setActiveTab(isAdmin ? (isDelegatedAdminView ? "display" : "upload") : "display");
+  }, [isAdmin, isDelegatedAdminView]);
 
   const uploadedRowsWithStatus = useMemo(() => {
     const existingKeys = new Set(

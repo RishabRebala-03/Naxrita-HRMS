@@ -496,7 +496,7 @@ def _allowed_to_access(payslip, requester):
         return True
 
     if requester.get("employeeId") == employee_id:
-        return bool(payslip.get("published"))
+        return payslip.get("published") is True
 
     return False
 
@@ -803,14 +803,17 @@ def get_visible_payslips():
     if not requester:
         return jsonify({"error": "user_id is required"}), 400
 
-    role = str(requester.get("role", "")).strip().lower()
     items = []
 
     if _is_admin_requester(requester):
         cursor = _collection().find().sort([("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)])
         items = [_serialize_doc(item) for item in cursor]
     else:
-        cursor = _collection().find({"employee_id": requester.get("employeeId"), "published": True}).sort(
+        cursor = _collection().find({
+            "employee_id": requester.get("employeeId"),
+            "user_id": requester.get("_id"),
+            "published": {"$eq": True},
+        }).sort(
             [("year", DESCENDING), ("month_number", DESCENDING), ("generated_at", DESCENDING)]
         )
         items = [_serialize_doc(item) for item in cursor]

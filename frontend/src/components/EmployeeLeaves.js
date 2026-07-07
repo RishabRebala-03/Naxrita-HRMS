@@ -316,6 +316,10 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   useEffect(() => {
     if (!navigationState) return;
 
+    if (navigationState.activeTab) {
+      setActiveTab(navigationState.activeTab);
+    }
+
     if (navigationState.historyFilterStatus) {
       setHistoryFilterStatus(navigationState.historyFilterStatus);
     }
@@ -730,6 +734,24 @@ const EmployeeLeaves = ({ user, navigationState }) => {
     (historyPage - 1) * HISTORY_PAGE_SIZE,
     historyPage * HISTORY_PAGE_SIZE
   );
+  useEffect(() => {
+    const leaveId = navigationState?.leaveId;
+    if (!leaveId || activeTab !== "my-leaves" || displayHistory.length === 0) return;
+
+    const index = displayHistory.findIndex((item) => item._id === leaveId);
+    if (index >= 0) {
+      setHistoryPage(Math.floor(index / HISTORY_PAGE_SIZE) + 1);
+    }
+  }, [activeTab, displayHistory, navigationState]);
+
+  useEffect(() => {
+    const leaveId = navigationState?.leaveId;
+    if (!leaveId) return;
+    const target = document.getElementById(`employee-leave-${leaveId}`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [historyPage, navigationState, visibleHistory]);
   const historyPageNumbers = Array.from({ length: historyPageCount }, (_, index) => index + 1).filter(
     (page) => page === 1 || page === historyPageCount || Math.abs(page - historyPage) <= 1
   );
@@ -1194,13 +1216,16 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                     {visibleHistory.map((item) => (
                       <tr
                         key={item._id}
+                        id={`employee-leave-${item._id}`}
                         className={
-                          calendarFocusDate &&
-                          isDateWithinRange(
-                            calendarFocusDate,
-                            toDateKey(item.approved_start_date || item.start_date),
-                            toDateKey(item.approved_end_date || item.end_date)
-                          )
+                          navigationState?.leaveId === item._id
+                            ? "employee-history-row-highlight"
+                            : calendarFocusDate &&
+                              isDateWithinRange(
+                                calendarFocusDate,
+                                toDateKey(item.approved_start_date || item.start_date),
+                                toDateKey(item.approved_end_date || item.end_date)
+                              )
                             ? "employee-history-row-highlight"
                             : ""
                         }

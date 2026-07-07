@@ -601,7 +601,7 @@ function App() {
 
       case "leaves":
         if (role === "Admin") {
-          return <AdminLeaves user={currentUser} onNavigateToProfile={handleNavigateToProfile} />;
+          return <AdminLeaves user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />;
         } else if (hasAdminMenuAccess(currentUser, "leaves")) {
           return (
             <DelegatedLeavesWorkspace
@@ -612,7 +612,7 @@ function App() {
             />
           );
         } else if (role === "Manager") {
-          return <ManagerLeaves user={currentUser} />;
+          return <ManagerLeaves user={currentUser} navigationState={sectionState} />;
         } else {
           return <EmployeeLeaves user={currentUser} navigationState={sectionState} />;
         }
@@ -665,11 +665,11 @@ function App() {
                 personalLabel="My Timesheets"
                 adminLabel="Admin Timesheets"
                 ariaLabel="Timesheet workspace tabs"
-                renderPersonal={() => <Timesheets user={currentUser} />}
-                renderAdmin={() => <Timesheets user={currentUser} adminView />}
+                renderPersonal={() => <Timesheets user={currentUser} navigationState={sectionState} />}
+                renderAdmin={() => <Timesheets user={currentUser} adminView navigationState={sectionState} />}
               />
             ) : (
-              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} />
+              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} navigationState={sectionState} />
             )}
           </div>
         );
@@ -725,6 +725,7 @@ function App() {
             user={currentUser}
             onLogout={handleLogout}
             onNavigateToProfile={handleNavigateToProfile}
+            onNavigate={handleSectionChange}
             onToggleSidebar={() => setIsSidebarOpen(prev => !prev)}
             isSidebarCollapsed={isSidebarCollapsed}
           />

@@ -18,7 +18,7 @@ const cleanNotificationMessage = (message = "") =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
-const Notifications = ({ currentUser }) => {
+const Notifications = ({ currentUser, onNavigate }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -170,9 +170,30 @@ const Notifications = ({ currentUser }) => {
           colors: { bg: "#fff8e6", border: "#ebd28c", icon: "#8d5a00" },
         };
       case "leave_escalated":
+      case "leave_escalated_reminder":
         return {
           icon: BadgeAlert,
           colors: { bg: "#fff4e5", border: "#f1c58f", icon: "#b76e00" },
+        };
+      case "timesheet_submitted":
+      case "timesheet_submitted_reminder":
+      case "timesheet_resubmitted_reminder":
+        return {
+          icon: FileText,
+          colors: { bg: "#edf6ff", border: "#bfdaf4", icon: "#0a6ed1" },
+        };
+      case "timesheet_approved":
+      case "timesheet_approved_reminder":
+      case "timesheet_reapproved_reminder":
+        return {
+          icon: BadgeCheck,
+          colors: { bg: "#eaf7ea", border: "#b9ddb9", icon: "#188918" },
+        };
+      case "timesheet_rejected":
+      case "timesheet_rejected_reminder":
+        return {
+          icon: BadgeX,
+          colors: { bg: "#fff1f1", border: "#efc2c2", icon: "#bb0000" },
         };
       default:
         return {
@@ -233,6 +254,20 @@ const Notifications = ({ currentUser }) => {
     event.stopPropagation();
     event.preventDefault();
     setShowDropdown(false);
+  };
+
+  const handleNotificationClick = async (notification) => {
+    if (!notification) return;
+
+    if (!notification.read) {
+      await markAsRead(notification._id);
+    }
+
+    const target = notification.target || {};
+    if (target.section && onNavigate) {
+      onNavigate(target.section, target);
+      setShowDropdown(false);
+    }
   };
 
   const getDropdownStyle = () => {
@@ -476,9 +511,7 @@ const Notifications = ({ currentUser }) => {
                         if (notification.read) event.currentTarget.style.background = "white";
                       }}
                       onClick={() => {
-                        if (!notification.read) {
-                          markAsRead(notification._id);
-                        }
+                        handleNotificationClick(notification);
                       }}
                     >
                       <div style={{ display: "flex", gap: 12 }}>

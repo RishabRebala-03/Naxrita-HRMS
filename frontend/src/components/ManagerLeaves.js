@@ -68,7 +68,7 @@ const formatDateTime = (dateStr) => {
   return formatDateTimeIST(dateStr);
 };
 
-const ManagerLeaves = ({ user }) => {
+const ManagerLeaves = ({ user, navigationState }) => {
   const [activeTab, setActiveTab] = useState("pending");
   const [pendingLeaves, setPendingLeaves] = useState([]);
   const [myBalance, setMyBalance] = useState(null);
@@ -196,6 +196,20 @@ const ManagerLeaves = ({ user }) => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  useEffect(() => {
+    if (!navigationState?.activeTab) return;
+    setActiveTab(navigationState.activeTab);
+  }, [navigationState]);
+
+  useEffect(() => {
+    const leaveId = navigationState?.leaveId;
+    if (!leaveId) return;
+    const target = document.getElementById(`manager-leave-${leaveId}`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [navigationState, pendingLeaves, myHistory, teamLeaveHistory]);
 
   const applyLeave = async () => {
     if (!leave.start_date || !leave.end_date) {
@@ -554,7 +568,11 @@ const ManagerLeaves = ({ user }) => {
                 </thead>
                 <tbody>
                   {displayLeaves.map((leaveRecord) => (
-                    <tr key={leaveRecord._id}>
+                    <tr
+                      key={leaveRecord._id}
+                      id={`manager-leave-${leaveRecord._id}`}
+                      className={navigationState?.leaveId === leaveRecord._id ? "employee-history-row-highlight" : ""}
+                    >
                       <td>
                         <div className="fiori-primary-cell">
                           <strong>{leaveRecord.employee_name || "Unknown employee"}</strong>

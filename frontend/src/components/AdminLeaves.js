@@ -177,7 +177,7 @@ const formatMonthKeyLabel = (monthKey) => {
   return date.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 };
 
-const AdminLeaves = ({ user, onNavigateToProfile }) => {
+const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
   const [activeTab, setActiveTab] = useState("pending");
   const [pendingLeaves, setPendingLeaves] = useState([]);
   const [allLeaves, setAllLeaves] = useState([]);
@@ -693,6 +693,23 @@ const AdminLeaves = ({ user, onNavigateToProfile }) => {
     }
   };
 
+  useEffect(() => {
+    if (!navigationState) return;
+
+    if (navigationState.activeTab) {
+      openTab(navigationState.activeTab);
+    }
+  }, [navigationState]);
+
+  useEffect(() => {
+    const leaveId = navigationState?.leaveId;
+    if (!leaveId) return;
+    const target = document.getElementById(`admin-leave-${leaveId}`);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [allLeaves, navigationState, pendingLeaves]);
+
   const updateStatus = async ({
     leaveId,
     status,
@@ -1063,7 +1080,11 @@ const AdminLeaves = ({ user, onNavigateToProfile }) => {
                         : 0;
 
                       return (
-                        <tr key={leave._id}>
+                        <tr
+                          key={leave._id}
+                          id={`admin-leave-${leave._id}`}
+                          className={navigationState?.leaveId === leave._id ? "employee-history-row-highlight" : ""}
+                        >
                           <td>
                             <button
                               type="button"

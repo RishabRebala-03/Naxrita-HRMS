@@ -18,6 +18,12 @@ def serialize_notification(notification):
     
     if "related_leave_id" in notification:
         notification["related_leave_id"] = str(notification["related_leave_id"])
+    if "related_timesheet_id" in notification:
+        notification["related_timesheet_id"] = str(notification["related_timesheet_id"])
+    if "target" in notification and isinstance(notification["target"], dict):
+        notification["target"] = serialize_notification(notification["target"])
+    if "meta" in notification and isinstance(notification["meta"], dict):
+        notification["meta"] = serialize_notification(notification["meta"])
     
     # Convert datetime objects to ISO strings
     if "createdAt" in notification and isinstance(notification["createdAt"], datetime):
@@ -110,15 +116,28 @@ def mark_notification_read(notification_id):
     Mark a single notification as read
     """
     try:
-        result = mongo.db.notifications.update_one(
-            {"_id": ObjectId(notification_id)},
-            {"$set": {"read": True, "readAt": datetime.utcnow()}}
+        notification = mongo.db.notifications.find_one({"_id": ObjectId(notification_id)})
+        if not notification:
+            return jsonify({"message": "Notification not found or already read"}), 404
+
+        read_at = datetime.utcnow()
+        update_filter = {"_id": ObjectId(notification_id)}
+        reminder_group = notification.get("reminder_group")
+        if reminder_group:
+            update_filter = {
+                "user_id": notification.get("user_id"),
+                "reminder_group": reminder_group,
+                "read": False,
+            }
+
+        result = mongo.db.notifications.update_many(
+            update_filter,
+            {"$set": {"read": True, "readAt": read_at}}
         )
-        
+
         if result.modified_count > 0:
             return jsonify({"message": "Notification marked as read"}), 200
-        else:
-            return jsonify({"message": "Notification not found or already read"}), 404
+        return jsonify({"message": "Notification not found or already read"}), 404
     except Exception as e:
         print(f"❌ Error marking notification as read: {str(e)}")
         return jsonify({"error": str(e)}), 500
