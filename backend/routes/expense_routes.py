@@ -96,6 +96,25 @@ def create_expense():
             "category": category,
             "client_code": client_code,
             "description": description,
+            "country": data.get("country", ""),
+            "currency": data.get("currency", ""),
+            "conversion_rate": data.get("conversion_rate", ""),
+            "from_date": data.get("from_date", ""),
+            "to_date": data.get("to_date", ""),
+            "reason": data.get("reason", ""),
+            "expense_type": data.get("expense_type", ""),
+            "trip_type": data.get("trip_type", ""),
+            "hotel_chain": data.get("hotel_chain", ""),
+            "invoice_number": data.get("invoice_number", ""),
+            "vendor_gst_number": data.get("vendor_gst_number", ""),
+            "sgst": data.get("sgst", ""),
+            "cgst_igst": data.get("cgst_igst", ""),
+            "purpose": data.get("purpose", ""),
+            "meals_provided": data.get("meals_provided", ""),
+            "daily_base_per_diem": data.get("daily_base_per_diem", ""),
+            "receipt_total": data.get("receipt_total", ""),
+            "miscellaneous_expenses": data.get("miscellaneous_expenses", ""),
+            "comments": data.get("comments", ""),
             "amount": round(amount, 2),
             "status": "saved",
             "document": data.get("document") if isinstance(data.get("document"), dict) else None,
@@ -123,6 +142,29 @@ def update_expense(expense_id):
             update_data["client_code"] = (data.get("client_code") or "").strip()
         if "description" in data:
             update_data["description"] = (data.get("description") or "").strip()
+        for field in [
+            "country",
+            "currency",
+            "conversion_rate",
+            "from_date",
+            "to_date",
+            "reason",
+            "expense_type",
+            "trip_type",
+            "hotel_chain",
+            "invoice_number",
+            "vendor_gst_number",
+            "sgst",
+            "cgst_igst",
+            "purpose",
+            "meals_provided",
+            "daily_base_per_diem",
+            "receipt_total",
+            "miscellaneous_expenses",
+            "comments",
+        ]:
+            if field in data:
+                update_data[field] = data.get(field, "")
         if "amount" in data:
             try:
                 amount = float(data.get("amount") or 0)
