@@ -215,7 +215,14 @@ def normalize_leave_type(leave_type):
     normalized = leave_type.strip()
     if normalized.lower() == "lop":
         return "LWP"
+    if normalized.lower() in {"comp off", "compensatory off"}:
+        return "Compensatory Off"
     return normalized
+
+
+def leave_type_requires_reason(leave_type):
+    normalized = normalize_leave_type(leave_type)
+    return isinstance(normalized, str) and normalized.lower() == "compensatory off"
 
 
 def normalize_half_day_period(period):
@@ -996,6 +1003,8 @@ def apply_leave():
 
         if not all([employee_id, leave_type, start_date, end_date]):
             return jsonify({"error": "Missing required fields"}), 400
+        if leave_type_requires_reason(leave_type) and not str(reason).strip():
+            return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
         requester = resolve_requester()
         if requester and str(requester.get("_id")) != str(employee_id):
@@ -1010,10 +1019,10 @@ def apply_leave():
         # 🔹 NEW: Intern leave type restriction
         employment_type = employee.get("employment_type", "Employee")
         if employment_type == "Intern":
-            # Interns can apply for Sick leave, LWP, or Early Logout
-            if leave_type.lower() not in ["sick", "lwp", "early logout"]:
+            # Interns can apply for Sick leave, LWP, Compensatory Off, or Early Logout
+            if leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
                 return jsonify({
-                    "error": f"Interns can only apply for Sick Leave, Leave Without Pay, or Early Logout. {leave_type} is not allowed."
+                    "error": f"Interns can only apply for Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {leave_type} is not allowed."
                 }), 403
             
             print(f"✅ INTERN {employee.get('name')} applying for {leave_type} - validation passed")
@@ -1269,15 +1278,17 @@ def apply_backdated_leave():
 
         if not all([employee_id, leave_type, start_date, end_date, recorded_by_name]):
             return jsonify({"error": "Employee, leave type, dates, and recorded by name are mandatory"}), 400
+        if leave_type_requires_reason(leave_type) and not reason:
+            return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
         employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
         if not employee:
             return jsonify({"error": "Employee not found"}), 404
 
         employment_type = employee.get("employment_type", "Employee")
-        if employment_type == "Intern" and leave_type.lower() not in ["sick", "lwp", "early logout"]:
+        if employment_type == "Intern" and leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
             return jsonify({
-                "error": f"Interns can only apply for Sick Leave, Leave Without Pay, or Early Logout. {leave_type} is not allowed."
+                "error": f"Interns can only apply for Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {leave_type} is not allowed."
             }), 403
 
         start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -1487,10 +1498,13 @@ def update_leave(leave_id):
 
     # ✅ LOOPHOLE FIX: Interns cannot switch to restricted leave types via edit
     if employment_type == "Intern":
-        if new_leave_type.lower() not in ["sick", "lwp", "early logout"]:
+        if new_leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
             return jsonify({
-                "error": f"Interns can only have Sick Leave, Leave Without Pay, or Early Logout. {new_leave_type} is not allowed."
+                "error": f"Interns can only have Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {new_leave_type} is not allowed."
             }), 403
+
+    if leave_type_requires_reason(new_leave_type) and not str(data.get("reason", "")).strip():
+        return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
     start = datetime.strptime(data["start_date"], "%Y-%m-%d")
     end = datetime.strptime(data["end_date"], "%Y-%m-%d")

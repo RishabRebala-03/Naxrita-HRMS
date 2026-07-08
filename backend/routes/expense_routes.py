@@ -17,6 +17,14 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
 }
 
 
+def expenses_feature_enabled():
+    return str(os.getenv("EXPENSES_FEATURE_ENABLED", "false")).strip().lower() == "true"
+
+
+def expenses_feature_disabled_response():
+    return jsonify({"error": "Expenses is currently under development and temporarily unavailable."}), 503
+
+
 def serialize_all(obj):
     if isinstance(obj, list):
         return [serialize_all(item) for item in obj]
@@ -41,6 +49,8 @@ def document_url(filename):
 @expense_bp.route("", methods=["GET"])
 def list_expenses():
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         employee_id = request.args.get("employee_id")
         role = request.args.get("role", "")
         query = {}
@@ -67,6 +77,8 @@ def list_expenses():
 @expense_bp.route("", methods=["POST"])
 def create_expense():
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         data = request.get_json() or {}
         employee_id = data.get("employee_id")
         expense_date = data.get("expense_date")
@@ -131,6 +143,8 @@ def create_expense():
 @expense_bp.route("/submit", methods=["POST"])
 def submit_expenses():
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         data = request.get_json() or {}
         employee_id = data.get("employee_id")
         expense_date = data.get("expense_date")
@@ -163,6 +177,8 @@ def submit_expenses():
 @expense_bp.route("/<expense_id>", methods=["PUT"])
 def update_expense(expense_id):
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         data = request.get_json() or {}
         update_data = {"updated_at": datetime.utcnow()}
 
@@ -224,6 +240,8 @@ def update_expense(expense_id):
 @expense_bp.route("/<expense_id>/document", methods=["POST"])
 def upload_expense_document(expense_id):
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
         if not expense:
             return jsonify({"error": "Expense not found"}), 404
@@ -261,6 +279,8 @@ def upload_expense_document(expense_id):
 @expense_bp.route("/<expense_id>", methods=["DELETE"])
 def delete_expense(expense_id):
     try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
         result = mongo.db.expenses.delete_one({"_id": ObjectId(expense_id)})
         if result.deleted_count == 0:
             return jsonify({"error": "Expense not found"}), 404

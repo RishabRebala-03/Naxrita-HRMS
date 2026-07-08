@@ -33,7 +33,7 @@ import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
 import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
 
-const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Early Logout", "LWP"];
+const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Compensatory Off", "Early Logout", "LWP"];
 const lopAliases = new Set(["lop", "lwp", "leave without pay", "leave with loss of pay"]);
 const leaveStatusColors = {
   Approved: "#107e3e",

@@ -921,7 +921,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                   value={leave.leave_type}
                   onChange={(event) => {
                     const newType = event.target.value;
-                    const allowsHalfDay = ["Sick", "LWP", "LOP"].includes(newType);
+                    const allowsHalfDay = ["Sick", "LWP", "LOP", "Compensatory Off"].includes(newType);
                     setLeave((previous) => ({
                       ...previous,
                       leave_type: newType,
@@ -936,6 +936,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                   {isIntern ? null : <option value="Planned">Planned Leave</option>}
                   {isIntern ? null : <option value="Optional">Optional Holiday</option>}
                   <option value="LOP">Leave Without Pay (LOP)</option>
+                  <option value="Compensatory Off">Compensatory Off</option>
                   <option value="Early Logout">Early Logout</option>
                 </select>
               </div>
@@ -1008,7 +1009,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
               </div>
             ) : null}
 
-            {["Sick", "LWP", "LOP"].includes(leave.leave_type) ? (
+            {["Sick", "LWP", "LOP", "Compensatory Off"].includes(leave.leave_type) ? (
               <div className="employee-halfday-panel">
                 <label className="employee-checkbox-row">
                   <input
@@ -1120,6 +1121,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                     { value: "sick", label: "Sick" },
                     ...(isIntern ? [] : [{ value: "planned", label: "Planned" }, { value: "optional", label: "Optional" }]),
                     { value: "lop", label: "LOP" },
+                    { value: "compensatory off", label: "Compensatory Off" },
                     { value: "early logout", label: "Early Logout" },
                   ]}
                 />

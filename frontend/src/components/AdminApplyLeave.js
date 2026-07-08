@@ -114,6 +114,14 @@ const AdminApplyLeave = ({ user }) => {
       return;
     }
 
+    if (
+      assistedLeave.leave_type === "Compensatory Off"
+      && !assistedLeave.reason.trim()
+    ) {
+      showToast("Reason is mandatory for Compensatory Off");
+      return;
+    }
+
     if (assistedLeave.leave_type === "Planned") {
       const today = new Date();
       const startDate = new Date(assistedLeave.start_date);
@@ -169,6 +177,14 @@ const AdminApplyLeave = ({ user }) => {
 
     if (!regularizationLeave.start_date || !regularizationLeave.end_date) {
       showToast("Please select start and end dates");
+      return;
+    }
+
+    if (
+      regularizationLeave.leave_type === "Compensatory Off"
+      && !regularizationLeave.reason.trim()
+    ) {
+      showToast("Reason is mandatory for Compensatory Off");
       return;
     }
 
@@ -478,6 +494,7 @@ const AdminApplyLeave = ({ user }) => {
                       >
                         <option>Sick</option>
                         <option>Planned</option>
+                        <option>Compensatory Off</option>
                       </select>
                     </label>
 
@@ -558,6 +575,7 @@ const AdminApplyLeave = ({ user }) => {
                         <option>Sick</option>
                         <option>Planned</option>
                         <option>Optional</option>
+                        <option>Compensatory Off</option>
                         <option>LWP</option>
                       </select>
                     </label>

@@ -22,7 +22,7 @@ ABSENCE_CHARGE_CODES = {
     "bereavement_leave": {"code": "955X02", "name": "Bereavement Leave"},
     "casual_leave": {"code": "955X10", "name": "Casual leave"},
     "client_specific_holiday": {"code": "970X01", "name": "Client Specific holiday"},
-    "compensatory_off": {"code": "970X01", "name": "Compensatory off"},
+    "compensatory_off": {"code": "970X01", "name": "Compensatory Off"},
     "contingency_leave": {"code": "955X05", "name": "Contingency Leave"},
     "earned_leave": {"code": "900X00", "name": "Earned Leave"},
     "leave_with_loss_of_pay": {"code": "955X18", "name": "Leave with loss of pay"},
@@ -94,6 +94,7 @@ LEAVE_TYPE_DISPLAY_CODES = {
     "leave without pay": "LWP",
     "leave with loss of pay": "LWP",
     "early logout": "EL",
+    "compensatory off": "CO",
 }
 
 

@@ -217,6 +217,12 @@ const ManagerLeaves = ({ user, navigationState }) => {
       return;
     }
 
+    if (!leave.reason || !leave.reason.trim()) {
+      setMessage("Reason is mandatory for this leave request");
+      setTimeout(() => setMessage(""), 5000);
+      return;
+    }
+
     if (leave.leave_type === "Early Logout" && !leave.logout_time) {
       setMessage("Logout time is mandatory for early logout");
       setTimeout(() => setMessage(""), 5000);
@@ -659,6 +665,7 @@ const ManagerLeaves = ({ user, navigationState }) => {
                     <option>Sick</option>
                     <option>Planned</option>
                     <option>Optional</option>
+                    <option>Compensatory Off</option>
                     <option>Early Logout</option>
                     <option>Earned</option>
                     <option>LOP</option>
