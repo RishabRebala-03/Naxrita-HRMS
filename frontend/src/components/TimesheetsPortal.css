@@ -781,6 +781,14 @@
   border-radius: 3px;
 }
 
+.mte-expense-native-date {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .mte-expense-status {
   color: #6a6d70;
   font-size: 12px;
@@ -807,6 +815,11 @@
   border-color: #6f54b6;
   background: #6f54b6;
   color: #fff;
+}
+
+.mte-expense-submit:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .mte-expense-save {

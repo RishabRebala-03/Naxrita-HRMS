@@ -128,6 +128,38 @@ def create_expense():
         return jsonify({"error": str(e)}), 500
 
 
+@expense_bp.route("/submit", methods=["POST"])
+def submit_expenses():
+    try:
+        data = request.get_json() or {}
+        employee_id = data.get("employee_id")
+        expense_date = data.get("expense_date")
+
+        if not employee_id or not expense_date:
+            return jsonify({"error": "employee_id and expense_date are required"}), 400
+
+        query = {
+            "employee_id": ObjectId(employee_id),
+            "expense_date": expense_date,
+        }
+        expense_count = mongo.db.expenses.count_documents(query)
+        if expense_count == 0:
+            return jsonify({"error": "No expenses found for the selected date"}), 404
+
+        now = datetime.utcnow()
+        result = mongo.db.expenses.update_many(
+            {**query, "status": {"$ne": "submitted"}},
+            {"$set": {"status": "submitted", "submitted_at": now, "updated_at": now}},
+        )
+        return jsonify({
+            "message": "Expenses submitted successfully",
+            "matched_count": expense_count,
+            "modified_count": result.modified_count,
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @expense_bp.route("/<expense_id>", methods=["PUT"])
 def update_expense(expense_id):
     try:

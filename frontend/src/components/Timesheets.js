@@ -3,7 +3,7 @@ import { Children, createContext, useContext, useState, useMemo, useEffect, useC
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   parseISO, subMonths, startOfQuarter, endOfQuarter, subQuarters,
-  startOfYear, endOfYear, subYears,
+  startOfYear, endOfYear, subYears, addDays,
 } from 'date-fns';
 import {
   Plus, Trash2, AlertCircle,
@@ -6856,6 +6856,7 @@ function ExpensesPanel({ user }) {
   const userId = getUserId(user);
   const today = format(new Date(), 'yyyy-MM-dd');
   const fileInputRef = useRef(null);
+  const calendarDateInputRef = useRef(null);
   const expenseCategories = [
     'Accommodation - Apartment',
     'Accommodation - Hotel',
@@ -6894,6 +6895,7 @@ function ExpensesPanel({ user }) {
     'Best Western',
   ];
   const [expenses, setExpenses] = useState([]);
+  const [selectedExpenseDate, setSelectedExpenseDate] = useState(today);
   const [selectedExpenseCategory, setSelectedExpenseCategory] = useState('');
   const [isExpenseCategoryOpen, setIsExpenseCategoryOpen] = useState(false);
   const [form, setForm] = useState({
@@ -6951,10 +6953,32 @@ function ExpensesPanel({ user }) {
     loadExpenses();
   }, [loadExpenses]);
 
+  const handleSelectedExpenseDateChange = (dateValue) => {
+    if (!dateValue) return;
+    setSelectedExpenseDate(dateValue);
+    setForm((previous) => ({ ...previous, expense_date: dateValue }));
+  };
+
+  const moveSelectedExpenseDate = (days) => {
+    const nextDate = format(addDays(parseISO(selectedExpenseDate || today), days), 'yyyy-MM-dd');
+    handleSelectedExpenseDateChange(nextDate);
+  };
+
+  const openExpenseDatePicker = () => {
+    const input = calendarDateInputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
+
   const resetForm = () => {
     setEditingId('');
     setForm({
-      expense_date: today,
+      expense_date: selectedExpenseDate,
       category: selectedExpenseCategory || 'Travel - Public, Limo, & Other',
       client_code: '',
       amount: '',
@@ -6990,6 +7014,7 @@ function ExpensesPanel({ user }) {
     setForm((previous) => ({
       ...previous,
       category,
+      expense_date: selectedExpenseDate,
       description: '',
       documentFile: null,
     }));
@@ -7115,6 +7140,41 @@ function ExpensesPanel({ user }) {
     }
   };
 
+  const handleSubmitExpenses = async () => {
+    if (!userId) {
+      notify('User not loaded properly.', 'error');
+      return;
+    }
+    const expensesForDate = expenses.filter((expense) => expense.expense_date === selectedExpenseDate);
+    if (!expensesForDate.length) {
+      notify('Add at least one expense for the selected date before submitting.', 'warning');
+      return;
+    }
+    if (expensesForDate.every((expense) => expense.status === 'submitted')) {
+      notify('Expenses for this date are already submitted.', 'info');
+      return;
+    }
+    const shouldSubmit = await confirmAction({
+      title: 'Submit Expenses',
+      message: `Submit ${expensesForDate.length} expense${expensesForDate.length === 1 ? '' : 's'} for ${format(parseISO(selectedExpenseDate), 'M/d/yyyy')}?`,
+      confirmLabel: 'Submit',
+    });
+    if (!shouldSubmit) return;
+    setLoading(true);
+    try {
+      await fetchAPI('/expenses/submit', {
+        method: 'POST',
+        body: JSON.stringify({ employee_id: userId, expense_date: selectedExpenseDate }),
+      });
+      loadExpenses();
+      notify('Expenses submitted successfully.', 'success');
+    } catch (err) {
+      notify(`Failed to submit expenses: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const expenseDepartmentOptions = useMemo(
     () => Array.from(new Set(expenses.map((expense) => expense.employee_department || 'Unassigned')))
       .sort((first, second) => first.localeCompare(second)),
@@ -7141,8 +7201,12 @@ function ExpensesPanel({ user }) {
     ]),
     [expenses]
   );
+  const employeeDateExpenses = useMemo(
+    () => expenses.filter((expense) => expense.expense_date === selectedExpenseDate),
+    [expenses, selectedExpenseDate]
+  );
   const visibleExpenses = useMemo(() => {
-    if (!isAdmin) return expenses;
+    if (!isAdmin) return employeeDateExpenses;
     const query = expenseFilters.search.trim().toLowerCase();
     return expenses.filter((expense) => {
       const matchesSearch = !query || [
@@ -7168,7 +7232,7 @@ function ExpensesPanel({ user }) {
       const matchesTo = !expenseFilters.to || !expense.expense_date || expense.expense_date <= expenseFilters.to;
       return matchesSearch && matchesDepartment && matchesCategory && matchesClientCode && matchesDocument && matchesFrom && matchesTo;
     });
-  }, [expenseFilters, expenses, isAdmin]);
+  }, [employeeDateExpenses, expenseFilters, expenses, isAdmin]);
   const activeExpenseFilterCount = isAdmin
     ? [
         expenseFilters.search.trim(),
@@ -7193,6 +7257,9 @@ function ExpensesPanel({ user }) {
     ? Math.max(0, Math.round((parseISO(form.to_date) - parseISO(form.from_date)) / 86400000) + 1)
     : '';
   const perDiemTotal = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
+  const employeeExpensesSubmitted = employeeDateExpenses.length > 0
+    && employeeDateExpenses.every((expense) => expense.status === 'submitted');
+  const expenseStatusLabel = employeeExpensesSubmitted ? 'Submitted' : 'Draft';
 
   if (!isAdmin) {
     if (!selectedExpenseCategory) {
@@ -7205,13 +7272,23 @@ function ExpensesPanel({ user }) {
               <small>Add receipts for the current period</small>
             </div>
             <div className="mte-expense-period-nav">
-              <button type="button" aria-label="Previous period"><ChevronLeft size={18} /></button>
-              <span>{format(parseISO(today), 'M/d/yyyy')}</span>
-              <button type="button" className="mte-purple-square" aria-label="Open calendar"><Calendar size={16} /></button>
-              <button type="button" aria-label="Next period"><ChevronRight size={18} /></button>
+              <button type="button" aria-label="Previous day" onClick={() => moveSelectedExpenseDate(-1)}><ChevronLeft size={18} /></button>
+              <span>{format(parseISO(selectedExpenseDate), 'M/d/yyyy')}</span>
+              <input
+                ref={calendarDateInputRef}
+                className="mte-expense-native-date"
+                type="date"
+                value={selectedExpenseDate}
+                onChange={(event) => handleSelectedExpenseDateChange(event.target.value)}
+                aria-label="Select expense date"
+              />
+              <button type="button" className="mte-purple-square" aria-label="Open calendar" onClick={openExpenseDatePicker}><Calendar size={16} /></button>
+              <button type="button" aria-label="Next day" onClick={() => moveSelectedExpenseDate(1)}><ChevronRight size={18} /></button>
             </div>
-            <span className="mte-expense-status">Draft</span>
-            <button type="button" className="mte-expense-submit">Submit</button>
+            <span className="mte-expense-status">{expenseStatusLabel}</span>
+            <button type="button" className="mte-expense-submit" onClick={handleSubmitExpenses} disabled={loading}>
+              {loading ? 'Submitting' : 'Submit'}
+            </button>
             <button type="button" className="mte-expense-more" aria-label="More expense actions"><MoreVertical size={18} /></button>
           </div>
 
@@ -7243,12 +7320,12 @@ function ExpensesPanel({ user }) {
           </div>
 
           <div className="mte-expense-empty-banner">
-            {expenses.length ? `${expenses.length} expense${expenses.length === 1 ? '' : 's'} saved for this employee` : 'There are no expenses for the selected period'}
+            {employeeDateExpenses.length ? `${employeeDateExpenses.length} expense${employeeDateExpenses.length === 1 ? '' : 's'} saved for this date` : 'There are no expenses for the selected period'}
           </div>
 
-          {expenses.length ? (
+          {employeeDateExpenses.length ? (
             <div className="mte-expense-saved-list">
-              {expenses.map((expense) => (
+              {employeeDateExpenses.map((expense) => (
                 <div className="mte-expense-saved-row" key={expense._id}>
                   <span>{expense.category}</span>
                   <span>{expense.expense_date}</span>
