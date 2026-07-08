@@ -762,6 +762,7 @@ const LEAVE_TYPE_DISPLAY_CODE_MAP = {
   lop: 'LWP',
   'leave without pay': 'LWP',
   'leave with loss of pay': 'LWP',
+  'compensatory off': 'CO',
 };
 
 const getLeaveTypeDisplayCode = (leaveType) => {

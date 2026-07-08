@@ -252,6 +252,11 @@ const AdminApplyLeave = ({ user }) => {
           value: employeeBalance.optional ?? 0,
           note: `Total ${employeeBalance.optionalTotal || 2}`,
         },
+        {
+          label: "Comp Offs Used",
+          value: employeeBalance.compOffUsed ?? 0,
+          note: "Compensatory off recorded",
+        },
       ]
     : [];
 

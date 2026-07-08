@@ -52,6 +52,7 @@ def recalculate_all_balances():
                 "optional": 2,
                 "optionalTotal": 2,
                 "lwp": employee.get("leaveBalance", {}).get("lwp", 0),  # Preserve existing LWP
+                "compOffUsed": employee.get("leaveBalance", {}).get("compOffUsed", 0),
                 "lastAccrualDate": today.replace(day=1)
             }
             
