@@ -18,6 +18,36 @@ const cleanNotificationMessage = (message = "") =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const getNotificationTarget = (notification = {}) => {
+  if (notification.target?.section) {
+    return notification.target;
+  }
+
+  if (notification.related_timesheet_id) {
+    const type = notification.type || "";
+    return {
+      section: "timesheets",
+      timesheetId: notification.related_timesheet_id,
+      activeView: type === "timesheet_submitted" || type.includes("submitted")
+        ? "approvals"
+        : "entry",
+    };
+  }
+
+  if (notification.related_leave_id) {
+    const type = notification.type || "";
+    return {
+      section: "leaves",
+      leaveId: notification.related_leave_id,
+      activeTab: type.includes("approved") || type.includes("rejected")
+        ? "my-leaves"
+        : "pending",
+    };
+  }
+
+  return null;
+};
+
 const Notifications = ({ currentUser, onNavigate }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -263,8 +293,8 @@ const Notifications = ({ currentUser, onNavigate }) => {
       await markAsRead(notification._id);
     }
 
-    const target = notification.target || {};
-    if (target.section && onNavigate) {
+    const target = getNotificationTarget(notification);
+    if (target?.section && onNavigate) {
       onNavigate(target.section, target);
       setShowDropdown(false);
     }
@@ -495,6 +525,8 @@ const Notifications = ({ currentUser, onNavigate }) => {
                   return (
                     <div
                       key={notification._id}
+                      role="button"
+                      tabIndex={0}
                       style={{
                         padding: isMobile ? 16 : 14,
                         borderBottom: "1px solid #eef2f6",
@@ -512,6 +544,12 @@ const Notifications = ({ currentUser, onNavigate }) => {
                       }}
                       onClick={() => {
                         handleNotificationClick(notification);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          handleNotificationClick(notification);
+                        }
                       }}
                     >
                       <div style={{ display: "flex", gap: 12 }}>
