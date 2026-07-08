@@ -47,6 +47,10 @@ const LeaveManagement = ({ user, role }) => {
       setMessage("Please enter Employee ID first");
       return;
     }
+    if (leave.leave_type === "Compensatory Off" && !leave.reason.trim()) {
+      setMessage("Reason is mandatory for Compensatory Off");
+      return;
+    }
     try {
       const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/apply`, {
         method: "POST",
@@ -203,6 +207,7 @@ const LeaveManagement = ({ user, role }) => {
             <option>Sick</option>
             <option>Earned</option>
             <option>LWP</option>
+            <option>Compensatory Off</option>
           </select>
           <input
             className="input"

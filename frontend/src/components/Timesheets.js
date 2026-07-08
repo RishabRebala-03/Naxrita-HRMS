@@ -27,6 +27,7 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
   : 'http://localhost:5000/api';
 const DAILY_WORK_HOUR_LIMIT = 9;
+const EXPENSES_FEATURE_ENABLED = String(process.env.REACT_APP_EXPENSES_FEATURE_ENABLED || '').trim().toLowerCase() === 'true';
 
 // ─── Design tokens (matches leave/user colour system exactly) ────────────────
 const C = {
@@ -6950,6 +6951,7 @@ function ExpensesPanel({ user }) {
   }, [isAdmin, notify, userId, user?.role]);
 
   useEffect(() => {
+    if (!EXPENSES_FEATURE_ENABLED) return undefined;
     loadExpenses();
   }, [loadExpenses]);
 
@@ -7260,6 +7262,24 @@ function ExpensesPanel({ user }) {
   const employeeExpensesSubmitted = employeeDateExpenses.length > 0
     && employeeDateExpenses.every((expense) => expense.status === 'submitted');
   const expenseStatusLabel = employeeExpensesSubmitted ? 'Submitted' : 'Draft';
+
+  if (!EXPENSES_FEATURE_ENABLED) {
+    return (
+      <div className="mte-module-card mte-expense-shell">
+        <div className="mte-module-card-header">
+          <div>
+            <h3>Expenses</h3>
+            <p>This page is ongoing maintenance, check back soon.</p>
+          </div>
+        </div>
+        <div className="mte-empty-state">
+          <span className="mte-empty-chip">Ongoing Maintenance</span>
+          <strong>Expenses will be available again soon.</strong>
+          <p>The workspace is temporarily unavailable while we finish the current updates.</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAdmin) {
     if (!selectedExpenseCategory) {
@@ -8895,10 +8915,16 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     if (!userId || !period) return;
     setLoading(true);
     if (isAdmin) {
-      Promise.allSettled([
-        fetchAPI('/timesheets/all'),
-        fetchAPI('/expenses?role=Admin'),
-      ])
+      const requests = EXPENSES_FEATURE_ENABLED
+        ? [
+            fetchAPI('/timesheets/all'),
+            fetchAPI('/expenses?role=Admin'),
+          ]
+        : [
+            fetchAPI('/timesheets/all'),
+            Promise.resolve([]),
+          ];
+      Promise.allSettled(requests)
         .then(([timesheetResult, expenseResult]) => {
           const periodTimesheets = timesheetResult.status === 'fulfilled' && Array.isArray(timesheetResult.value)
             ? timesheetResult.value.filter((item) => item.period_start === period.start && item.period_end === period.end)
@@ -8915,11 +8941,18 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
         .finally(() => setLoading(false));
       return;
     }
-    Promise.allSettled([
-      fetchAPI(`/timesheets/employee/${userId}`),
-      fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`),
-      fetchAPI(`/users/${userId}`),
-    ])
+    const requests = EXPENSES_FEATURE_ENABLED
+      ? [
+          fetchAPI(`/timesheets/employee/${userId}`),
+          fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`),
+          fetchAPI(`/users/${userId}`),
+        ]
+      : [
+          fetchAPI(`/timesheets/employee/${userId}`),
+          Promise.resolve([]),
+          fetchAPI(`/users/${userId}`),
+        ];
+    Promise.allSettled(requests)
       .then(([timesheetResult, expenseResult, profileResult]) => {
         const timesheets = timesheetResult.status === 'fulfilled' && Array.isArray(timesheetResult.value)
           ? timesheetResult.value
