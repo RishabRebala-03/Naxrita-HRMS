@@ -612,6 +612,8 @@ def get_employee_charge_codes(employee_id):
     Get all charge codes assigned to an employee.
     Returns the dropdown-friendly format used by the timesheet grid.
     Optional: ?active_only=true (default true)
+    Optional: ?include_existing=true (default true) includes active existing charge codes
+              even when they are not explicitly assigned to the employee.
     """
     try:
         ensure_reference_charge_codes()
@@ -619,6 +621,7 @@ def get_employee_charge_codes(employee_id):
             return jsonify({"error": "Invalid employee_id format"}), 400
 
         active_only = request.args.get("active_only", "true").lower() == "true"
+        include_existing = request.args.get("include_existing", "true").lower() == "true"
 
         query = {"employee_id": ObjectId(employee_id)}
         if active_only:
@@ -627,6 +630,7 @@ def get_employee_charge_codes(employee_id):
         assignments = list(mongo.db.charge_code_assignments.find(query))
 
         result = []
+        seen_charge_code_ids = set()
         for assignment in assignments:
             charge_code = mongo.db.charge_codes.find_one({
                 "_id":       assignment["charge_code_id"],
@@ -649,8 +653,35 @@ def get_employee_charge_codes(employee_id):
                     "owner_name":       first_non_empty(assignment.get("owner_name"), charge_code.get("owner_name")),
                     "owner_email":      first_non_empty(assignment.get("owner_email"), charge_code.get("owner_email")),
                 })
+                seen_charge_code_ids.add(str(charge_code["_id"]))
 
-        print(f"✅ Found {len(result)} assigned charge codes for employee {employee_id}")
+        if include_existing:
+            existing_query = {"code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES}}
+            if active_only:
+                existing_query["is_active"] = True
+            existing_codes = list(mongo.db.charge_codes.find(existing_query).sort("code", 1))
+            for charge_code in existing_codes:
+                charge_code_id = str(charge_code["_id"])
+                if charge_code_id in seen_charge_code_ids or is_deprecated_charge_code(charge_code):
+                    continue
+                result.append({
+                    "_id":              charge_code_id,
+                    "charge_code_id":   charge_code_id,
+                    "charge_code":      charge_code.get("code"),
+                    "charge_code_name": charge_code.get("name"),
+                    "description":      charge_code.get("description", ""),
+                    "project_name":     charge_code.get("project_name", ""),
+                    "type":             charge_code.get("type", ""),
+                    "sub_type":         charge_code.get("sub_type", ""),
+                    "client":           charge_code.get("client", ""),
+                    "country":          charge_code.get("country", ""),
+                    "owner_name":       charge_code.get("owner_name", ""),
+                    "owner_email":      charge_code.get("owner_email", ""),
+                    "source":           "existing",
+                })
+                seen_charge_code_ids.add(charge_code_id)
+
+        print(f"✅ Found {len(result)} charge codes for employee {employee_id}")
         return jsonify(result), 200
 
     except Exception as e:

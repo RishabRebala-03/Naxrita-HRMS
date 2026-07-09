@@ -6884,7 +6884,7 @@ function AssignedChargeCodesPanel({ user }) {
 }
 
 function ExpensesPanel({ user }) {
-  const { notify, confirmAction } = useTimesheetUi();
+  const { notify, confirmAction, promptAction } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
   const userId = getUserId(user);
   const today = format(new Date(), 'yyyy-MM-dd');
@@ -6928,6 +6928,7 @@ function ExpensesPanel({ user }) {
     'Best Western',
   ];
   const [expenses, setExpenses] = useState([]);
+  const [expenseChargeCodes, setExpenseChargeCodes] = useState([]);
   const [selectedExpenseDate, setSelectedExpenseDate] = useState(today);
   const [selectedExpenseCategory, setSelectedExpenseCategory] = useState('');
   const [isExpenseCategoryOpen, setIsExpenseCategoryOpen] = useState(false);
@@ -6960,6 +6961,13 @@ function ExpensesPanel({ user }) {
   });
   const [editingId, setEditingId] = useState('');
   const [loading, setLoading] = useState(false);
+  const blankExpenseApprovalModal = {
+    show: false,
+    expense: null,
+    approverName: user?.name || user?.email || '',
+    approvedExpenseDate: '',
+  };
+  const [expenseApprovalModal, setExpenseApprovalModal] = useState(blankExpenseApprovalModal);
   const [expenseFilters, setExpenseFilters] = useState({
     search: '',
     department: 'all',
@@ -6986,6 +6994,19 @@ function ExpensesPanel({ user }) {
     if (!EXPENSES_FEATURE_ENABLED) return undefined;
     loadExpenses();
   }, [loadExpenses]);
+
+  useEffect(() => {
+    if (!EXPENSES_FEATURE_ENABLED || !userId) return;
+    const endpoint = isAdmin
+      ? '/charge_codes/all?active_only=true'
+      : `/charge_codes/employee/${userId}?active_only=true&include_existing=true`;
+    fetchAPI(endpoint)
+      .then((data) => setExpenseChargeCodes(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        console.error('Expense charge codes error:', err);
+        setExpenseChargeCodes([]);
+      });
+  }, [isAdmin, userId]);
 
   const handleSelectedExpenseDateChange = (dateValue) => {
     if (!dateValue) return;
@@ -7174,6 +7195,77 @@ function ExpensesPanel({ user }) {
     }
   };
 
+  const closeExpenseApprovalModal = () => {
+    setExpenseApprovalModal({
+      show: false,
+      expense: null,
+      approverName: user?.name || user?.email || '',
+      approvedExpenseDate: '',
+    });
+  };
+
+  const handleApproveExpense = (expense) => {
+    setExpenseApprovalModal({
+      show: true,
+      expense,
+      approverName: user?.name || user?.email || '',
+      approvedExpenseDate: expense.approved_expense_date || expense.expense_date || today,
+    });
+  };
+
+  const confirmApproveExpense = async () => {
+    const expense = expenseApprovalModal.expense;
+    const approverName = expenseApprovalModal.approverName.trim();
+    if (!expense) return;
+    if (!approverName) {
+      notify('Approver name is required.', 'warning');
+      return;
+    }
+    setLoading(true);
+    try {
+      await fetchAPI(`/expenses/${expense._id}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          approver_name: approverName,
+          approved_expense_date: expenseApprovalModal.approvedExpenseDate,
+        }),
+      });
+      closeExpenseApprovalModal();
+      loadExpenses();
+      notify('Expense approved successfully.', 'success');
+    } catch (err) {
+      notify(`Failed to approve expense: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectExpense = async (expense) => {
+    const rejectionComments = await promptAction({
+      title: 'Reject Expense',
+      message: `Add rejection comments for ${expense.employee_name || 'this employee'}'s ${expense.category || 'expense'} claim. The employee must create and submit a new expense.`,
+      confirmLabel: 'Reject Expense',
+      tone: 'danger',
+      placeholder: 'Enter rejection comments',
+      multiline: true,
+      required: true,
+    });
+    if (rejectionComments === null) return;
+    setLoading(true);
+    try {
+      await fetchAPI(`/expenses/${expense._id}/reject`, {
+        method: 'PUT',
+        body: JSON.stringify({ rejection_comments: rejectionComments }),
+      });
+      loadExpenses();
+      notify('Expense rejected. The employee will need to submit a new expense.', 'success');
+    } catch (err) {
+      notify(`Failed to reject expense: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmitExpenses = async () => {
     if (!userId) {
       notify('User not loaded properly.', 'error');
@@ -7184,13 +7276,14 @@ function ExpensesPanel({ user }) {
       notify('Add at least one expense for the selected date before submitting.', 'warning');
       return;
     }
-    if (expensesForDate.every((expense) => expense.status === 'submitted')) {
-      notify('Expenses for this date are already submitted.', 'info');
+    const draftExpensesForDate = expensesForDate.filter((expense) => (expense.status || 'saved') === 'saved');
+    if (!draftExpensesForDate.length) {
+      notify('Create a new draft expense before submitting. Rejected expenses cannot be resubmitted.', 'warning');
       return;
     }
     const shouldSubmit = await confirmAction({
       title: 'Submit Expenses',
-      message: `Submit ${expensesForDate.length} expense${expensesForDate.length === 1 ? '' : 's'} for ${format(parseISO(selectedExpenseDate), 'M/d/yyyy')}?`,
+      message: `Submit ${draftExpensesForDate.length} draft expense${draftExpensesForDate.length === 1 ? '' : 's'} for ${format(parseISO(selectedExpenseDate), 'M/d/yyyy')}?`,
       confirmLabel: 'Submit',
     });
     if (!shouldSubmit) return;
@@ -7283,7 +7376,7 @@ function ExpensesPanel({ user }) {
   };
   const totalExpenseAmount = visibleExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const attachedDocumentCount = visibleExpenses.filter((expense) => expense.document?.url).length;
-  const expenseTableColSpan = isAdmin ? 8 : 7;
+  const expenseTableColSpan = isAdmin ? 10 : 8;
   const isHotelExpense = selectedExpenseCategory === 'Accommodation - Hotel';
   const isTravelExpense = selectedExpenseCategory === 'Travel - Public, Limo, & Other';
   const isPerDiemLocalExpense = selectedExpenseCategory === 'Per Diem - Local';
@@ -7292,8 +7385,32 @@ function ExpensesPanel({ user }) {
     : '';
   const perDiemTotal = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
   const employeeExpensesSubmitted = employeeDateExpenses.length > 0
-    && employeeDateExpenses.every((expense) => expense.status === 'submitted');
+    && employeeDateExpenses.every((expense) => ['submitted', 'approved'].includes(expense.status));
   const expenseStatusLabel = employeeExpensesSubmitted ? 'Submitted' : 'Draft';
+  const expenseStatusText = (status) => ({
+    saved: 'Draft',
+    submitted: 'Submitted',
+    approved: 'Approved',
+    rejected: 'Rejected',
+  }[status] || status || 'Draft');
+  const canReviewExpense = (expense) => ['saved', 'submitted'].includes(expense.status || 'saved');
+  const expenseChargeCodeOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    expenseChargeCodes.forEach((item) => {
+      const code = String(item.charge_code || item.code || '').trim();
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      options.push({
+        value: code,
+        label: [code, item.charge_code_name || item.name || item.description].filter(Boolean).join(' - '),
+      });
+    });
+    if (form.client_code && !seen.has(form.client_code)) {
+      options.unshift({ value: form.client_code, label: form.client_code });
+    }
+    return options;
+  }, [expenseChargeCodes, form.client_code]);
 
   if (!EXPENSES_FEATURE_ENABLED) {
     return (
@@ -7381,9 +7498,15 @@ function ExpensesPanel({ user }) {
                 <div className="mte-expense-saved-row" key={expense._id}>
                   <span>{expense.category}</span>
                   <span>{expense.expense_date}</span>
+                  <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
+                    {expenseStatusText(expense.status)}
+                  </span>
                   <strong>INR {Number(expense.amount || 0).toFixed(2)}</strong>
-                  <button type="button" onClick={() => handleEditExpense(expense)}>Edit</button>
-                  <button type="button" onClick={() => handleDeleteExpense(expense._id)}>Delete</button>
+                  {expense.status === 'rejected' && expense.rejection_comments ? (
+                    <small className="mte-expense-rejection-note">{expense.rejection_comments}</small>
+                  ) : null}
+                  <button type="button" onClick={() => handleEditExpense(expense)} disabled={(expense.status || 'saved') !== 'saved'}>Edit</button>
+                  <button type="button" onClick={() => handleDeleteExpense(expense._id)} disabled={(expense.status || 'saved') !== 'saved'}>Delete</button>
                 </div>
               ))}
             </div>
@@ -7413,7 +7536,9 @@ function ExpensesPanel({ user }) {
                 <span>Charge Code*</span>
                 <select value={form.client_code} onChange={(event) => setForm({ ...form, client_code: event.target.value })}>
                   <option value="">-- Select one --</option>
-                  {form.client_code ? <option value={form.client_code}>{form.client_code}</option> : null}
+                  {expenseChargeCodeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </label>
               <label className="mte-expense-amount-field">
@@ -7679,6 +7804,66 @@ function ExpensesPanel({ user }) {
 
   return (
     <div className="mte-module-card mte-expense-shell">
+      {expenseApprovalModal.show && expenseApprovalModal.expense ? (
+        <div className="mte-expense-modal-overlay" onClick={closeExpenseApprovalModal}>
+          <div className="mte-expense-approval-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="mte-expense-modal-header">
+              <div>
+                <div className="mte-expense-modal-overline">Expense Action</div>
+                <h2>Approve expense request</h2>
+                <p>Confirm the approver details before approving this expense claim.</p>
+              </div>
+            </div>
+
+            <div className="mte-expense-approval-grid">
+              <label className="mte-expense-modal-field">
+                <span>Approver name</span>
+                <input
+                  className="input"
+                  value={expenseApprovalModal.approverName}
+                  onChange={(event) => setExpenseApprovalModal((previous) => ({ ...previous, approverName: event.target.value }))}
+                />
+              </label>
+
+              <div className="mte-expense-static-card">
+                <span>Requested expense</span>
+                <strong>{expenseApprovalModal.expense.category || 'Expense claim'}</strong>
+                <small>{expenseApprovalModal.expense.employee_name || 'Employee'}</small>
+              </div>
+
+              <div className="mte-expense-static-card">
+                <span>Requested date</span>
+                <strong>{expenseApprovalModal.expense.expense_date || '-'}</strong>
+              </div>
+
+              <div className="mte-expense-static-card">
+                <span>Requested amount</span>
+                <strong>{`${expenseApprovalModal.expense.currency || 'INR'} ${Number(expenseApprovalModal.expense.amount || 0).toFixed(2)}`}</strong>
+              </div>
+
+              <label className="mte-expense-modal-field">
+                <span>Approved expense date</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={expenseApprovalModal.approvedExpenseDate}
+                  onChange={(event) => setExpenseApprovalModal((previous) => ({ ...previous, approvedExpenseDate: event.target.value }))}
+                />
+              </label>
+            </div>
+
+            <div className="mte-expense-modal-actions">
+              <button type="button" className="mte-expense-modal-secondary" onClick={closeExpenseApprovalModal}>
+                Cancel
+              </button>
+              <button type="button" className="mte-expense-modal-primary" onClick={confirmApproveExpense} disabled={loading}>
+                Confirm approval
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mte-expense-summary-grid">
         <article>
           <span>Total claims</span>
@@ -7880,8 +8065,9 @@ function ExpensesPanel({ user }) {
                 'Category',
                 'Description',
                 'Amount',
+                'Status',
                 'Document',
-                ...(isAdmin ? [] : ['Action']),
+                'Action',
               ].map((header) => (
                 <th key={header}>{header}</th>
               ))}
@@ -7902,6 +8088,17 @@ function ExpensesPanel({ user }) {
                 <td>{expense.description || '-'}</td>
                 <td>{Number(expense.amount || 0).toFixed(2)}</td>
                 <td>
+                  <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
+                    {expenseStatusText(expense.status)}
+                  </span>
+                  {expense.status === 'rejected' && expense.rejection_comments ? (
+                    <div className="mte-expense-rejection-note">{expense.rejection_comments}</div>
+                  ) : null}
+                  {expense.status === 'approved' && expense.approved_by_admin_name ? (
+                    <div className="mte-expense-approval-note">Approved by {expense.approved_by_admin_name}</div>
+                  ) : null}
+                </td>
+                <td>
                   {expense.document?.url ? (
                     <span className="mte-document-cell">
                       <Paperclip size={14} />
@@ -7914,16 +8111,39 @@ function ExpensesPanel({ user }) {
                     </span>
                   ) : '-'}
                 </td>
-                {!isAdmin ? (
-                  <td>
-                    <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense">
-                      <FileText size={14} />
-                    </button>
-                    <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense">
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                ) : null}
+                <td>
+                  {isAdmin ? (
+                    <div className="mte-expense-review-actions">
+                      <button
+                        type="button"
+                        className="mte-expense-approve-button"
+                        onClick={() => handleApproveExpense(expense)}
+                        disabled={loading || !canReviewExpense(expense)}
+                      >
+                        <CheckCircle2 size={14} />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="mte-expense-reject-button"
+                        onClick={() => handleRejectExpense(expense)}
+                        disabled={loading || !canReviewExpense(expense)}
+                      >
+                        <XCircle size={14} />
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                        <FileText size={14} />
+                      </button>
+                      <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                        <Trash2 size={14} />
+                      </button>
+                    </>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
