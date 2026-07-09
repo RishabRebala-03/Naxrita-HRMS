@@ -13,7 +13,7 @@ from routes.tea_coffee_routes import tea_coffee_bp
 from flask_cors import CORS 
 from routes.notification_routes import notification_bp
 from routes.project_routes import project_bp
-from routes.timesheet_routes import timesheet_bp, send_timesheet_notification_reminders  # ⭐ NEW
+from routes.timesheet_routes import timesheet_bp, send_timesheet_notification_reminders, check_timesheet_escalations  # ⭐ NEW
 from routes.charge_code_routes import charge_code_bp  # ⭐ NEW
 from routes.expense_routes import expense_bp
 from routes.payslip_routes import payslip_bp
@@ -163,6 +163,16 @@ def send_timesheet_notification_reminders_job():
         print(f"❌ Timesheet notification reminder job error: {str(e)}")
 
 
+def check_timesheet_escalations_job():
+    """Check pending timesheets and escalate when SLA windows are exceeded."""
+    try:
+        with app.app_context():
+            result = check_timesheet_escalations()
+            print(f"✅ Timesheet escalation job completed: {result}")
+    except Exception as e:
+        print(f"❌ Timesheet escalation job error: {str(e)}")
+
+
 def send_low_balance_alerts_job():
     """Queue low leave balance alerts for employees."""
     try:
@@ -249,7 +259,16 @@ scheduler.add_job(
     id="timesheet_notification_reminders"
 )
 
-# 8. Low balance alerts
+# 8. Timesheet escalation check
+scheduler.add_job(
+    func=check_timesheet_escalations_job,
+    trigger="cron",
+    hour=int(os.getenv("TIMESHEET_ESCALATION_HOUR", "9")),
+    minute=15,
+    id="timesheet_escalation"
+)
+
+# 9. Low balance alerts
 scheduler.add_job(
     func=send_low_balance_alerts_job,
     trigger="cron",
@@ -258,7 +277,7 @@ scheduler.add_job(
     id="low_balance_mail_alerts"
 )
 
-# 9. Daily leave summary
+# 10. Daily leave summary
 scheduler.add_job(
     func=send_daily_leave_summary_job,
     trigger="cron",
@@ -271,7 +290,7 @@ scheduler.add_job(
 scheduler.start()
 
 print("\n" + "="*80)
-print("✅ SCHEDULER STARTED WITH 9 AUTOMATED JOBS")
+print("✅ SCHEDULER STARTED WITH 10 AUTOMATED JOBS")
 print("="*80)
 print("\n📋 SCHEDULED JOBS:")
 print("-" * 80)
@@ -306,11 +325,15 @@ print("7️⃣  TIMESHEET IN-APP REMINDERS")
 print("    Schedule: Every TIMESHEET_NOTIFICATION_REMINDER_HOURS hours")
 print("    Function: Repeat unresolved timesheet notifications until action/read")
 print()
-print("8️⃣  LOW BALANCE ALERTS")
+print("8️⃣  TIMESHEET ESCALATION CHECK")
+print("    Schedule: Daily at TIMESHEET_ESCALATION_HOUR:15")
+print("    Function: Escalate pending timesheets across the approval chain")
+print()
+print("9️⃣  LOW BALANCE ALERTS")
 print("    Schedule: Daily at LOW_BALANCE_ALERT_HOUR")
 print("    Function: Queue employee low leave balance alerts")
 print()
-print("9️⃣  DAILY LEAVE SUMMARY")
+print("🔟  DAILY LEAVE SUMMARY")
 print("    Schedule: Daily at DAILY_LEAVE_SUMMARY_HOUR")
 print("    Function: Queue daily admin leave summary")
 print("-" * 80)

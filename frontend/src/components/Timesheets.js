@@ -440,7 +440,7 @@ const STATUS_STYLES = {
 const STATUS_LABELS = {
   draft:               'Draft',
   pending_lead:        'Pending Approval',
-  pending_manager:     'Pending Manager',
+  pending_manager:     'Pending Escalated Approval',
   approved:            'Approved',
   rejected_by_lead:    'Rejected',
   rejected_by_manager: 'Rejected by Manager',
@@ -2247,7 +2247,7 @@ function TimesheetPage({
   }, [rows, selectedRowId]);
 
   const canEditApprovedTimesheet = timesheetStatus === 'approved' && approvedEditWindowOpen;
-  const isReadOnly   = !isEmployeeEditable || timesheetStatus === 'pending_lead' || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
+  const isReadOnly   = !isEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
   const canSubmit    = isEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
   const errors       = validationErrors;
   const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
@@ -2605,17 +2605,17 @@ function TimesheetPage({
     const isPending  = timesheetStatus === 'pending_lead';
     const isApproved = timesheetStatus === 'approved';
     const isRejected = timesheetStatus.startsWith('rejected');
-    const isLegacyPending = timesheetStatus === 'pending_manager';
-    if (!isPending && !isApproved && !isRejected && !isLegacyPending) return null;
+    const isEscalatedPending = timesheetStatus === 'pending_manager';
+    if (!isPending && !isApproved && !isRejected && !isEscalatedPending) return null;
 
-    const bg    = (isPending || isLegacyPending) ? C.purpleLight : isApproved ? C.greenLight : C.redLight;
-    const brd   = (isPending || isLegacyPending) ? C.purpleBorder : isApproved ? C.greenBorder : C.redBorder;
-    const color = (isPending || isLegacyPending) ? C.purple : isApproved ? C.green : C.red;
+    const bg    = (isPending || isEscalatedPending) ? C.purpleLight : isApproved ? C.greenLight : C.redLight;
+    const brd   = (isPending || isEscalatedPending) ? C.purpleBorder : isApproved ? C.greenBorder : C.redBorder;
+    const color = (isPending || isEscalatedPending) ? C.purple : isApproved ? C.green : C.red;
 
     const msg = isPending
-      ? (<><strong>Pending Approval:</strong> Your timesheet is awaiting review from your reporting lead.</>)
-      : isLegacyPending
-      ? (<><strong>Pending Manager Approval:</strong> Awaiting final manager sign-off.</>)
+      ? (<><strong>Pending Approval:</strong> Your timesheet is awaiting review from your assigned approver.</>)
+      : isEscalatedPending
+      ? (<><strong>Pending Escalated Approval:</strong> Your timesheet has moved to the next approver in the escalation flow.</>)
       : isApproved
       ? canEditApprovedTimesheet
         ? (
@@ -2732,9 +2732,9 @@ function TimesheetPage({
         </div>
       </div>
 
-      {timesheetStatus === 'pending_lead' ? (
+      {['pending_lead', 'pending_manager'].includes(timesheetStatus) ? (
         <div className="mte-inline-banner">
-          <span>Pending with your reporting lead.</span>
+          <span>Pending with your assigned approver.</span>
           <button type="button" className="mte-inline-banner-button" onClick={handleRecall} disabled={loading}>
             {loading ? 'Updating' : 'Edit Timesheet'}
           </button>
@@ -3629,10 +3629,10 @@ function Approvals({ user }) {
               >
                   <option value="all">All Statuses</option>
                   <option value="pending_lead">Pending Approval</option>
-                  <option value="pending_manager">Pending Manager (Legacy)</option>
+                  <option value="pending_manager">Pending Escalated Approval</option>
                   <option value="approved">Approved</option>
                   <option value="rejected_by_lead">Rejected</option>
-                  <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
+                  <option value="rejected_by_manager">Rejected by Escalated Approver</option>
               </SelectWrap>
               <SelectWrap
                 value={typeFilter}
@@ -4859,10 +4859,10 @@ function TeamTimesheets({ user }) {
               >
                 <option value="all">All Statuses</option>
                 <option value="pending_lead">Pending Approval</option>
-                <option value="pending_manager">Pending Manager (Legacy)</option>
+                <option value="pending_manager">Pending Escalated Approval</option>
                 <option value="approved">Approved</option>
                 <option value="rejected_by_lead">Rejected</option>
-                <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
+                <option value="rejected_by_manager">Rejected by Escalated Approver</option>
               </SelectWrap>
               <SelectWrap
                 value={typeFilter}
@@ -5006,6 +5006,11 @@ const getReportingLeadLabel = (timesheet) =>
   timesheet.reporting_lead_name
   || getLeadApprovalMeta(timesheet).name
   || 'Unassigned lead';
+
+const getCurrentApproverLabel = (timesheet) =>
+  timesheet.current_approver_name
+  || timesheet.current_approver_email
+  || getReportingLeadLabel(timesheet);
 
 const getTimesheetFortnightMeta = (timesheet) => {
   const start = timesheet?.period_start ? new Date(timesheet.period_start) : null;
@@ -5213,7 +5218,10 @@ function AdminTimesheets() {
     });
     if (!shouldApprove) return;
     try {
-      await fetchAPI(`/timesheets/approve/lead/${timesheet._id || timesheet.id}`, {
+      const endpoint = timesheet.status === 'pending_manager'
+        ? `/timesheets/approve/manager/${timesheet._id || timesheet.id}`
+        : `/timesheets/approve/lead/${timesheet._id || timesheet.id}`;
+      await fetchAPI(endpoint, {
         method: 'PUT',
         body: JSON.stringify({ approved_by: userId, approver_name: approverName, comments: '' }),
       });
@@ -5252,7 +5260,10 @@ function AdminTimesheets() {
     });
     if (!rejectionReason?.trim()) return;
     try {
-      await fetchAPI(`/timesheets/reject/lead/${timesheet._id || timesheet.id}`, {
+      const endpoint = timesheet.status === 'pending_manager'
+        ? `/timesheets/reject/manager/${timesheet._id || timesheet.id}`
+        : `/timesheets/reject/lead/${timesheet._id || timesheet.id}`;
+      await fetchAPI(endpoint, {
         method: 'PUT',
         body: JSON.stringify({ rejected_by: userId, approver_name: approverName, rejection_reason: rejectionReason.trim() }),
       });
@@ -5329,7 +5340,7 @@ function AdminTimesheets() {
                       </>
                     ) : (
                       <span style={{ color: C.textMid }}>
-                        {ts.status === 'pending_lead' ? `Awaiting ${getReportingLeadLabel(ts)}` : '—'}
+                        {ts.status?.startsWith('pending') ? `Awaiting ${getCurrentApproverLabel(ts)}` : '—'}
                       </span>
                     )}
                   </td>
@@ -5401,7 +5412,7 @@ function AdminTimesheets() {
 	                      >
 	                        <Download size={15} />
 	                      </button>
-                        {ts.status === 'pending_lead' && (
+                        {['pending_lead', 'pending_manager'].includes(ts.status) && (
                           <>
                             <button
                               onClick={() => handleAdminApprove(ts)}
