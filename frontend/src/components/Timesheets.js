@@ -7613,7 +7613,7 @@ function ExpensesPanel({ user }) {
                   <label><input type="checkbox" /> Provided to a Public Official with value above $25?</label>
                   <label><input type="checkbox" /> No Vendor GST Number on Invoice</label>
                 </div>
-                <p className="mte-expense-important"><strong>IMPORTANT</strong>- Once this checkbox is selected, Accenture will be liable to pay additional GST. It is advisable that you deal <u>ONLY</u> with GST registered vendors.</p>
+                <p className="mte-expense-important"><strong>IMPORTANT</strong>- Once this checkbox is selected, Naxrita will be liable to pay additional GST. It is advisable that you deal <u>ONLY</u> with GST registered vendors.</p>
 
                 <div className="mte-expense-form-row">
                   <label>
@@ -7706,7 +7706,7 @@ function ExpensesPanel({ user }) {
               <span>Refresh</span>
             </button>
           </div>
-          <div className="mte-expense-filter-grid">
+          <div className="mte-expense-filter-grid mte-expense-filter-grid-admin">
             <label className="mte-expense-filter-field mte-expense-filter-search">
               <span>Search</span>
               <ValueHelpSearch
@@ -7869,7 +7869,7 @@ function ExpensesPanel({ user }) {
           </div>
         </section>
       )}
-      <div className="mte-simple-table-wrap">
+        <div className="mte-simple-table-wrap mte-expense-table-shell">
         <table className="mte-simple-table">
           <thead>
             <tr>

@@ -462,9 +462,9 @@ const EmployeeDashboard = ({ user, setSection }) => {
                 </div>
                 <div className="fiori-chart-shell employee-chart-shell">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={monthlyLeaveData}>
-                      <XAxis dataKey="month" axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} />
+                    <BarChart data={monthlyLeaveData} barCategoryGap={22} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                      <XAxis dataKey="month" axisLine={false} tickLine={false} tickMargin={10} />
+                      <YAxis allowDecimals={false} axisLine={false} tickLine={false} tickMargin={10} />
                       <Tooltip />
                       <Bar dataKey="applied" fill="#0a6ed1" radius={[8, 8, 0, 0]} name="Applied" />
                       <Bar dataKey="approved" fill="#188918" radius={[8, 8, 0, 0]} name="Approved" />
@@ -484,7 +484,7 @@ const EmployeeDashboard = ({ user, setSection }) => {
                 </div>
                 <div className="fiori-chart-shell employee-chart-shell">
                   <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
+                    <PieChart margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
                       <Pie
                         data={statusChartData.filter((item) => item.value > 0)}
                         dataKey="value"
@@ -782,7 +782,7 @@ const EmployeeDashboard = ({ user, setSection }) => {
 
               <div className="employee-mini-chart">
                 <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
+                  <PieChart margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
                     <Pie
                       data={leaveTypeData}
                       dataKey="value"

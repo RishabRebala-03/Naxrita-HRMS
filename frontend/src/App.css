@@ -1631,6 +1631,8 @@ body {
 .admin-dashboard .admin-analytics-grid .fiori-chart-card {
   padding: 18px 20px 20px;
   border-radius: 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .admin-dashboard .admin-analytics-grid .fiori-panel-header {
@@ -1649,7 +1651,9 @@ body {
 
 .admin-dashboard .admin-analytics-grid .fiori-chart-shell {
   height: 250px;
-  padding: 4px 2px 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px 6px 0;
 }
 
 .admin-dashboard-layout {
@@ -5475,20 +5479,33 @@ button:hover:not(:disabled) {
   gap: 12px;
 }
 
+.employee-dashboard .fiori-chart-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.employee-dashboard .fiori-chart-card .fiori-chart-shell,
+.employee-dashboard .fiori-chart-card .employee-mini-chart {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .employee-chart-shell {
   height: 170px;
+  padding: 4px 6px 0;
 }
 
 .employee-mini-chart {
   width: 100%;
   height: 140px;
+  padding: 4px 6px 0;
 }
 
 .employee-chart-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: auto;
 }
 
 .employee-chart-legend-compact {

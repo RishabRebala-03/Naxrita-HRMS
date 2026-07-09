@@ -620,8 +620,22 @@
   align-items: end;
 }
 
+.mte-expense-filter-grid-admin {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-auto-flow: dense;
+}
+
 .mte-expense-filter-search {
   grid-column: span 2;
+}
+
+.mte-expense-filter-grid-admin .mte-expense-filter-search {
+  grid-column: span 2;
+}
+
+.mte-expense-filter-grid-admin .mte-expense-filter-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
 }
 
 .mte-expense-filter-field {
@@ -1311,6 +1325,16 @@
 .mte-simple-table-wrap,
 .mte-locations-grid-wrap {
   overflow-x: auto;
+}
+
+.mte-expense-table-shell {
+  border: 1px solid #e5e7ec;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.mte-expense-table-shell .mte-simple-table {
+  min-width: 980px;
 }
 
 .mte-simple-table,
