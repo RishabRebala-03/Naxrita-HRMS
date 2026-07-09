@@ -6,7 +6,7 @@ from bson import ObjectId
 from datetime import datetime
 from werkzeug.utils import secure_filename
 from config.db import mongo
-from utils.access_control import has_admin_menu_access, resolve_requester
+from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester
 
 expense_bp = Blueprint("expense_bp", __name__)
 UPLOAD_FOLDER = os.path.join("static", "expense_documents")
@@ -18,7 +18,7 @@ ALLOWED_DOCUMENT_EXTENSIONS = {
 
 
 def expenses_feature_enabled():
-    return str(os.getenv("EXPENSES_FEATURE_ENABLED", "false")).strip().lower() == "true"
+    return str(os.getenv("EXPENSES_FEATURE_ENABLED", "true")).strip().lower() == "true"
 
 
 def expenses_feature_disabled_response():
@@ -44,6 +44,10 @@ def allowed_document(filename):
 def document_url(filename):
     base = request.host_url.rstrip("/")
     return f"{base}/static/expense_documents/{filename}"
+
+
+def require_expense_admin_access():
+    return require_admin_menu_access("timesheets")
 
 
 @expense_bp.route("", methods=["GET"])
@@ -156,13 +160,13 @@ def submit_expenses():
             "employee_id": ObjectId(employee_id),
             "expense_date": expense_date,
         }
-        expense_count = mongo.db.expenses.count_documents(query)
+        expense_count = mongo.db.expenses.count_documents({**query, "status": "saved"})
         if expense_count == 0:
-            return jsonify({"error": "No expenses found for the selected date"}), 404
+            return jsonify({"error": "No draft expenses found for the selected date"}), 404
 
         now = datetime.utcnow()
         result = mongo.db.expenses.update_many(
-            {**query, "status": {"$ne": "submitted"}},
+            {**query, "status": "saved"},
             {"$set": {"status": "submitted", "submitted_at": now, "updated_at": now}},
         )
         return jsonify({
@@ -180,6 +184,12 @@ def update_expense(expense_id):
         if not expenses_feature_enabled():
             return expenses_feature_disabled_response()
         data = request.get_json() or {}
+        expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        if not expense:
+            return jsonify({"error": "Expense not found"}), 404
+        if expense.get("status", "saved") != "saved":
+            return jsonify({"error": "Only draft expenses can be updated. Create a new expense if the claim was rejected."}), 400
+
         update_data = {"updated_at": datetime.utcnow()}
 
         if "expense_date" in data:
@@ -224,15 +234,94 @@ def update_expense(expense_id):
         if "document" in data and (isinstance(data.get("document"), dict) or data.get("document") is None):
             update_data["document"] = data.get("document")
 
-        result = mongo.db.expenses.update_one(
+        mongo.db.expenses.update_one(
             {"_id": ObjectId(expense_id)},
             {"$set": update_data},
         )
-        if result.matched_count == 0:
-            return jsonify({"error": "Expense not found"}), 404
 
         expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
         return jsonify(serialize_all(expense)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@expense_bp.route("/<expense_id>/approve", methods=["PUT"])
+def approve_expense(expense_id):
+    try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
+        requester, error_response = require_expense_admin_access()
+        if error_response:
+            return error_response
+        data = request.get_json() or {}
+        approver_name = str(data.get("approver_name") or requester.get("name") or "").strip()
+        approved_expense_date = str(data.get("approved_expense_date") or "").strip()
+        if not approver_name:
+            return jsonify({"error": "Approver name is required"}), 400
+
+        expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        if not expense:
+            return jsonify({"error": "Expense not found"}), 404
+        if expense.get("status", "saved") not in {"saved", "submitted"}:
+            return jsonify({"error": "Only draft or submitted expenses can be approved"}), 400
+
+        now = datetime.utcnow()
+        mongo.db.expenses.update_one(
+            {"_id": ObjectId(expense_id)},
+            {
+                "$set": {
+                    "status": "approved",
+                    "approved_at": now,
+                    "approved_by_admin_id": requester.get("_id"),
+                    "approved_by_admin_name": approver_name,
+                    "approved_expense_date": approved_expense_date or expense.get("expense_date", ""),
+                    "updated_at": now,
+                },
+                "$unset": {"rejection_comments": "", "rejected_at": "", "rejected_by_admin_id": "", "rejected_by_admin_name": ""},
+            },
+        )
+        updated = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        return jsonify(serialize_all(updated)), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@expense_bp.route("/<expense_id>/reject", methods=["PUT"])
+def reject_expense(expense_id):
+    try:
+        if not expenses_feature_enabled():
+            return expenses_feature_disabled_response()
+        requester, error_response = require_expense_admin_access()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        rejection_comments = str(data.get("rejection_comments") or data.get("comments") or "").strip()
+        if not rejection_comments:
+            return jsonify({"error": "Rejection comments are required"}), 400
+
+        expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        if not expense:
+            return jsonify({"error": "Expense not found"}), 404
+        if expense.get("status", "saved") not in {"saved", "submitted"}:
+            return jsonify({"error": "Only draft or submitted expenses can be rejected"}), 400
+
+        now = datetime.utcnow()
+        mongo.db.expenses.update_one(
+            {"_id": ObjectId(expense_id)},
+            {
+                "$set": {
+                    "status": "rejected",
+                    "rejection_comments": rejection_comments,
+                    "rejected_at": now,
+                    "rejected_by_admin_id": requester.get("_id"),
+                    "rejected_by_admin_name": requester.get("name", ""),
+                    "updated_at": now,
+                }
+            },
+        )
+        updated = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        return jsonify(serialize_all(updated)), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -245,6 +334,8 @@ def upload_expense_document(expense_id):
         expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
         if not expense:
             return jsonify({"error": "Expense not found"}), 404
+        if expense.get("status", "saved") != "saved":
+            return jsonify({"error": "Only draft expenses can be updated. Create a new expense if the claim was rejected."}), 400
 
         file = request.files.get("document")
         if not file or not file.filename:
@@ -281,6 +372,12 @@ def delete_expense(expense_id):
     try:
         if not expenses_feature_enabled():
             return expenses_feature_disabled_response()
+        expense = mongo.db.expenses.find_one({"_id": ObjectId(expense_id)})
+        if not expense:
+            return jsonify({"error": "Expense not found"}), 404
+        if expense.get("status", "saved") != "saved":
+            return jsonify({"error": "Only draft expenses can be deleted"}), 400
+
         result = mongo.db.expenses.delete_one({"_id": ObjectId(expense_id)})
         if result.deleted_count == 0:
             return jsonify({"error": "Expense not found"}), 404

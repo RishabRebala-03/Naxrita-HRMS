@@ -1334,7 +1334,243 @@
 }
 
 .mte-expense-table-shell .mte-simple-table {
-  min-width: 980px;
+  min-width: 1180px;
+}
+
+.mte-expense-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid #d8dde6;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.mte-expense-status-pill.is-submitted {
+  border-color: #c8bfd4;
+  background: #f3f0f7;
+  color: #6b5b7a;
+}
+
+.mte-expense-status-pill.is-approved {
+  border-color: #b8d4bc;
+  background: #f0f7f0;
+  color: #4a7c59;
+}
+
+.mte-expense-status-pill.is-rejected {
+  border-color: #e8c4c6;
+  background: #fef3f3;
+  color: #c1666b;
+}
+
+.mte-expense-rejection-note {
+  display: block;
+  margin-top: 5px;
+  max-width: 240px;
+  color: #9f3f46;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mte-expense-approval-note {
+  display: block;
+  margin-top: 5px;
+  max-width: 240px;
+  color: #3f6f4d;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.mte-expense-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.mte-expense-approval-modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+  padding: 28px 30px;
+}
+
+.mte-expense-modal-header {
+  margin-bottom: 22px;
+}
+
+.mte-expense-modal-overline {
+  color: #5f7692;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mte-expense-modal-header h2 {
+  margin: 8px 0 6px;
+  color: #111827;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.mte-expense-modal-header p {
+  margin: 0;
+  color: #5f7692;
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.mte-expense-approval-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.mte-expense-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.mte-expense-modal-field span,
+.mte-expense-static-card span {
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.mte-expense-modal-field input {
+  min-height: 52px;
+  border: 1px solid #dde7f2;
+  border-radius: 12px;
+  padding: 0 16px;
+  color: #111827;
+  font-size: 16px;
+}
+
+.mte-expense-static-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 86px;
+  border: 1px solid #d6e0ea;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px 16px;
+}
+
+.mte-expense-static-card span {
+  color: #5f7692;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mte-expense-static-card strong {
+  margin-top: 6px;
+  color: #1f2937;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.mte-expense-static-card small {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.mte-expense-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.mte-expense-modal-primary,
+.mte-expense-modal-secondary {
+  min-height: 40px;
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mte-expense-modal-primary {
+  border: 1px solid #3f6f4d;
+  background: #4a7c59;
+  color: #fff;
+}
+
+.mte-expense-modal-secondary {
+  border: 1px solid #d6e0ea;
+  background: #fff;
+  color: #334155;
+}
+
+.mte-expense-modal-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.mte-expense-review-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mte-expense-approve-button,
+.mte-expense-reject-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mte-expense-approve-button {
+  border: 1px solid #3f6f4d;
+  background: #4a7c59;
+  color: #fff;
+}
+
+.mte-expense-reject-button {
+  border: 1px solid #ad4d54;
+  background: #c1666b;
+  color: #fff;
+}
+
+.mte-expense-approve-button:disabled,
+.mte-expense-reject-button:disabled,
+.mte-expense-saved-row button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .mte-simple-table,
