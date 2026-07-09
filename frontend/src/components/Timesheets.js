@@ -27,7 +27,7 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
   : 'http://localhost:5000/api';
 const DAILY_WORK_HOUR_LIMIT = 9;
-const EXPENSES_FEATURE_ENABLED = String(process.env.REACT_APP_EXPENSES_FEATURE_ENABLED || '').trim().toLowerCase() === 'true';
+const EXPENSES_FEATURE_ENABLED = String(process.env.REACT_APP_EXPENSES_FEATURE_ENABLED || 'true').trim().toLowerCase() === 'true';
 
 // ─── Design tokens (matches leave/user colour system exactly) ────────────────
 const C = {
@@ -762,6 +762,7 @@ const LEAVE_TYPE_DISPLAY_CODE_MAP = {
   lop: 'LWP',
   'leave without pay': 'LWP',
   'leave with loss of pay': 'LWP',
+  'compensatory off': 'CO',
 };
 
 const getLeaveTypeDisplayCode = (leaveType) => {
@@ -1830,6 +1831,9 @@ function TimesheetPage({
   const [approvedEditWindowOpen, setApprovedEditWindowOpen] = useState(false);
   const [approvedEditWindowLabel, setApprovedEditWindowLabel] = useState('');
   const [isEmployeeEditable, setIsEmployeeEditable] = useState(true);
+  const [periodEntryBlocked, setPeriodEntryBlocked] = useState(false);
+  const [periodEntryDeadlineLabel, setPeriodEntryDeadlineLabel] = useState('');
+  const [periodUnlockActive, setPeriodUnlockActive] = useState(false);
   const [hasSavedCurrentDraft, setHasSavedCurrentDraft] = useState(false);
   const [sheetLoaded, setSheetLoaded]           = useState(false);
   // FIX 2: reload trigger — incrementing forces the timesheet data useEffect to re-run
@@ -1850,6 +1854,9 @@ function TimesheetPage({
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
     setIsEmployeeEditable(true);
+    setPeriodEntryBlocked(false);
+    setPeriodEntryDeadlineLabel('');
+    setPeriodUnlockActive(false);
     setHasSavedCurrentDraft(false);
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
@@ -1871,6 +1878,9 @@ function TimesheetPage({
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
     setIsEmployeeEditable(true);
+    setPeriodEntryBlocked(false);
+    setPeriodEntryDeadlineLabel('');
+    setPeriodUnlockActive(false);
   };
   const assignmentMeta = useMemo(() => getTimesheetAssignmentMeta(profile), [profile]);
 
@@ -2031,8 +2041,14 @@ function TimesheetPage({
     if (hasLocalTimesheetEditsRef.current) return;
 
     setSheetLoaded(false);
-    fetchAPI(`/timesheets/employee/${userId}`)
-      .then((existing) => {
+    Promise.all([
+      fetchAPI(`/timesheets/employee/${userId}`),
+      fetchAPI(`/timesheets/period-access?employee_id=${userId}&period_start=${dates[0]}&period_end=${dates[dates.length - 1]}`),
+    ])
+      .then(([existing, access]) => {
+        setPeriodEntryBlocked(Boolean(access?.entry_blocked));
+        setPeriodEntryDeadlineLabel(access?.entry_deadline_label || '');
+        setPeriodUnlockActive(Boolean(access?.unlock_active));
         const match = Array.isArray(existing)
           ? existing.find((ts) =>
               ts.period_start === dates[0] &&
@@ -2057,6 +2073,9 @@ function TimesheetPage({
           setApprovedEditWindowOpen(Boolean(match.approved_edit_window_open));
           setApprovedEditWindowLabel(match.approved_edit_window_label || '');
           setIsEmployeeEditable(match.is_employee_editable !== false);
+          setPeriodEntryBlocked(Boolean(match.period_entry_blocked));
+          setPeriodEntryDeadlineLabel(match.period_entry_deadline_label || access?.entry_deadline_label || '');
+          setPeriodUnlockActive(Boolean(match.period_unlock_active));
           setDailyOvertime(match.daily_overtime || {});
           setHolidayPayout(match.holiday_payout || {});
           setWorkScheduleByDate(getTimesheetWorkScheduleByDate(match, dates));
@@ -2129,7 +2148,7 @@ function TimesheetPage({
           setTimesheetStatus('draft');
           setApprovedEditWindowOpen(false);
           setApprovedEditWindowLabel('');
-          setIsEmployeeEditable(true);
+          setIsEmployeeEditable(access?.entry_blocked !== true);
           setDailyOvertime({});
           setHolidayPayout({});
           setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2142,6 +2161,9 @@ function TimesheetPage({
         setApprovedEditWindowOpen(false);
         setApprovedEditWindowLabel('');
         setIsEmployeeEditable(true);
+        setPeriodEntryBlocked(false);
+        setPeriodEntryDeadlineLabel('');
+        setPeriodUnlockActive(false);
         setDailyOvertime({});
         setHolidayPayout({});
         setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2725,6 +2747,16 @@ function TimesheetPage({
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
           </button>
+        </div>
+      ) : null}
+
+      {!canEditApprovedTimesheet && periodEntryBlocked ? (
+        <div className="mte-inline-banner">
+          <span>
+            {periodUnlockActive
+              ? 'This fortnight was unblocked by an admin and can be edited again.'
+              : (periodEntryDeadlineLabel || 'This fortnight is blocked. Contact an admin to unblock it.')}
+          </span>
         </div>
       ) : null}
 
@@ -8206,8 +8238,10 @@ function AdjustmentsPanel({ user }) {
 function PreferencesPanel({ user, periods, selectedPeriod }) {
   const { notify } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
+  const isFullAdmin = (user?.originalRole || user?.role) === 'Admin';
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [activeSubtab, setActiveSubtab] = useState('workflow');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [selectedPeriodValue, setSelectedPeriodValue] = useState(selectedPeriod || periods?.[0]?.value || '');
   const [drafts, setDrafts] = useState({
@@ -8358,13 +8392,244 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
 
   return (
     <div className="mte-module-card mte-preferences-shell">
+      <div className="mte-subtabs" style={{ marginBottom: '18px' }}>
+        <button type="button" className={activeSubtab === 'workflow' ? 'is-active' : ''} onClick={() => setActiveSubtab('workflow')}>
+          Workflow Preferences
+        </button>
+        {isFullAdmin ? (
+          <button type="button" className={activeSubtab === 'unblock' ? 'is-active' : ''} onClick={() => setActiveSubtab('unblock')}>
+            Unblock Fortnights
+          </button>
+        ) : null}
+      </div>
+
+      {activeSubtab === 'unblock' && isFullAdmin ? (
+        <FortnightUnlockPanel
+          employees={employees}
+          periods={periods}
+          selectedEmployeeId={selectedEmployeeId}
+          onSelectedEmployeeIdChange={setSelectedEmployeeId}
+          selectedPeriodValue={selectedPeriodValue}
+          onSelectedPeriodValueChange={setSelectedPeriodValue}
+        />
+      ) : null}
+
+      {activeSubtab === 'workflow' ? (
+        <>
+          <div className="mte-module-card-header">
+            <div>
+              <h3>Admin Workflow Preferences</h3>
+              <p>Select an employee and fortnight, then define the notification and approval routing moderated by admin.</p>
+            </div>
+            <button type="button" style={loading ? S.btnDisabled : S.btnPrimary} onClick={savePreferences} disabled={loading}>
+              {loading ? 'Saving...' : 'Save Preferences'}
+            </button>
+          </div>
+
+          <div className="mte-preferences-grid" style={{ marginBottom: '18px' }}>
+            <div className="mte-pref-field">
+              <label>Employee:</label>
+              <ValueHelpSelect
+                value={selectedEmployeeId}
+                onChange={setSelectedEmployeeId}
+                options={employeeValueHelpOptions}
+                placeholder="Select employee"
+                searchPlaceholder="Search employees"
+              />
+            </div>
+            <div />
+            <div className="mte-pref-field">
+              <label>Fortnight:</label>
+              <ValueHelpSelect
+                value={selectedPeriodValue}
+                onChange={setSelectedPeriodValue}
+                options={periodValueHelpOptions}
+                placeholder="Select fortnight"
+                searchPlaceholder="Search fortnights"
+              />
+            </div>
+            <div className="mte-pref-field">
+              <label>Mode:</label>
+              <input className="input" value="Admin managed" readOnly />
+            </div>
+          </div>
+
+          <div className="mte-preferences-grid">
+            <div className="mte-pref-field">
+              <label>Reviewer Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.reviewer}
+                onChange={(value) => updateDraft('reviewer', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose reviewer"
+                searchPlaceholder="Search reviewer suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Reviewers:</label>
+              <textarea className="input" value={selected.reviewers} onChange={(event) => updateSelected('reviewers', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Notification Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.notification}
+                onChange={(value) => updateDraft('notification', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose notification recipient"
+                searchPlaceholder="Search notification suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Notifications:</label>
+              <textarea className="input" value={selected.notifications} onChange={(event) => updateSelected('notifications', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Delegate Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.delegate}
+                onChange={(value) => updateDraft('delegate', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose delegate"
+                searchPlaceholder="Search delegate suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Delegates:</label>
+              <textarea className="input" value={selected.delegates} onChange={(event) => updateSelected('delegates', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Approver Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.approver}
+                onChange={(value) => updateDraft('approver', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose approver"
+                searchPlaceholder="Search approver suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Approvers:</label>
+              <textarea className="input" value={selected.approvers} onChange={(event) => updateSelected('approvers', event.target.value)} rows={4} />
+            </div>
+            <div />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function FortnightUnlockPanel({
+  employees,
+  periods,
+  selectedEmployeeId,
+  onSelectedEmployeeIdChange,
+  selectedPeriodValue,
+  onSelectedPeriodValueChange,
+}) {
+  const { notify } = useTimesheetUi();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [accessState, setAccessState] = useState(null);
+
+  const employeeOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee._id,
+      label: employee.name || employee.email || employee.employeeId || employee._id,
+      description: [
+        employee.email,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
+
+  const periodOptions = useMemo(
+    () => periods.map((period) => ({
+      value: period.value,
+      label: period.label,
+      description: period.start && period.end ? `${period.start} to ${period.end}` : '',
+    })),
+    [periods]
+  );
+
+  const selectedPeriodOption = useMemo(
+    () => periods.find((item) => item.value === selectedPeriodValue) || periods[0],
+    [periods, selectedPeriodValue]
+  );
+
+  const loadAccessState = useCallback(() => {
+    if (!selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) return;
+    setLoading(true);
+    fetchAPI(`/timesheets/period-access?employee_id=${selectedEmployeeId}&period_start=${selectedPeriodOption.start}&period_end=${selectedPeriodOption.end}`)
+      .then((data) => {
+        setAccessState(data);
+        setNotes(data?.unlock_record?.notes || '');
+      })
+      .catch((err) => notify(`Failed to load fortnight status: ${err.message}`, 'error'))
+      .finally(() => setLoading(false));
+  }, [notify, selectedEmployeeId, selectedPeriodOption]);
+
+  useEffect(() => {
+    loadAccessState();
+  }, [loadAccessState]);
+
+  const handleUnlockToggle = async (nextUnlocked) => {
+    if (!selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) {
+      notify('Select an employee and fortnight first.', 'warning');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const response = await fetchAPI('/timesheets/period-unlocks', {
+        method: 'PUT',
+        body: JSON.stringify({
+          employee_id: selectedEmployeeId,
+          period_start: selectedPeriodOption.start,
+          period_end: selectedPeriodOption.end,
+          unlocked: nextUnlocked,
+          notes,
+        }),
+      });
+      setAccessState(response);
+      notify(nextUnlocked ? 'Fortnight unblocked for the employee.' : 'Fortnight blocked again.', 'success');
+    } catch (err) {
+      notify(`Failed to update fortnight access: ${err.message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
       <div className="mte-module-card-header">
         <div>
-          <h3>Admin Workflow Preferences</h3>
-          <p>Select an employee and fortnight, then define the notification and approval routing moderated by admin.</p>
+          <h3>Admin Fortnight Unblock</h3>
+          <p>Only full Admin users can reopen blocked fortnights for a selected employee and period.</p>
         </div>
-        <button type="button" style={loading ? S.btnDisabled : S.btnPrimary} onClick={savePreferences} disabled={loading}>
-          {loading ? 'Saving...' : 'Save Preferences'}
+        <button type="button" style={loading ? S.btnDisabled : S.btnSecondary} onClick={loadAccessState} disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh Status'}
         </button>
       </div>
 
@@ -8373,8 +8638,8 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
           <label>Employee:</label>
           <ValueHelpSelect
             value={selectedEmployeeId}
-            onChange={setSelectedEmployeeId}
-            options={employeeValueHelpOptions}
+            onChange={onSelectedEmployeeIdChange}
+            options={employeeOptions}
             placeholder="Select employee"
             searchPlaceholder="Search employees"
           />
@@ -8384,96 +8649,64 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
           <label>Fortnight:</label>
           <ValueHelpSelect
             value={selectedPeriodValue}
-            onChange={setSelectedPeriodValue}
-            options={periodValueHelpOptions}
+            onChange={onSelectedPeriodValueChange}
+            options={periodOptions}
             placeholder="Select fortnight"
             searchPlaceholder="Search fortnights"
           />
         </div>
         <div className="mte-pref-field">
-          <label>Mode:</label>
-          <input className="input" value="Admin managed" readOnly />
+          <label>Deadline:</label>
+          <input className="input" value={accessState?.entry_deadline_date || ''} readOnly />
         </div>
       </div>
 
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
-          <label>Reviewer Email(s):</label>
-          <ValueHelpSelect
-            value={drafts.reviewer}
-            onChange={(value) => updateDraft('reviewer', value)}
-            options={preferenceSuggestionOptions}
-            placeholder="Choose reviewer"
-            searchPlaceholder="Search reviewer suggestions"
+          <label>Status:</label>
+          <input
+            className="input"
+            value={
+              accessState?.unlock_active
+                ? 'Unblocked by admin'
+                : accessState?.entry_blocked
+                ? 'Blocked'
+                : 'Open'
+            }
+            readOnly
           />
         </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Reviewers:</label>
-          <textarea className="input" value={selected.reviewers} onChange={(event) => updateSelected('reviewers', event.target.value)} rows={4} />
-        </div>
         <div />
-
         <div className="mte-pref-field">
-          <label>Notification Email(s):</label>
-          <ValueHelpSelect
-            value={drafts.notification}
-            onChange={(value) => updateDraft('notification', value)}
-            options={preferenceSuggestionOptions}
-            placeholder="Choose notification recipient"
-            searchPlaceholder="Search notification suggestions"
+          <label>Admin Notes:</label>
+          <textarea
+            className="input"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            rows={4}
+            placeholder="Reason for unblocking or re-blocking"
           />
         </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
-          <ChevronRight size={15} />
-        </button>
         <div className="mte-pref-field">
-          <label>Selected Notifications:</label>
-          <textarea className="input" value={selected.notifications} onChange={(event) => updateSelected('notifications', event.target.value)} rows={4} />
+          <label>Action:</label>
+          <button
+            type="button"
+            style={saving ? S.btnDisabled : (accessState?.unlock_active ? S.btnSecondary : S.btnPrimary)}
+            onClick={() => handleUnlockToggle(!accessState?.unlock_active)}
+            disabled={saving || !selectedEmployeeId || !selectedPeriodOption?.start}
+          >
+            {saving ? 'Saving...' : accessState?.unlock_active ? 'Block Again' : 'Unblock Fortnight'}
+          </button>
         </div>
-        <div />
-
-        <div className="mte-pref-field">
-          <label>Delegate Email(s):</label>
-          <ValueHelpSelect
-            value={drafts.delegate}
-            onChange={(value) => updateDraft('delegate', value)}
-            options={preferenceSuggestionOptions}
-            placeholder="Choose delegate"
-            searchPlaceholder="Search delegate suggestions"
-          />
-        </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Delegates:</label>
-          <textarea className="input" value={selected.delegates} onChange={(event) => updateSelected('delegates', event.target.value)} rows={4} />
-        </div>
-        <div />
-
-        <div className="mte-pref-field">
-          <label>Approver Email(s):</label>
-          <ValueHelpSelect
-            value={drafts.approver}
-            onChange={(value) => updateDraft('approver', value)}
-            options={preferenceSuggestionOptions}
-            placeholder="Choose approver"
-            searchPlaceholder="Search approver suggestions"
-          />
-        </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Approvers:</label>
-          <textarea className="input" value={selected.approvers} onChange={(event) => updateSelected('approvers', event.target.value)} rows={4} />
-        </div>
-        <div />
       </div>
-    </div>
+
+      <div style={S.infoBox}>
+        <p style={S.infoTitle}>Current Rule</p>
+        <p style={{ ...S.infoItem, marginBottom: 0 }}>
+          {accessState?.entry_deadline_label || 'Select an employee and fortnight to view the block rule.'}
+        </p>
+      </div>
+    </>
   );
 }
 
@@ -9783,7 +10016,9 @@ function TimesheetsContent({ user, navigationState }) {
 }
 
 export default function Timesheets({ user, adminView = false, navigationState = null }) {
-  const effectiveUser = adminView && user?.role !== 'Admin' ? { ...user, role: 'Admin' } : user;
+  const effectiveUser = adminView && user?.role !== 'Admin'
+    ? { ...user, originalRole: user?.role, role: 'Admin' }
+    : { ...user, originalRole: user?.role };
   return (
     <TimesheetUiProvider>
       <TimesheetsContent user={effectiveUser} navigationState={navigationState} />

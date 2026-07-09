@@ -360,6 +360,7 @@ def restore_leave_balance_for_cancelled_approval(leave):
         "optional": 2,
         "optionalTotal": 2,
         "lwp": 0,
+        "compOffUsed": 0,
     })
     leave_type = normalize_leave_type(leave.get("leave_type", "")).lower()
     days = get_leave_days_for_balance(leave)
@@ -372,6 +373,8 @@ def restore_leave_balance_for_cancelled_approval(leave):
         leave_balance[leave_type] = restored
     elif leave_type in ["lwp", "lop", "leave with loss of pay", "leave without pay"]:
         leave_balance["lwp"] = max(0, leave_balance.get("lwp", 0) - days)
+    elif leave_type == "compensatory off":
+        leave_balance["compOffUsed"] = max(0, leave_balance.get("compOffUsed", 0) - days)
 
     mongo.db.users.update_one(
         {"_id": leave["employee_id"]},
@@ -1170,7 +1173,8 @@ def apply_leave():
             "sick": 6, "sickTotal": 6,
             "planned": 12, "plannedTotal": 12,
             "optional": 2, "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
 
         leave_type_key = leave_type.lower()
@@ -1363,7 +1367,8 @@ def apply_backdated_leave():
             "sick": 6, "sickTotal": 6,
             "planned": 12, "plannedTotal": 12,
             "optional": 2, "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
 
         leave_type_key = leave_type.lower()
@@ -1411,6 +1416,8 @@ def apply_backdated_leave():
             leave_balance[leave_type_key] = leave_balance.get(leave_type_key, 0) - days
         elif leave_type_key in ["lwp", "lop", "leave without pay", "leave with loss of pay"]:
             leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
+        elif leave_type_key == "compensatory off":
+            leave_balance["compOffUsed"] = leave_balance.get("compOffUsed", 0) + days
 
         mongo.db.users.update_one(
             {"_id": ObjectId(employee_id)},
@@ -1871,7 +1878,8 @@ def get_leave_balance(employee_id):
             "plannedTotal": 0,
             "optional": 2,
             "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
         
         join_date = employee.get("dateOfJoining")
@@ -1887,6 +1895,8 @@ def get_leave_balance(employee_id):
             leave_balance["plannedTotal"] = 0
         if "optionalTotal" not in leave_balance:
             leave_balance["optionalTotal"] = 2
+        if "compOffUsed" not in leave_balance:
+            leave_balance["compOffUsed"] = 0
             
         return jsonify(leave_balance), 200
     except Exception as e:
@@ -2098,7 +2108,8 @@ def update_leave_status(leave_id):
                     "plannedTotal": 12,
                     "optional": 2,
                     "optionalTotal": 2,
-                    "lwp": 0
+                    "lwp": 0,
+                    "compOffUsed": 0,
                 })
 
                 leave_type = normalize_leave_type(leave_record.get("leave_type", "")).lower()
@@ -2112,6 +2123,8 @@ def update_leave_status(leave_id):
                         leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
                 elif leave_type in ["lwp", "lop"]:
                     leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
+                elif leave_type == "compensatory off":
+                    leave_balance["compOffUsed"] = leave_balance.get("compOffUsed", 0) + days
 
                 mongo.db.users.update_one(
                     {"_id": leave_record["employee_id"]},

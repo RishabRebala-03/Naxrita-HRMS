@@ -801,6 +801,12 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       note: "Unpaid leave recorded",
     });
 
+    cards.push({
+      label: "Comp Offs used",
+      value: balance.compOffUsed || 0,
+      note: "Compensatory off recorded",
+    });
+
     return cards;
   }, [balance, isIntern]);
 

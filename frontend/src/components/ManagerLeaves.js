@@ -400,6 +400,7 @@ const ManagerLeaves = ({ user, navigationState }) => {
         { label: "Planned leave", value: myBalance.planned || 0, note: `${myBalance.plannedTotal || 12} allocated` },
         { label: "Optional leave", value: myBalance.optional || 0, note: `${myBalance.optionalTotal || 2} allocated` },
         { label: "LOP used", value: myBalance.lwp || 0, note: "Unpaid leave recorded" },
+        { label: "Comp Offs used", value: myBalance.compOffUsed || 0, note: "Compensatory off recorded" },
       ]
     : [];
 

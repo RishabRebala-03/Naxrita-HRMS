@@ -516,6 +516,88 @@ def get_timesheet_period_bounds(timesheet):
         return None, None
 
 
+def get_period_bounds(period_start, period_end):
+    try:
+        start_key = normalize_date_key(period_start)
+        end_key = normalize_date_key(period_end)
+        if not start_key or not end_key:
+            return None, None
+        return (
+            datetime.strptime(start_key, "%Y-%m-%d").date(),
+            datetime.strptime(end_key, "%Y-%m-%d").date(),
+        )
+    except Exception:
+        return None, None
+
+
+def get_fortnight_deadline_date(period_start, period_end):
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not start_date or not end_date:
+        return None
+
+    if start_date.day == 1 and end_date.day == 15:
+        return start_date.replace(day=14)
+    if start_date.day == 16:
+        return start_date.replace(day=28)
+    return None
+
+
+def get_fortnight_deadline_label(period_start, period_end):
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not deadline or not start_date or not end_date:
+        return ""
+
+    if start_date.day == 1 and end_date.day == 15:
+        return "This first-fortnight timesheet is blocked from the 14th onward unless an admin unblocks it."
+    if start_date.day == 16:
+        return "This second-fortnight timesheet is blocked from the 28th onward unless an admin unblocks it."
+    return ""
+
+
+def get_timesheet_period_unlock(employee_id, period_start, period_end):
+    if not employee_id or not period_start or not period_end:
+        return None
+    return mongo.db.timesheet_period_unlocks.find_one({
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "is_active": True,
+    })
+
+
+def is_timesheet_period_unlocked(employee_id, period_start, period_end):
+    return bool(get_timesheet_period_unlock(employee_id, period_start, period_end))
+
+
+def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=None):
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    if not deadline:
+        return False
+
+    current_date = (reference or now_ist()).date()
+    if current_date < deadline:
+        return False
+
+    return not is_timesheet_period_unlocked(employee_id, period_start, period_end)
+
+
+def get_period_access_state(employee_id, period_start, period_end, reference=None):
+    unlock = get_timesheet_period_unlock(employee_id, period_start, period_end)
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    blocked = is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=reference)
+    return {
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "entry_deadline_date": deadline.strftime("%Y-%m-%d") if deadline else "",
+        "entry_deadline_label": get_fortnight_deadline_label(period_start, period_end),
+        "entry_blocked": blocked,
+        "unlock_active": bool(unlock),
+        "unlock_record": unlock,
+    }
+
+
 def is_approved_edit_window_open(timesheet, reference=None):
     """Allow approved employee edits only on the configured payroll correction days."""
     if not timesheet or timesheet.get("status") != "approved":
@@ -538,9 +620,9 @@ def is_correction_window_open_for_timesheet(timesheet, reference=None):
         return False
 
     if period_start.day == 1 and period_end.day == 15:
-        return current_date.day in (13, 14)
+        return current_date.day == 13
     if period_start.day == 16 and period_end.day >= 28:
-        return current_date.day in (27, 28)
+        return current_date.day == 27
 
     return False
 
@@ -550,21 +632,36 @@ def get_approved_edit_window_label(timesheet):
     if not period_start or not period_end:
         return ""
     if period_start.day == 1 and period_end.day == 15:
-        return "Editable on the 13th and 14th of the same month after approval."
+        return "Editable on the 13th of the same month after approval."
     if period_start.day == 16:
-        return "Editable on the 27th and 28th of the same month after approval."
+        return "Editable on the 27th of the same month after approval."
     return ""
 
 
 def is_employee_editable_timesheet(timesheet):
+    period_blocked = is_fortnight_entry_blocked(
+        timesheet.get("employee_id"),
+        timesheet.get("period_start"),
+        timesheet.get("period_end"),
+    )
     status = (timesheet or {}).get("status")
     if status in ("rejected_by_lead", "rejected_by_manager"):
-        return True
+        return not period_blocked
     if status == "draft":
         if timesheet.get("reopened_from_approved"):
-            return is_correction_window_open_for_timesheet(timesheet)
-        return True
-    return status == "approved" and is_correction_window_open_for_timesheet(timesheet)
+            return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
+                timesheet.get("employee_id"),
+                timesheet.get("period_start"),
+                timesheet.get("period_end"),
+            )
+        return not period_blocked
+    if status == "approved":
+        return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
+            timesheet.get("employee_id"),
+            timesheet.get("period_start"),
+            timesheet.get("period_end"),
+        )
+    return False
 
 
 def build_resubmission_update(ts, update_data):
@@ -587,9 +684,20 @@ def annotate_timesheet_editability(timesheet):
     if not isinstance(timesheet, dict):
         return timesheet
 
+    access_state = get_period_access_state(
+        timesheet.get("employee_id"),
+        timesheet.get("period_start"),
+        timesheet.get("period_end"),
+    )
     timesheet["approved_edit_window_open"] = is_approved_edit_window_open(timesheet)
     timesheet["approved_edit_window_label"] = get_approved_edit_window_label(timesheet)
     timesheet["is_employee_editable"] = is_employee_editable_timesheet(timesheet)
+    timesheet["period_entry_blocked"] = access_state["entry_blocked"]
+    timesheet["period_entry_deadline_date"] = access_state["entry_deadline_date"]
+    timesheet["period_entry_deadline_label"] = access_state["entry_deadline_label"]
+    timesheet["period_unlock_active"] = access_state["unlock_active"]
+    if access_state["unlock_record"]:
+        timesheet["period_unlock_record"] = access_state["unlock_record"]
     return timesheet
 
 
@@ -1401,6 +1509,10 @@ def create_timesheet():
             "period_start": period_start,
             "period_end":   period_end,
         })
+        if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
+            return jsonify({
+                "error": get_fortnight_deadline_label(period_start, period_end)
+            }), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
             return jsonify({
                 "error": "This timesheet has already been approved and is locked."
@@ -1663,6 +1775,8 @@ def save_timesheet_draft():
             "period_start": period_start,
             "period_end": period_end,
         })
+        if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
+            return jsonify({"error": get_fortnight_deadline_label(period_start, period_end)}), 400
         if existing and existing.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be saved as drafts"}), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
@@ -1756,6 +1870,8 @@ def submit_timesheet(timesheet_id):
         ts = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
+        if is_fortnight_entry_blocked(ts.get("employee_id"), ts.get("period_start"), ts.get("period_end")):
+            return jsonify({"error": get_fortnight_deadline_label(ts.get("period_start"), ts.get("period_end"))}), 400
         if ts.get("status") == "approved" and not is_approved_edit_window_open(ts):
             return jsonify({"error": "Timesheet is already approved"}), 400
         if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(ts):
@@ -2393,6 +2509,100 @@ def get_timesheet_preferences():
         return jsonify({"error": str(e)}), 500
 
 
+@timesheet_bp.route("/period-access", methods=["GET"])
+def get_timesheet_period_access():
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        employee_id = request.args.get("employee_id", "").strip()
+        period_start = request.args.get("period_start", "").strip()
+        period_end = request.args.get("period_end", "").strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        employee_obj_id = ObjectId(employee_id)
+        if not (has_admin_menu_access(requester, "timesheets") or str(requester.get("_id")) == str(employee_obj_id)):
+            return jsonify({"error": "You do not have permission to view this fortnight"}), 403
+
+        access_state = get_period_access_state(employee_obj_id, period_start, period_end)
+        unlock_record = access_state.pop("unlock_record", None)
+        payload = {
+            **access_state,
+            "employee_id": str(employee_obj_id),
+        }
+        if unlock_record:
+            payload["unlock_record"] = serialize_all(unlock_record)
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"❌ Error fetching period access: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/period-unlocks", methods=["PUT"])
+def save_timesheet_period_unlock():
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+        if requester.get("role") != "Admin":
+            return jsonify({"error": "Only Admin users can manage blocked fortnights"}), 403
+
+        data = request.get_json() or {}
+        employee_id = str(data.get("employee_id", "")).strip()
+        period_start = str(data.get("period_start", "")).strip()
+        period_end = str(data.get("period_end", "")).strip()
+        unlocked = bool(data.get("unlocked"))
+        notes = str(data.get("notes", "")).strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
+        if not employee:
+            return jsonify({"error": "Employee not found"}), 404
+
+        update_doc = {
+            "employee_id": employee["_id"],
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+            "period_start": period_start,
+            "period_end": period_end,
+            "is_active": unlocked,
+            "notes": notes,
+            "updated_at": datetime.utcnow(),
+            "updated_by_admin_id": requester.get("_id"),
+            "updated_by_admin_name": requester.get("name", ""),
+        }
+        if unlocked:
+            update_doc["unlocked_at"] = datetime.utcnow()
+        else:
+            update_doc["relocked_at"] = datetime.utcnow()
+
+        mongo.db.timesheet_period_unlocks.update_one(
+            {
+                "employee_id": employee["_id"],
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            {"$set": update_doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True,
+        )
+
+        access_state = get_period_access_state(employee["_id"], period_start, period_end)
+        unlock_record = access_state.pop("unlock_record", None)
+        payload = {
+            **access_state,
+            "employee_id": str(employee["_id"]),
+        }
+        if unlock_record:
+            payload["unlock_record"] = serialize_all(unlock_record)
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"❌ Error saving period unlock: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @timesheet_bp.route("/preferences", methods=["PUT"])
 def save_timesheet_preferences():
     try:
@@ -2620,6 +2830,7 @@ def get_timesheet(timesheet_id):
             return jsonify({"error": "Timesheet not found"}), 404
         ts = refresh_timesheet_for_read(ts)
         ts = enrich_timesheet_with_employee_assignments(ts)
+        ts = annotate_timesheet_editability(ts)
         return jsonify(serialize_all(ts)), 200
 
     except Exception as e:
