@@ -22,6 +22,43 @@ leave_bp = Blueprint("leave_bp", __name__)
 LEAVE_NOTIFICATION_REMINDER_HOURS = 24
 
 
+def serialize_all(obj):
+    """Recursively convert Mongo values into JSON-safe values."""
+    if isinstance(obj, list):
+        return [serialize_all(item) for item in obj]
+    if isinstance(obj, dict):
+        return {key: serialize_all(value) for key, value in obj.items()}
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
+
+
+def enrich_leave_with_employee_details(leave):
+    employee_id = leave.get("employee_id")
+    employee_obj_id = employee_id if isinstance(employee_id, ObjectId) else None
+
+    if not employee_obj_id and isinstance(employee_id, str) and ObjectId.is_valid(employee_id):
+        employee_obj_id = ObjectId(employee_id)
+
+    if not employee_obj_id:
+        leave.setdefault("employee_name", "Unknown Employee")
+        return leave
+
+    employee = mongo.db.users.find_one({"_id": employee_obj_id})
+    if not employee:
+        leave.setdefault("employee_name", "Unknown Employee")
+        return leave
+
+    leave["employee_name"] = leave.get("employee_name") or employee.get("name", "Unknown Employee")
+    leave["employee_email"] = leave.get("employee_email") or employee.get("email", "")
+    leave["employee_designation"] = leave.get("employee_designation") or employee.get("designation", "")
+    leave["employee_department"] = leave.get("employee_department") or employee.get("department", "")
+    leave["employee_dateOfBirth"] = employee.get("dateOfBirth")
+    return leave
+
+
 def remove_tea_coffee_orders_for_leave(employee_id, start_date, end_date):
     """Delete tea/coffee orders that fall within an approved leave range."""
     if not employee_id or not start_date or not end_date:
@@ -178,7 +215,14 @@ def normalize_leave_type(leave_type):
     normalized = leave_type.strip()
     if normalized.lower() == "lop":
         return "LWP"
+    if normalized.lower() in {"comp off", "compensatory off"}:
+        return "Compensatory Off"
     return normalized
+
+
+def leave_type_requires_reason(leave_type):
+    normalized = normalize_leave_type(leave_type)
+    return isinstance(normalized, str) and normalized.lower() == "compensatory off"
 
 
 def normalize_half_day_period(period):
@@ -316,6 +360,7 @@ def restore_leave_balance_for_cancelled_approval(leave):
         "optional": 2,
         "optionalTotal": 2,
         "lwp": 0,
+        "compOffUsed": 0,
     })
     leave_type = normalize_leave_type(leave.get("leave_type", "")).lower()
     days = get_leave_days_for_balance(leave)
@@ -328,6 +373,8 @@ def restore_leave_balance_for_cancelled_approval(leave):
         leave_balance[leave_type] = restored
     elif leave_type in ["lwp", "lop", "leave with loss of pay", "leave without pay"]:
         leave_balance["lwp"] = max(0, leave_balance.get("lwp", 0) - days)
+    elif leave_type == "compensatory off":
+        leave_balance["compOffUsed"] = max(0, leave_balance.get("compOffUsed", 0) - days)
 
     mongo.db.users.update_one(
         {"_id": leave["employee_id"]},
@@ -659,6 +706,8 @@ def get_all_leaves():
         
         # ✅ CRITICAL: Serialize ALL ObjectIds and datetime objects
         for leave in leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -720,7 +769,7 @@ def get_all_leaves():
                         entry['approver_id'] = str(entry['approver_id'])
         
         print(f"✅ Found {len(leaves)} total leaves (all serialized)")
-        return jsonify(leaves), 200
+        return jsonify(serialize_all(leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching all leaves: {str(e)}")
@@ -772,6 +821,8 @@ def get_admin_pending_requests():
         
         # ✅ Serialize ALL fields
         for leave in admin_pending:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -827,7 +878,7 @@ def get_admin_pending_requests():
         
         print(f"✅ Returning {len(admin_pending)} serialized admin pending leaves")
         print(f"{'='*60}\n")
-        return jsonify(admin_pending), 200
+        return jsonify(serialize_all(admin_pending)), 200
         
     except Exception as e:
         print(f"\n{'='*60}")
@@ -874,6 +925,8 @@ def get_leave_history(employee_id):
         
         # ✅ FIX 4: Comprehensive serialization
         for leave in leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             if '_id' in leave and isinstance(leave['_id'], ObjectId):
                 leave['_id'] = str(leave['_id'])
@@ -926,7 +979,7 @@ def get_leave_history(employee_id):
                         entry['to_approver'] = str(entry['to_approver'])
         
         print(f"✅ Successfully serialized {len(leaves)} leave records")
-        return jsonify(leaves), 200
+        return jsonify(serialize_all(leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching leave history: {str(e)}")
@@ -953,6 +1006,8 @@ def apply_leave():
 
         if not all([employee_id, leave_type, start_date, end_date]):
             return jsonify({"error": "Missing required fields"}), 400
+        if leave_type_requires_reason(leave_type) and not str(reason).strip():
+            return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
         requester = resolve_requester()
         if requester and str(requester.get("_id")) != str(employee_id):
@@ -967,10 +1022,10 @@ def apply_leave():
         # 🔹 NEW: Intern leave type restriction
         employment_type = employee.get("employment_type", "Employee")
         if employment_type == "Intern":
-            # Interns can apply for Sick leave, LWP, or Early Logout
-            if leave_type.lower() not in ["sick", "lwp", "early logout"]:
+            # Interns can apply for Sick leave, LWP, Compensatory Off, or Early Logout
+            if leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
                 return jsonify({
-                    "error": f"Interns can only apply for Sick Leave, Leave Without Pay, or Early Logout. {leave_type} is not allowed."
+                    "error": f"Interns can only apply for Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {leave_type} is not allowed."
                 }), 403
             
             print(f"✅ INTERN {employee.get('name')} applying for {leave_type} - validation passed")
@@ -1118,7 +1173,8 @@ def apply_leave():
             "sick": 6, "sickTotal": 6,
             "planned": 12, "plannedTotal": 12,
             "optional": 2, "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
 
         leave_type_key = leave_type.lower()
@@ -1226,15 +1282,17 @@ def apply_backdated_leave():
 
         if not all([employee_id, leave_type, start_date, end_date, recorded_by_name]):
             return jsonify({"error": "Employee, leave type, dates, and recorded by name are mandatory"}), 400
+        if leave_type_requires_reason(leave_type) and not reason:
+            return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
         employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
         if not employee:
             return jsonify({"error": "Employee not found"}), 404
 
         employment_type = employee.get("employment_type", "Employee")
-        if employment_type == "Intern" and leave_type.lower() not in ["sick", "lwp", "early logout"]:
+        if employment_type == "Intern" and leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
             return jsonify({
-                "error": f"Interns can only apply for Sick Leave, Leave Without Pay, or Early Logout. {leave_type} is not allowed."
+                "error": f"Interns can only apply for Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {leave_type} is not allowed."
             }), 403
 
         start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -1309,7 +1367,8 @@ def apply_backdated_leave():
             "sick": 6, "sickTotal": 6,
             "planned": 12, "plannedTotal": 12,
             "optional": 2, "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
 
         leave_type_key = leave_type.lower()
@@ -1357,6 +1416,8 @@ def apply_backdated_leave():
             leave_balance[leave_type_key] = leave_balance.get(leave_type_key, 0) - days
         elif leave_type_key in ["lwp", "lop", "leave without pay", "leave with loss of pay"]:
             leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
+        elif leave_type_key == "compensatory off":
+            leave_balance["compOffUsed"] = leave_balance.get("compOffUsed", 0) + days
 
         mongo.db.users.update_one(
             {"_id": ObjectId(employee_id)},
@@ -1444,10 +1505,13 @@ def update_leave(leave_id):
 
     # ✅ LOOPHOLE FIX: Interns cannot switch to restricted leave types via edit
     if employment_type == "Intern":
-        if new_leave_type.lower() not in ["sick", "lwp", "early logout"]:
+        if new_leave_type.lower() not in ["sick", "lwp", "compensatory off", "early logout"]:
             return jsonify({
-                "error": f"Interns can only have Sick Leave, Leave Without Pay, or Early Logout. {new_leave_type} is not allowed."
+                "error": f"Interns can only have Sick Leave, Leave Without Pay, Compensatory Off, or Early Logout. {new_leave_type} is not allowed."
             }), 403
+
+    if leave_type_requires_reason(new_leave_type) and not str(data.get("reason", "")).strip():
+        return jsonify({"error": "Reason is mandatory for Compensatory Off."}), 400
 
     start = datetime.strptime(data["start_date"], "%Y-%m-%d")
     end = datetime.strptime(data["end_date"], "%Y-%m-%d")
@@ -1814,7 +1878,8 @@ def get_leave_balance(employee_id):
             "plannedTotal": 0,
             "optional": 2,
             "optionalTotal": 2,
-            "lwp": 0
+            "lwp": 0,
+            "compOffUsed": 0,
         })
         
         join_date = employee.get("dateOfJoining")
@@ -1830,6 +1895,8 @@ def get_leave_balance(employee_id):
             leave_balance["plannedTotal"] = 0
         if "optionalTotal" not in leave_balance:
             leave_balance["optionalTotal"] = 2
+        if "compOffUsed" not in leave_balance:
+            leave_balance["compOffUsed"] = 0
             
         return jsonify(leave_balance), 200
     except Exception as e:
@@ -1855,6 +1922,8 @@ def get_pending_requests(user_email):
         }).sort("applied_on", -1))
 
         for leave in pending_leaves:
+            enrich_leave_with_employee_details(leave)
+
             # Convert _id to string
             leave['_id'] = str(leave['_id'])
             
@@ -1903,7 +1972,7 @@ def get_pending_requests(user_email):
                         entry['to_approver'] = str(entry['to_approver'])
 
         print(f"✅ Returning {len(pending_leaves)} pending requests for {user_email}")
-        return jsonify(pending_leaves), 200
+        return jsonify(serialize_all(pending_leaves)), 200
         
     except Exception as e:
         print(f"❌ Error fetching pending requests: {str(e)}")
@@ -2039,7 +2108,8 @@ def update_leave_status(leave_id):
                     "plannedTotal": 12,
                     "optional": 2,
                     "optionalTotal": 2,
-                    "lwp": 0
+                    "lwp": 0,
+                    "compOffUsed": 0,
                 })
 
                 leave_type = normalize_leave_type(leave_record.get("leave_type", "")).lower()
@@ -2053,6 +2123,8 @@ def update_leave_status(leave_id):
                         leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
                 elif leave_type in ["lwp", "lop"]:
                     leave_balance["lwp"] = leave_balance.get("lwp", 0) + days
+                elif leave_type == "compensatory off":
+                    leave_balance["compOffUsed"] = leave_balance.get("compOffUsed", 0) + days
 
                 mongo.db.users.update_one(
                     {"_id": leave_record["employee_id"]},

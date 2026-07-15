@@ -3,7 +3,7 @@ import { Children, createContext, useContext, useState, useMemo, useEffect, useC
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval,
   parseISO, subMonths, startOfQuarter, endOfQuarter, subQuarters,
-  startOfYear, endOfYear, subYears,
+  startOfYear, endOfYear, subYears, addDays,
 } from 'date-fns';
 import {
   Plus, Trash2, AlertCircle,
@@ -11,7 +11,7 @@ import {
   Download, TrendingUp, BarChart3, UserCheck,
 	  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
   LayoutGrid, ChevronLeft, ChevronRight, Upload, Paperclip,
-  Save,
+  Save, Search,
 } from 'lucide-react';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
@@ -27,6 +27,7 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
   : 'http://localhost:5000/api';
 const DAILY_WORK_HOUR_LIMIT = 9;
+const EXPENSES_FEATURE_ENABLED = true;
 
 // ─── Design tokens (matches leave/user colour system exactly) ────────────────
 const C = {
@@ -439,7 +440,7 @@ const STATUS_STYLES = {
 const STATUS_LABELS = {
   draft:               'Draft',
   pending_lead:        'Pending Approval',
-  pending_manager:     'Pending Manager',
+  pending_manager:     'Pending Escalated Approval',
   approved:            'Approved',
   rejected_by_lead:    'Rejected',
   rejected_by_manager: 'Rejected by Manager',
@@ -761,6 +762,7 @@ const LEAVE_TYPE_DISPLAY_CODE_MAP = {
   lop: 'LWP',
   'leave without pay': 'LWP',
   'leave with loss of pay': 'LWP',
+  'compensatory off': 'CO',
 };
 
 const getLeaveTypeDisplayCode = (leaveType) => {
@@ -1829,6 +1831,9 @@ function TimesheetPage({
   const [approvedEditWindowOpen, setApprovedEditWindowOpen] = useState(false);
   const [approvedEditWindowLabel, setApprovedEditWindowLabel] = useState('');
   const [isEmployeeEditable, setIsEmployeeEditable] = useState(true);
+  const [periodEntryBlocked, setPeriodEntryBlocked] = useState(false);
+  const [periodEntryDeadlineLabel, setPeriodEntryDeadlineLabel] = useState('');
+  const [periodUnlockActive, setPeriodUnlockActive] = useState(false);
   const [hasSavedCurrentDraft, setHasSavedCurrentDraft] = useState(false);
   const [sheetLoaded, setSheetLoaded]           = useState(false);
   // FIX 2: reload trigger — incrementing forces the timesheet data useEffect to re-run
@@ -1849,6 +1854,9 @@ function TimesheetPage({
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
     setIsEmployeeEditable(true);
+    setPeriodEntryBlocked(false);
+    setPeriodEntryDeadlineLabel('');
+    setPeriodUnlockActive(false);
     setHasSavedCurrentDraft(false);
     (onSelectedPeriodChange ?? setInternalSelectedPeriod)(nextPeriod);
   };
@@ -1870,6 +1878,9 @@ function TimesheetPage({
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
     setIsEmployeeEditable(true);
+    setPeriodEntryBlocked(false);
+    setPeriodEntryDeadlineLabel('');
+    setPeriodUnlockActive(false);
   };
   const assignmentMeta = useMemo(() => getTimesheetAssignmentMeta(profile), [profile]);
 
@@ -2030,8 +2041,14 @@ function TimesheetPage({
     if (hasLocalTimesheetEditsRef.current) return;
 
     setSheetLoaded(false);
-    fetchAPI(`/timesheets/employee/${userId}`)
-      .then((existing) => {
+    Promise.all([
+      fetchAPI(`/timesheets/employee/${userId}`),
+      fetchAPI(`/timesheets/period-access?employee_id=${userId}&period_start=${dates[0]}&period_end=${dates[dates.length - 1]}`),
+    ])
+      .then(([existing, access]) => {
+        setPeriodEntryBlocked(Boolean(access?.entry_blocked));
+        setPeriodEntryDeadlineLabel(access?.entry_deadline_label || '');
+        setPeriodUnlockActive(Boolean(access?.unlock_active));
         const match = Array.isArray(existing)
           ? existing.find((ts) =>
               ts.period_start === dates[0] &&
@@ -2056,6 +2073,9 @@ function TimesheetPage({
           setApprovedEditWindowOpen(Boolean(match.approved_edit_window_open));
           setApprovedEditWindowLabel(match.approved_edit_window_label || '');
           setIsEmployeeEditable(match.is_employee_editable !== false);
+          setPeriodEntryBlocked(Boolean(match.period_entry_blocked));
+          setPeriodEntryDeadlineLabel(match.period_entry_deadline_label || access?.entry_deadline_label || '');
+          setPeriodUnlockActive(Boolean(match.period_unlock_active));
           setDailyOvertime(match.daily_overtime || {});
           setHolidayPayout(match.holiday_payout || {});
           setWorkScheduleByDate(getTimesheetWorkScheduleByDate(match, dates));
@@ -2128,7 +2148,7 @@ function TimesheetPage({
           setTimesheetStatus('draft');
           setApprovedEditWindowOpen(false);
           setApprovedEditWindowLabel('');
-          setIsEmployeeEditable(true);
+          setIsEmployeeEditable(access?.entry_blocked !== true);
           setDailyOvertime({});
           setHolidayPayout({});
           setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2141,6 +2161,9 @@ function TimesheetPage({
         setApprovedEditWindowOpen(false);
         setApprovedEditWindowLabel('');
         setIsEmployeeEditable(true);
+        setPeriodEntryBlocked(false);
+        setPeriodEntryDeadlineLabel('');
+        setPeriodUnlockActive(false);
         setDailyOvertime({});
         setHolidayPayout({});
         setWorkScheduleByDate(buildDefaultWorkSchedule(dates));
@@ -2224,7 +2247,7 @@ function TimesheetPage({
   }, [rows, selectedRowId]);
 
   const canEditApprovedTimesheet = timesheetStatus === 'approved' && approvedEditWindowOpen;
-  const isReadOnly   = !isEmployeeEditable || timesheetStatus === 'pending_lead' || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
+  const isReadOnly   = !isEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
   const canSubmit    = isEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
   const errors       = validationErrors;
   const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
@@ -2582,17 +2605,17 @@ function TimesheetPage({
     const isPending  = timesheetStatus === 'pending_lead';
     const isApproved = timesheetStatus === 'approved';
     const isRejected = timesheetStatus.startsWith('rejected');
-    const isLegacyPending = timesheetStatus === 'pending_manager';
-    if (!isPending && !isApproved && !isRejected && !isLegacyPending) return null;
+    const isEscalatedPending = timesheetStatus === 'pending_manager';
+    if (!isPending && !isApproved && !isRejected && !isEscalatedPending) return null;
 
-    const bg    = (isPending || isLegacyPending) ? C.purpleLight : isApproved ? C.greenLight : C.redLight;
-    const brd   = (isPending || isLegacyPending) ? C.purpleBorder : isApproved ? C.greenBorder : C.redBorder;
-    const color = (isPending || isLegacyPending) ? C.purple : isApproved ? C.green : C.red;
+    const bg    = (isPending || isEscalatedPending) ? C.purpleLight : isApproved ? C.greenLight : C.redLight;
+    const brd   = (isPending || isEscalatedPending) ? C.purpleBorder : isApproved ? C.greenBorder : C.redBorder;
+    const color = (isPending || isEscalatedPending) ? C.purple : isApproved ? C.green : C.red;
 
     const msg = isPending
-      ? (<><strong>Pending Approval:</strong> Your timesheet is awaiting review from your reporting lead.</>)
-      : isLegacyPending
-      ? (<><strong>Pending Manager Approval:</strong> Awaiting final manager sign-off.</>)
+      ? (<><strong>Pending Approval:</strong> Your timesheet is awaiting review from your assigned approver.</>)
+      : isEscalatedPending
+      ? (<><strong>Pending Escalated Approval:</strong> Your timesheet has moved to the next approver in the escalation flow.</>)
       : isApproved
       ? canEditApprovedTimesheet
         ? (
@@ -2709,9 +2732,9 @@ function TimesheetPage({
         </div>
       </div>
 
-      {timesheetStatus === 'pending_lead' ? (
+      {['pending_lead', 'pending_manager'].includes(timesheetStatus) ? (
         <div className="mte-inline-banner">
-          <span>Pending with your reporting lead.</span>
+          <span>Pending with your assigned approver.</span>
           <button type="button" className="mte-inline-banner-button" onClick={handleRecall} disabled={loading}>
             {loading ? 'Updating' : 'Edit Timesheet'}
           </button>
@@ -2724,6 +2747,16 @@ function TimesheetPage({
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
           </button>
+        </div>
+      ) : null}
+
+      {!canEditApprovedTimesheet && periodEntryBlocked ? (
+        <div className="mte-inline-banner">
+          <span>
+            {periodUnlockActive
+              ? 'This fortnight was unblocked by an admin and can be edited again.'
+              : (periodEntryDeadlineLabel || 'This fortnight is blocked. Contact an admin to unblock it.')}
+          </span>
         </div>
       ) : null}
 
@@ -3596,10 +3629,10 @@ function Approvals({ user }) {
               >
                   <option value="all">All Statuses</option>
                   <option value="pending_lead">Pending Approval</option>
-                  <option value="pending_manager">Pending Manager (Legacy)</option>
+                  <option value="pending_manager">Pending Escalated Approval</option>
                   <option value="approved">Approved</option>
                   <option value="rejected_by_lead">Rejected</option>
-                  <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
+                  <option value="rejected_by_manager">Rejected by Escalated Approver</option>
               </SelectWrap>
               <SelectWrap
                 value={typeFilter}
@@ -4826,10 +4859,10 @@ function TeamTimesheets({ user }) {
               >
                 <option value="all">All Statuses</option>
                 <option value="pending_lead">Pending Approval</option>
-                <option value="pending_manager">Pending Manager (Legacy)</option>
+                <option value="pending_manager">Pending Escalated Approval</option>
                 <option value="approved">Approved</option>
                 <option value="rejected_by_lead">Rejected</option>
-                <option value="rejected_by_manager">Rejected by Manager (Legacy)</option>
+                <option value="rejected_by_manager">Rejected by Escalated Approver</option>
               </SelectWrap>
               <SelectWrap
                 value={typeFilter}
@@ -4973,6 +5006,11 @@ const getReportingLeadLabel = (timesheet) =>
   timesheet.reporting_lead_name
   || getLeadApprovalMeta(timesheet).name
   || 'Unassigned lead';
+
+const getCurrentApproverLabel = (timesheet) =>
+  timesheet.current_approver_name
+  || timesheet.current_approver_email
+  || getReportingLeadLabel(timesheet);
 
 const getTimesheetFortnightMeta = (timesheet) => {
   const start = timesheet?.period_start ? new Date(timesheet.period_start) : null;
@@ -5180,7 +5218,10 @@ function AdminTimesheets() {
     });
     if (!shouldApprove) return;
     try {
-      await fetchAPI(`/timesheets/approve/lead/${timesheet._id || timesheet.id}`, {
+      const endpoint = timesheet.status === 'pending_manager'
+        ? `/timesheets/approve/manager/${timesheet._id || timesheet.id}`
+        : `/timesheets/approve/lead/${timesheet._id || timesheet.id}`;
+      await fetchAPI(endpoint, {
         method: 'PUT',
         body: JSON.stringify({ approved_by: userId, approver_name: approverName, comments: '' }),
       });
@@ -5219,7 +5260,10 @@ function AdminTimesheets() {
     });
     if (!rejectionReason?.trim()) return;
     try {
-      await fetchAPI(`/timesheets/reject/lead/${timesheet._id || timesheet.id}`, {
+      const endpoint = timesheet.status === 'pending_manager'
+        ? `/timesheets/reject/manager/${timesheet._id || timesheet.id}`
+        : `/timesheets/reject/lead/${timesheet._id || timesheet.id}`;
+      await fetchAPI(endpoint, {
         method: 'PUT',
         body: JSON.stringify({ rejected_by: userId, approver_name: approverName, rejection_reason: rejectionReason.trim() }),
       });
@@ -5296,7 +5340,7 @@ function AdminTimesheets() {
                       </>
                     ) : (
                       <span style={{ color: C.textMid }}>
-                        {ts.status === 'pending_lead' ? `Awaiting ${getReportingLeadLabel(ts)}` : '—'}
+                        {ts.status?.startsWith('pending') ? `Awaiting ${getCurrentApproverLabel(ts)}` : '—'}
                       </span>
                     )}
                   </td>
@@ -5368,7 +5412,7 @@ function AdminTimesheets() {
 	                      >
 	                        <Download size={15} />
 	                      </button>
-                        {ts.status === 'pending_lead' && (
+                        {['pending_lead', 'pending_manager'].includes(ts.status) && (
                           <>
                             <button
                               onClick={() => handleAdminApprove(ts)}
@@ -6851,38 +6895,93 @@ function AssignedChargeCodesPanel({ user }) {
 }
 
 function ExpensesPanel({ user }) {
-  const { notify, confirmAction } = useTimesheetUi();
+  const { notify, confirmAction, promptAction } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
   const userId = getUserId(user);
   const today = format(new Date(), 'yyyy-MM-dd');
   const fileInputRef = useRef(null);
+  const calendarDateInputRef = useRef(null);
   const expenseCategories = [
-    'Travel',
-    'Meals',
-    'Lodging',
-    'Laptop / Desktop Hardware',
-    'Software Subscription',
-    'Cloud / Hosting',
-    'Internet / Mobile Reimbursement',
-    'Office Supplies',
-    'IT Accessories',
-    'Training / Certification',
-    'Client Meeting',
-    'Courier / Shipping',
-    'Parking / Cab',
+    'Accommodation - Apartment',
+    'Accommodation - Hotel',
+    'Car Expense (Parking, Toll, Fuel)',
+    'Meals and Entertainment',
+    'Other Allowances',
+    'Other Expense',
+    'Per Diem - International',
+    'Per Diem - Local',
+    'Startup Allowance',
+    'Telecom/Internet',
+    'Travel - Public, Limo, & Other',
+    'Travel - Rail',
+  ];
+  const travelReasons = [
+    'Home <-> Airport/Train',
+    'Home <-> Home Office',
+    'Home <-> Client Site/Other Office',
+    'Client Site <-> Airport/Train',
+    'Client Site <-> Client Site',
     'Other',
   ];
+  const travelTypes = ['Car Rental', 'Public Transportation', 'Taxi', 'Other'];
+  const perDiemPurposeOptions = ['Business', 'Training'];
+  const perDiemTypeOptions = ['Breakfast', 'Lunch', 'Dinner', 'Full Day', 'Other'];
+  const perDiemMealOptions = ['-- Select one --', 'Breakfast', 'Lunch', 'Dinner', 'None'];
+  const hotelChains = [
+    '21c Hotels',
+    'Accor Hotels',
+    'AC Hotels',
+    'Adagio',
+    'Aloft',
+    'Andaz',
+    'Ascott Hotels',
+    'Autograph Collection',
+    'Best Western',
+  ];
   const [expenses, setExpenses] = useState([]);
+  const [expenseChargeCodes, setExpenseChargeCodes] = useState([]);
+  const [selectedExpenseDate, setSelectedExpenseDate] = useState(today);
+  const [selectedExpenseCategory, setSelectedExpenseCategory] = useState('');
+  const [isExpenseCategoryOpen, setIsExpenseCategoryOpen] = useState(false);
+  const [expenseCategorySearch, setExpenseCategorySearch] = useState('');
   const [form, setForm] = useState({
     expense_date: today,
-    category: 'Travel',
+    category: 'Travel - Public, Limo, & Other',
     client_code: '',
     amount: '',
     description: '',
+    country: 'India',
+    currency: 'INR',
+    conversion_rate: '1',
+    from_date: '',
+    to_date: '',
+    reason: '',
+    expense_type: '',
+    trip_type: 'One-Way',
+    hotel_chain: '',
+    invoice_number: '',
+    vendor_gst_number: '',
+    sgst: '',
+    cgst_igst: '',
+    purpose: '',
+    meals_provided: '',
+    daily_base_per_diem: '',
+    receipt_total: '',
+    miscellaneous_expenses: '',
+    comments: '',
+    public_official_over_25: false,
+    no_vendor_gst_number: false,
     documentFile: null,
   });
   const [editingId, setEditingId] = useState('');
   const [loading, setLoading] = useState(false);
+  const blankExpenseApprovalModal = {
+    show: false,
+    expense: null,
+    approverName: user?.name || user?.email || '',
+    approvedExpenseDate: '',
+  };
+  const [expenseApprovalModal, setExpenseApprovalModal] = useState(blankExpenseApprovalModal);
   const [expenseFilters, setExpenseFilters] = useState({
     search: '',
     department: 'all',
@@ -6906,12 +7005,91 @@ function ExpensesPanel({ user }) {
   }, [isAdmin, notify, userId, user?.role]);
 
   useEffect(() => {
+    if (!EXPENSES_FEATURE_ENABLED) return undefined;
     loadExpenses();
   }, [loadExpenses]);
 
+  useEffect(() => {
+    if (!EXPENSES_FEATURE_ENABLED || !userId) return;
+    const endpoint = isAdmin
+      ? '/charge_codes/all?active_only=true'
+      : `/charge_codes/employee/${userId}?active_only=true&include_existing=true`;
+    fetchAPI(endpoint)
+      .then((data) => setExpenseChargeCodes(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        console.error('Expense charge codes error:', err);
+        setExpenseChargeCodes([]);
+      });
+  }, [isAdmin, userId]);
+
+  const handleSelectedExpenseDateChange = (dateValue) => {
+    if (!dateValue) return;
+    setSelectedExpenseDate(dateValue);
+    setForm((previous) => ({ ...previous, expense_date: dateValue }));
+  };
+
+  const moveSelectedExpenseDate = (days) => {
+    const nextDate = format(addDays(parseISO(selectedExpenseDate || today), days), 'yyyy-MM-dd');
+    handleSelectedExpenseDateChange(nextDate);
+  };
+
+  const openExpenseDatePicker = () => {
+    const input = calendarDateInputRef.current;
+    if (!input) return;
+    if (typeof input.showPicker === 'function') {
+      input.showPicker();
+      return;
+    }
+    input.focus();
+    input.click();
+  };
+
   const resetForm = () => {
     setEditingId('');
-    setForm({ expense_date: today, category: 'Travel', client_code: '', amount: '', description: '', documentFile: null });
+    setForm({
+      expense_date: selectedExpenseDate,
+      category: selectedExpenseCategory || 'Travel - Public, Limo, & Other',
+      client_code: '',
+      amount: '',
+      description: '',
+      country: 'India',
+      currency: 'INR',
+      conversion_rate: '1',
+      from_date: '',
+      to_date: '',
+      reason: '',
+      expense_type: '',
+      trip_type: 'One-Way',
+      hotel_chain: '',
+      invoice_number: '',
+      vendor_gst_number: '',
+      sgst: '',
+      cgst_igst: '',
+      purpose: '',
+      meals_provided: '',
+      daily_base_per_diem: '',
+      receipt_total: '',
+      miscellaneous_expenses: '',
+      comments: '',
+      public_official_over_25: false,
+      no_vendor_gst_number: false,
+      documentFile: null,
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const openEmployeeExpenseCategory = (category) => {
+    setSelectedExpenseCategory(category);
+    setIsExpenseCategoryOpen(false);
+    setExpenseCategorySearch('');
+    setEditingId('');
+    setForm((previous) => ({
+      ...previous,
+      category,
+      expense_date: selectedExpenseDate,
+      description: '',
+      documentFile: null,
+    }));
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -6920,7 +7098,11 @@ function ExpensesPanel({ user }) {
       notify('User not loaded properly.', 'error');
       return;
     }
-    if (!form.expense_date || !form.category || !form.amount || Number(form.amount) <= 0) {
+    const perDiemTotalAmount = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
+    const saveAmount = selectedExpenseCategory === 'Per Diem - Local'
+      ? (perDiemTotalAmount || Number(form.amount || 0))
+      : Number(form.amount || 0);
+    if (!form.expense_date || !form.category || saveAmount <= 0) {
       notify('Enter date, category, and an amount greater than zero.', 'warning');
       return;
     }
@@ -6932,8 +7114,29 @@ function ExpensesPanel({ user }) {
         expense_date: form.expense_date,
         category: form.category,
         client_code: form.client_code.trim(),
-        amount: Number(form.amount),
+        amount: saveAmount,
         description: form.description,
+        country: form.country,
+        currency: form.currency,
+        conversion_rate: form.conversion_rate,
+        from_date: form.from_date,
+        to_date: form.to_date,
+        reason: form.reason,
+        expense_type: form.expense_type,
+        trip_type: form.trip_type,
+        hotel_chain: form.hotel_chain,
+        invoice_number: form.invoice_number,
+        vendor_gst_number: form.vendor_gst_number,
+        sgst: form.sgst,
+        cgst_igst: form.cgst_igst,
+        purpose: form.purpose,
+        meals_provided: form.meals_provided,
+        daily_base_per_diem: form.daily_base_per_diem,
+        receipt_total: form.receipt_total,
+        miscellaneous_expenses: form.miscellaneous_expenses,
+        comments: form.comments,
+        public_official_over_25: form.public_official_over_25,
+        no_vendor_gst_number: form.no_vendor_gst_number,
       };
       let savedExpense = null;
       if (editingId) {
@@ -6947,6 +7150,7 @@ function ExpensesPanel({ user }) {
         await uploadAPI(`/expenses/${savedExpense._id}/document`, documentData);
       }
       resetForm();
+      if (!isAdmin) setSelectedExpenseCategory('');
       loadExpenses();
       notify(editingId ? 'Expense updated successfully.' : 'Expense saved successfully.', 'success');
     } catch (err) {
@@ -6958,12 +7162,34 @@ function ExpensesPanel({ user }) {
 
   const handleEditExpense = (expense) => {
     setEditingId(expense._id);
+    setSelectedExpenseCategory(expense.category || 'Travel - Public, Limo, & Other');
     setForm({
       expense_date: expense.expense_date || today,
-      category: expense.category || 'Travel',
+      category: expense.category || 'Travel - Public, Limo, & Other',
       client_code: expense.client_code || '',
       amount: String(expense.amount || ''),
       description: expense.description || '',
+      country: expense.country || 'India',
+      currency: expense.currency || 'INR',
+      conversion_rate: String(expense.conversion_rate || '1'),
+      from_date: expense.from_date || '',
+      to_date: expense.to_date || '',
+      reason: expense.reason || '',
+      expense_type: expense.expense_type || '',
+      trip_type: expense.trip_type || 'One-Way',
+      hotel_chain: expense.hotel_chain || '',
+      invoice_number: expense.invoice_number || '',
+      vendor_gst_number: expense.vendor_gst_number || '',
+      sgst: expense.sgst || '',
+      cgst_igst: expense.cgst_igst || '',
+      purpose: expense.purpose || '',
+      meals_provided: expense.meals_provided || '',
+      daily_base_per_diem: expense.daily_base_per_diem || '',
+      receipt_total: expense.receipt_total || '',
+      miscellaneous_expenses: expense.miscellaneous_expenses || '',
+      comments: expense.comments || '',
+      public_official_over_25: Boolean(expense.public_official_over_25),
+      no_vendor_gst_number: Boolean(expense.no_vendor_gst_number),
       documentFile: null,
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -6985,6 +7211,113 @@ function ExpensesPanel({ user }) {
       notify('Expense deleted successfully.', 'success');
     } catch (err) {
       notify(`Failed to delete expense: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const closeExpenseApprovalModal = () => {
+    setExpenseApprovalModal({
+      show: false,
+      expense: null,
+      approverName: user?.name || user?.email || '',
+      approvedExpenseDate: '',
+    });
+  };
+
+  const handleApproveExpense = (expense) => {
+    setExpenseApprovalModal({
+      show: true,
+      expense,
+      approverName: user?.name || user?.email || '',
+      approvedExpenseDate: expense.approved_expense_date || expense.expense_date || today,
+    });
+  };
+
+  const confirmApproveExpense = async () => {
+    const expense = expenseApprovalModal.expense;
+    const approverName = expenseApprovalModal.approverName.trim();
+    if (!expense) return;
+    if (!approverName) {
+      notify('Approver name is required.', 'warning');
+      return;
+    }
+    setLoading(true);
+    try {
+      await fetchAPI(`/expenses/${expense._id}/approve`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          approver_name: approverName,
+          approved_expense_date: expenseApprovalModal.approvedExpenseDate,
+        }),
+      });
+      closeExpenseApprovalModal();
+      loadExpenses();
+      notify('Expense approved successfully.', 'success');
+    } catch (err) {
+      notify(`Failed to approve expense: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectExpense = async (expense) => {
+    const rejectionComments = await promptAction({
+      title: 'Reject Expense',
+      message: `Add rejection comments for ${expense.employee_name || 'this employee'}'s ${expense.category || 'expense'} claim. The employee must create and submit a new expense.`,
+      confirmLabel: 'Reject Expense',
+      tone: 'danger',
+      placeholder: 'Enter rejection comments',
+      multiline: true,
+      required: true,
+    });
+    if (rejectionComments === null) return;
+    setLoading(true);
+    try {
+      await fetchAPI(`/expenses/${expense._id}/reject`, {
+        method: 'PUT',
+        body: JSON.stringify({ rejection_comments: rejectionComments }),
+      });
+      loadExpenses();
+      notify('Expense rejected. The employee will need to submit a new expense.', 'success');
+    } catch (err) {
+      notify(`Failed to reject expense: ${err.message}`, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitExpenses = async () => {
+    if (!userId) {
+      notify('User not loaded properly.', 'error');
+      return;
+    }
+    const expensesForDate = expenses.filter((expense) => expense.expense_date === selectedExpenseDate);
+    if (!expensesForDate.length) {
+      notify('Add at least one expense for the selected date before submitting.', 'warning');
+      return;
+    }
+    const draftExpensesForDate = expensesForDate.filter((expense) => (expense.status || 'saved') === 'saved');
+    if (!draftExpensesForDate.length) {
+      notify('Create a new draft expense before submitting. Rejected expenses cannot be resubmitted.', 'warning');
+      return;
+    }
+    const shouldSubmit = await confirmAction({
+      title: 'Submit Expenses',
+      message: `Submit ${draftExpensesForDate.length} draft expense${draftExpensesForDate.length === 1 ? '' : 's'} for ${format(parseISO(selectedExpenseDate), 'M/d/yyyy')}?`,
+      confirmLabel: 'Submit',
+    });
+    if (!shouldSubmit) return;
+    setLoading(true);
+    try {
+      await fetchAPI('/expenses/submit', {
+        method: 'POST',
+        body: JSON.stringify({ employee_id: userId, expense_date: selectedExpenseDate }),
+      });
+      loadExpenses();
+      notify('Expenses submitted successfully.', 'success');
+    } catch (err) {
+      notify(`Failed to submit expenses: ${err.message}`, 'error');
     } finally {
       setLoading(false);
     }
@@ -7016,8 +7349,12 @@ function ExpensesPanel({ user }) {
     ]),
     [expenses]
   );
+  const employeeDateExpenses = useMemo(
+    () => expenses.filter((expense) => expense.expense_date === selectedExpenseDate),
+    [expenses, selectedExpenseDate]
+  );
   const visibleExpenses = useMemo(() => {
-    if (!isAdmin) return expenses;
+    if (!isAdmin) return employeeDateExpenses;
     const query = expenseFilters.search.trim().toLowerCase();
     return expenses.filter((expense) => {
       const matchesSearch = !query || [
@@ -7043,7 +7380,7 @@ function ExpensesPanel({ user }) {
       const matchesTo = !expenseFilters.to || !expense.expense_date || expense.expense_date <= expenseFilters.to;
       return matchesSearch && matchesDepartment && matchesCategory && matchesClientCode && matchesDocument && matchesFrom && matchesTo;
     });
-  }, [expenseFilters, expenses, isAdmin]);
+  }, [employeeDateExpenses, expenseFilters, expenses, isAdmin]);
   const activeExpenseFilterCount = isAdmin
     ? [
         expenseFilters.search.trim(),
@@ -7060,10 +7397,535 @@ function ExpensesPanel({ user }) {
   };
   const totalExpenseAmount = visibleExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const attachedDocumentCount = visibleExpenses.filter((expense) => expense.document?.url).length;
-  const expenseTableColSpan = isAdmin ? 8 : 7;
+  const expenseTableColSpan = isAdmin ? 10 : 8;
+  const isHotelExpense = selectedExpenseCategory === 'Accommodation - Hotel';
+  const isTravelExpense = selectedExpenseCategory === 'Travel - Public, Limo, & Other';
+  const isPerDiemLocalExpense = selectedExpenseCategory === 'Per Diem - Local';
+  const numberOfDays = form.from_date && form.to_date
+    ? Math.max(0, Math.round((parseISO(form.to_date) - parseISO(form.from_date)) / 86400000) + 1)
+    : '';
+  const perDiemTotal = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
+  const expenseStatusLabel = (() => {
+    if (!employeeDateExpenses.length) return 'No Expenses';
+    if (employeeDateExpenses.some((expense) => (expense.status || 'saved') === 'saved')) return 'Draft';
+    if (employeeDateExpenses.some((expense) => expense.status === 'submitted')) return 'Submitted';
+    if (employeeDateExpenses.every((expense) => expense.status === 'approved')) return 'Approved';
+    if (employeeDateExpenses.every((expense) => expense.status === 'rejected')) return 'Rejected';
+    return 'Reviewed';
+  })();
+  const expenseStatusText = (status) => ({
+    saved: 'Draft',
+    submitted: 'Submitted',
+    approved: 'Approved',
+    rejected: 'Rejected',
+  }[status] || status || 'Draft');
+  const canReviewExpense = (expense) => expense.status === 'submitted';
+  const filteredExpenseCategories = expenseCategories.filter((category) =>
+    category.toLowerCase().includes(expenseCategorySearch.trim().toLowerCase())
+  );
+  const expenseChargeCodeOptions = useMemo(() => {
+    const seen = new Set();
+    const options = [];
+    expenseChargeCodes.forEach((item) => {
+      const code = String(item.charge_code || item.code || '').trim();
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      options.push({
+        value: code,
+        label: [code, item.charge_code_name || item.name || item.description].filter(Boolean).join(' - '),
+      });
+    });
+    if (form.client_code && !seen.has(form.client_code)) {
+      options.unshift({ value: form.client_code, label: form.client_code });
+    }
+    return options;
+  }, [expenseChargeCodes, form.client_code]);
+
+  if (!EXPENSES_FEATURE_ENABLED) {
+    return (
+      <div className="mte-module-card mte-expense-shell">
+        <div className="mte-module-card-header">
+          <div>
+            <h3>Expenses</h3>
+            <p>This page is ongoing maintenance, check back soon.</p>
+          </div>
+        </div>
+        <div className="mte-empty-state">
+          <span className="mte-empty-chip">Ongoing Maintenance</span>
+          <strong>Expenses will be available again soon.</strong>
+          <p>The workspace is temporarily unavailable while we finish the current updates.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    if (!selectedExpenseCategory) {
+      return (
+        <div className="mte-employee-expenses">
+          <div className="mte-expense-topbar">
+            <div className="mte-timesheet-context">
+              <span>Expense Workspace</span>
+              <strong>Employee Expenses</strong>
+              <small>Add receipts for the current period</small>
+            </div>
+            <div className="mte-expense-period-nav">
+              <button type="button" aria-label="Previous day" onClick={() => moveSelectedExpenseDate(-1)}><ChevronLeft size={18} /></button>
+              <span>{format(parseISO(selectedExpenseDate), 'M/d/yyyy')}</span>
+              <input
+                ref={calendarDateInputRef}
+                className="mte-expense-native-date"
+                type="date"
+                value={selectedExpenseDate}
+                onChange={(event) => handleSelectedExpenseDateChange(event.target.value)}
+                aria-label="Select expense date"
+              />
+              <button type="button" className="mte-purple-square" aria-label="Open calendar" onClick={openExpenseDatePicker}><Calendar size={16} /></button>
+              <button type="button" aria-label="Next day" onClick={() => moveSelectedExpenseDate(1)}><ChevronRight size={18} /></button>
+            </div>
+            <span className="mte-expense-status">{expenseStatusLabel}</span>
+            <button type="button" className="mte-expense-submit" onClick={handleSubmitExpenses} disabled={loading}>
+              {loading ? 'Submitting' : 'Submit'}
+            </button>
+          </div>
+
+          <div className="mte-expense-picker-row">
+            <div className="mte-expense-type-picker">
+              <div className="mte-expense-type-search">
+                <Search size={17} />
+                <input
+                  type="search"
+                  placeholder="Search expense types"
+                  aria-label="Search expense types"
+                  value={expenseCategorySearch}
+                  onFocus={() => setIsExpenseCategoryOpen(true)}
+                  onChange={(event) => {
+                    setExpenseCategorySearch(event.target.value);
+                    setIsExpenseCategoryOpen(true);
+                  }}
+                />
+                <button
+                  type="button"
+                  className={`mte-expense-type-caret ${isExpenseCategoryOpen ? 'is-open' : ''}`}
+                  aria-label={isExpenseCategoryOpen ? 'Close expense type list' : 'Open expense type list'}
+                  aria-expanded={isExpenseCategoryOpen}
+                  onClick={() => setIsExpenseCategoryOpen((isOpen) => !isOpen)}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+              {isExpenseCategoryOpen ? (
+                <div className="mte-expense-type-menu">
+                  {filteredExpenseCategories.map((category) => (
+                    <button type="button" key={category} onClick={() => openEmployeeExpenseCategory(category)}>
+                      {category}
+                    </button>
+                  ))}
+                  {filteredExpenseCategories.length === 0 ? <span className="mte-expense-type-empty">No matching expense type</span> : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mte-expense-empty-banner">
+            {employeeDateExpenses.length ? `${employeeDateExpenses.length} expense${employeeDateExpenses.length === 1 ? '' : 's'} saved for this date` : 'There are no expenses for the selected period'}
+          </div>
+
+          {employeeDateExpenses.length ? (
+            <div className="mte-expense-saved-list">
+              {employeeDateExpenses.map((expense) => (
+                <div className="mte-expense-saved-row" key={expense._id}>
+                  <span>{expense.category}</span>
+                  <span>{expense.expense_date}</span>
+                  <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
+                    {expenseStatusText(expense.status)}
+                  </span>
+                  <strong>INR {Number(expense.amount || 0).toFixed(2)}</strong>
+                  {expense.status === 'rejected' && expense.rejection_comments ? (
+                    <small className="mte-expense-rejection-note">{expense.rejection_comments}</small>
+                  ) : null}
+                  <button type="button" onClick={() => handleEditExpense(expense)} disabled={(expense.status || 'saved') !== 'saved'}>Edit</button>
+                  <button type="button" onClick={() => handleDeleteExpense(expense._id)} disabled={(expense.status || 'saved') !== 'saved'}>Delete</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    return (
+      <div className="mte-employee-expenses">
+        <div className="mte-expense-editor-head">
+          <div className="mte-timesheet-context">
+            <span>Expense Type</span>
+            <strong>{selectedExpenseCategory}</strong>
+            <small>Complete required details and attach receipts</small>
+          </div>
+          <div>
+            <button type="button" className="mte-expense-close" onClick={() => setSelectedExpenseCategory('')}>Close</button>
+            <button type="button" className="mte-expense-save" onClick={handleSaveExpense} disabled={loading}>Save</button>
+          </div>
+        </div>
+
+        <div className={`mte-expense-editor-layout ${isTravelExpense ? 'is-travel-public' : ''} ${isPerDiemLocalExpense ? 'is-per-diem-local' : ''}`}>
+          <section className="mte-expense-editor-form">
+            <div className="mte-expense-form-row is-wide">
+              <label>
+                <span>Charge Code*</span>
+                <select value={form.client_code} onChange={(event) => setForm({ ...form, client_code: event.target.value })}>
+                  <option value="">-- Select one --</option>
+                  {expenseChargeCodeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="mte-expense-amount-field">
+                <span>Amount{isPerDiemLocalExpense ? '' : '*'}</span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={isPerDiemLocalExpense ? perDiemTotal.toFixed(2) : form.amount}
+                  readOnly={isPerDiemLocalExpense}
+                  onChange={(event) => setForm({ ...form, amount: event.target.value })}
+                />
+              </label>
+            </div>
+
+            <div className="mte-expense-form-row is-date-summary">
+              <label>
+                <span>Country/Region of Expense*</span>
+                <select value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })}>
+                  <option>India</option>
+                </select>
+              </label>
+              <label>
+                <span>Currency</span>
+                <div className="mte-expense-split-input">
+                  <strong>{form.currency}</strong>
+                  <select value={form.currency} onChange={(event) => setForm({ ...form, currency: event.target.value })}>
+                    <option value="INR">India</option>
+                  </select>
+                </div>
+              </label>
+              <label>
+                <span>Conversion Rate</span>
+                <input value={form.conversion_rate} readOnly />
+              </label>
+            </div>
+
+            <div className="mte-expense-form-row">
+              <label>
+                <span>From*</span>
+                <input type="date" value={form.from_date} onChange={(event) => setForm({ ...form, from_date: event.target.value, expense_date: event.target.value || form.expense_date })} />
+              </label>
+              <label>
+                <span>To*</span>
+                <input type="date" value={form.to_date} onChange={(event) => setForm({ ...form, to_date: event.target.value })} />
+              </label>
+              <label className="mte-expense-readonly-label">
+                <span>{isHotelExpense ? 'Number of Nights' : 'Number of Days'}</span>
+                <strong>{numberOfDays || '0'}</strong>
+              </label>
+              <label>
+                <span>Final Amount</span>
+                <div className="mte-expense-split-input">
+                  <strong>INR</strong>
+                  <input value={(isPerDiemLocalExpense ? perDiemTotal : Number(form.amount || 0)).toFixed(2)} readOnly />
+                </div>
+              </label>
+            </div>
+
+            <div className="mte-expense-divider" />
+
+            {isPerDiemLocalExpense ? (
+              <>
+                <div className="mte-expense-form-row is-per-diem-purpose">
+                  <label>
+                    <span>Purpose*</span>
+                    <select value={form.purpose} onChange={(event) => setForm({ ...form, purpose: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {perDiemPurposeOptions.map((purpose) => <option key={purpose}>{purpose}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Type*</span>
+                    <select value={form.expense_type} onChange={(event) => setForm({ ...form, expense_type: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {perDiemTypeOptions.map((type) => <option key={type}>{type}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="mte-expense-form-row is-per-diem-purpose">
+                  <label>
+                    <span>Meals Provided</span>
+                    <select value={form.meals_provided} onChange={(event) => setForm({ ...form, meals_provided: event.target.value })}>
+                      {perDiemMealOptions.map((meal) => (
+                        <option key={meal} value={meal === '-- Select one --' ? '' : meal}>{meal}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Daily Base Per Diem</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.daily_base_per_diem}
+                      onChange={(event) => setForm({ ...form, daily_base_per_diem: event.target.value })}
+                    />
+                  </label>
+                  <label className="mte-expense-readonly-label">
+                    <span>Calculated Per Diem</span>
+                    <strong>{Number(form.daily_base_per_diem || 0).toFixed(2)}</strong>
+                  </label>
+                </div>
+
+                <div className="mte-expense-divider" />
+
+                <div className="mte-expense-form-row is-per-diem-totals">
+                  <label>
+                    <span>Receipt Total</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.receipt_total}
+                      onChange={(event) => setForm({ ...form, receipt_total: event.target.value })}
+                    />
+                  </label>
+                  <label>
+                    <span>Miscellaneous Expenses</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={form.miscellaneous_expenses}
+                      onChange={(event) => setForm({ ...form, miscellaneous_expenses: event.target.value })}
+                    />
+                  </label>
+                  <label className="mte-expense-readonly-label">
+                    <span>Total Amount</span>
+                    <strong>{perDiemTotal.toFixed(2)}</strong>
+                  </label>
+                </div>
+              </>
+            ) : isHotelExpense ? (
+              <div className="mte-expense-form-row is-hotel">
+                <label>
+                  <span>Hotel Chain*</span>
+                  <div className="mte-expense-search-select">
+                    <Search size={16} />
+                    <select value={form.hotel_chain} onChange={(event) => setForm({ ...form, hotel_chain: event.target.value })}>
+                      <option value="">Search</option>
+                      {hotelChains.map((chain) => <option key={chain}>{chain}</option>)}
+                    </select>
+                  </div>
+                </label>
+                <label>
+                  <span>Other</span>
+                  <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                </label>
+              </div>
+            ) : (
+              <>
+                <div className="mte-expense-form-row is-travel is-travel-details">
+                  <label>
+                    <span>Reason*</span>
+                    <select value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {travelReasons.map((reason) => <option key={reason}>{reason}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Other</span>
+                    <input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
+                  </label>
+                  {isTravelExpense ? (
+                    <fieldset className="mte-trip-options">
+                      <label><input type="radio" checked={form.trip_type === 'One-Way'} onChange={() => setForm({ ...form, trip_type: 'One-Way' })} /> One-Way</label>
+                      <label><input type="radio" checked={form.trip_type === 'Round Trip'} onChange={() => setForm({ ...form, trip_type: 'Round Trip' })} /> Round Trip</label>
+                    </fieldset>
+                  ) : null}
+                </div>
+                <div className="mte-expense-form-row is-travel is-travel-type">
+                  <label>
+                    <span>Type*</span>
+                    <select value={form.expense_type} onChange={(event) => setForm({ ...form, expense_type: event.target.value })}>
+                      <option value="">-- Select one --</option>
+                      {travelTypes.map((type) => <option key={type}>{type}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Other</span>
+                    <input value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} />
+                  </label>
+                </div>
+              </>
+            )}
+
+            {!isPerDiemLocalExpense ? (
+              <>
+                <div className="mte-expense-divider" />
+
+                <div className="mte-expense-checkbox-row">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.public_official_over_25}
+                      onChange={(event) => setForm({ ...form, public_official_over_25: event.target.checked })}
+                    /> Provided to a Public Official with value above $25?
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.no_vendor_gst_number}
+                      onChange={(event) => setForm({ ...form, no_vendor_gst_number: event.target.checked })}
+                    /> No Vendor GST Number on Invoice
+                  </label>
+                </div>
+                <p className="mte-expense-important"><strong>IMPORTANT</strong>- Once this checkbox is selected, Naxrita will be liable to pay additional GST. It is advisable that you deal <u>ONLY</u> with GST registered vendors.</p>
+
+                <div className="mte-expense-form-row">
+                  <label>
+                    <span>Invoice Number*</span>
+                    <input value={form.invoice_number} onChange={(event) => setForm({ ...form, invoice_number: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>Vendor GST Number*</span>
+                    <input value={form.vendor_gst_number} onChange={(event) => setForm({ ...form, vendor_gst_number: event.target.value })} />
+                  </label>
+                </div>
+                <div className="mte-expense-form-row">
+                  <label>
+                    <span>SGST(INR)*</span>
+                    <input value={form.sgst} onChange={(event) => setForm({ ...form, sgst: event.target.value })} />
+                  </label>
+                  <label>
+                    <span>CGST/IGST(INR)*</span>
+                    <input value={form.cgst_igst} onChange={(event) => setForm({ ...form, cgst_igst: event.target.value })} />
+                  </label>
+                </div>
+              </>
+            ) : null}
+
+            {isTravelExpense ? (
+              <div className="mte-expense-notes">
+                <strong>Important Points to be followed:</strong>
+                <p>Update comments with form/to details when claiming fuel reimbursements @ INR 10 per KM (applicable within India only).</p>
+                <p>Expense must be claimed only after it is incurred.</p>
+              </div>
+            ) : null}
+
+            <label className="mte-expense-comments">
+              <span>Comments - Optional</span>
+              <textarea value={form.comments} onChange={(event) => setForm({ ...form, comments: event.target.value })} />
+            </label>
+          </section>
+
+          <aside className="mte-expense-receipts">
+            <div
+              className="mte-expense-dropzone"
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <span>Drag and Drop to Upload</span>
+              <Upload size={18} />
+            </div>
+            <button type="button" className="mte-upload-receipt" onClick={() => fileInputRef.current?.click()}>
+              Upload Receipt
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.jpg,.jpeg,.png,.gif,.webp,.ppt,.pptx,.zip,.msg,.eml"
+              onChange={(event) => setForm({ ...form, documentFile: event.target.files?.[0] || null })}
+              hidden
+            />
+            <div className="mte-receipt-status">
+              <Paperclip size={18} />
+              <span>{form.documentFile ? form.documentFile.name : 'No receipts have been attached'}</span>
+            </div>
+          </aside>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mte-module-card mte-expense-shell">
+      {expenseApprovalModal.show && expenseApprovalModal.expense ? (
+        <div className="mte-expense-modal-overlay" onClick={closeExpenseApprovalModal}>
+          <div className="mte-expense-approval-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="mte-expense-modal-header">
+              <div>
+                <div className="mte-expense-modal-overline">Expense Action</div>
+                <h2>Approve expense request</h2>
+                <p>Confirm the approver details before approving this expense claim.</p>
+              </div>
+            </div>
+
+            <div className="mte-expense-approval-grid">
+              <label className="mte-expense-modal-field">
+                <span>Approver name</span>
+                <input
+                  className="input"
+                  value={expenseApprovalModal.approverName}
+                  onChange={(event) => setExpenseApprovalModal((previous) => ({ ...previous, approverName: event.target.value }))}
+                />
+              </label>
+
+              <div className="mte-expense-static-card">
+                <span>Requested expense</span>
+                <strong>{expenseApprovalModal.expense.category || 'Expense claim'}</strong>
+                <small>{expenseApprovalModal.expense.employee_name || 'Employee'}</small>
+              </div>
+
+              <div className="mte-expense-static-card">
+                <span>Requested date</span>
+                <strong>{expenseApprovalModal.expense.expense_date || '-'}</strong>
+              </div>
+
+              <div className="mte-expense-static-card">
+                <span>Requested amount</span>
+                <strong>{`${expenseApprovalModal.expense.currency || 'INR'} ${Number(expenseApprovalModal.expense.amount || 0).toFixed(2)}`}</strong>
+              </div>
+
+              <label className="mte-expense-modal-field">
+                <span>Approved expense date</span>
+                <input
+                  className="input"
+                  type="date"
+                  value={expenseApprovalModal.approvedExpenseDate}
+                  onChange={(event) => setExpenseApprovalModal((previous) => ({ ...previous, approvedExpenseDate: event.target.value }))}
+                />
+              </label>
+            </div>
+
+            <div className="mte-expense-modal-actions">
+              <button type="button" className="mte-expense-modal-secondary" onClick={closeExpenseApprovalModal}>
+                Cancel
+              </button>
+              <button type="button" className="mte-expense-modal-primary" onClick={confirmApproveExpense} disabled={loading}>
+                Confirm approval
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mte-expense-summary-grid">
         <article>
           <span>Total claims</span>
@@ -7091,7 +7953,7 @@ function ExpensesPanel({ user }) {
               <span>Refresh</span>
             </button>
           </div>
-          <div className="mte-expense-filter-grid">
+          <div className="mte-expense-filter-grid mte-expense-filter-grid-admin">
             <label className="mte-expense-filter-field mte-expense-filter-search">
               <span>Search</span>
               <ValueHelpSearch
@@ -7254,7 +8116,7 @@ function ExpensesPanel({ user }) {
           </div>
         </section>
       )}
-      <div className="mte-simple-table-wrap">
+        <div className="mte-simple-table-wrap mte-expense-table-shell">
         <table className="mte-simple-table">
           <thead>
             <tr>
@@ -7265,8 +8127,9 @@ function ExpensesPanel({ user }) {
                 'Category',
                 'Description',
                 'Amount',
+                'Status',
                 'Document',
-                ...(isAdmin ? [] : ['Action']),
+                'Action',
               ].map((header) => (
                 <th key={header}>{header}</th>
               ))}
@@ -7285,7 +8148,18 @@ function ExpensesPanel({ user }) {
                 <td>{expense.client_code || '-'}</td>
                 <td>{expense.category}</td>
                 <td>{expense.description || '-'}</td>
-                <td>{Number(expense.amount || 0).toFixed(2)}</td>
+                <td>{expense.currency || 'INR'} {Number(expense.amount || 0).toFixed(2)}</td>
+                <td>
+                  <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
+                    {expenseStatusText(expense.status)}
+                  </span>
+                  {expense.status === 'rejected' && expense.rejection_comments ? (
+                    <div className="mte-expense-rejection-note">{expense.rejection_comments}</div>
+                  ) : null}
+                  {expense.status === 'approved' && expense.approved_by_admin_name ? (
+                    <div className="mte-expense-approval-note">Approved by {expense.approved_by_admin_name}</div>
+                  ) : null}
+                </td>
                 <td>
                   {expense.document?.url ? (
                     <span className="mte-document-cell">
@@ -7299,16 +8173,39 @@ function ExpensesPanel({ user }) {
                     </span>
                   ) : '-'}
                 </td>
-                {!isAdmin ? (
-                  <td>
-                    <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense">
-                      <FileText size={14} />
-                    </button>
-                    <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense">
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                ) : null}
+                <td>
+                  {isAdmin ? (
+                    <div className="mte-expense-review-actions">
+                      <button
+                        type="button"
+                        className="mte-expense-approve-button"
+                        onClick={() => handleApproveExpense(expense)}
+                        disabled={loading || !canReviewExpense(expense)}
+                      >
+                        <CheckCircle2 size={14} />
+                        <span>Approve</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="mte-expense-reject-button"
+                        onClick={() => handleRejectExpense(expense)}
+                        disabled={loading || !canReviewExpense(expense)}
+                      >
+                        <XCircle size={14} />
+                        <span>Reject</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                        <FileText size={14} />
+                      </button>
+                      <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                        <Trash2 size={14} />
+                      </button>
+                    </>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -7623,8 +8520,10 @@ function AdjustmentsPanel({ user }) {
 function PreferencesPanel({ user, periods, selectedPeriod }) {
   const { notify } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
+  const isFullAdmin = (user?.originalRole || user?.role) === 'Admin';
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [activeSubtab, setActiveSubtab] = useState('workflow');
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [selectedPeriodValue, setSelectedPeriodValue] = useState(selectedPeriod || periods?.[0]?.value || '');
   const [drafts, setDrafts] = useState({
@@ -7643,6 +8542,42 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
   useEffect(() => {
     setSelectedPeriodValue(selectedPeriod || periods?.[0]?.value || '');
   }, [periods, selectedPeriod]);
+
+  const employeeValueHelpOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee._id,
+      label: employee.name || employee.email || employee.employeeId || employee._id,
+      description: [
+        employee.email,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
+
+  const periodValueHelpOptions = useMemo(
+    () => periods.map((period) => ({
+      value: period.value,
+      label: period.label,
+      description: period.start && period.end ? `${period.start} to ${period.end}` : '',
+    })),
+    [periods]
+  );
+
+  const preferenceSuggestionOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee.email || employee.name || employee._id,
+      label: employee.email || employee.name || employee._id,
+      description: [
+        employee.name,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+        employee.role || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -7739,96 +8674,321 @@ function PreferencesPanel({ user, periods, selectedPeriod }) {
 
   return (
     <div className="mte-module-card mte-preferences-shell">
+      <div className="mte-subtabs" style={{ marginBottom: '18px' }}>
+        <button type="button" className={activeSubtab === 'workflow' ? 'is-active' : ''} onClick={() => setActiveSubtab('workflow')}>
+          Workflow Preferences
+        </button>
+        {isFullAdmin ? (
+          <button type="button" className={activeSubtab === 'unblock' ? 'is-active' : ''} onClick={() => setActiveSubtab('unblock')}>
+            Unblock Fortnights
+          </button>
+        ) : null}
+      </div>
+
+      {activeSubtab === 'unblock' && isFullAdmin ? (
+        <FortnightUnlockPanel
+          employees={employees}
+          periods={periods}
+          selectedEmployeeId={selectedEmployeeId}
+          onSelectedEmployeeIdChange={setSelectedEmployeeId}
+          selectedPeriodValue={selectedPeriodValue}
+          onSelectedPeriodValueChange={setSelectedPeriodValue}
+        />
+      ) : null}
+
+      {activeSubtab === 'workflow' ? (
+        <>
+          <div className="mte-module-card-header">
+            <div>
+              <h3>Admin Workflow Preferences</h3>
+              <p>Select an employee and fortnight, then define the notification and approval routing moderated by admin.</p>
+            </div>
+            <button type="button" style={loading ? S.btnDisabled : S.btnPrimary} onClick={savePreferences} disabled={loading}>
+              {loading ? 'Saving...' : 'Save Preferences'}
+            </button>
+          </div>
+
+          <div className="mte-preferences-grid" style={{ marginBottom: '18px' }}>
+            <div className="mte-pref-field">
+              <label>Employee:</label>
+              <ValueHelpSelect
+                value={selectedEmployeeId}
+                onChange={setSelectedEmployeeId}
+                options={employeeValueHelpOptions}
+                placeholder="Select employee"
+                searchPlaceholder="Search employees"
+              />
+            </div>
+            <div />
+            <div className="mte-pref-field">
+              <label>Fortnight:</label>
+              <ValueHelpSelect
+                value={selectedPeriodValue}
+                onChange={setSelectedPeriodValue}
+                options={periodValueHelpOptions}
+                placeholder="Select fortnight"
+                searchPlaceholder="Search fortnights"
+              />
+            </div>
+            <div className="mte-pref-field">
+              <label>Mode:</label>
+              <input className="input" value="Admin managed" readOnly />
+            </div>
+          </div>
+
+          <div className="mte-preferences-grid">
+            <div className="mte-pref-field">
+              <label>Reviewer Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.reviewer}
+                onChange={(value) => updateDraft('reviewer', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose reviewer"
+                searchPlaceholder="Search reviewer suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Reviewers:</label>
+              <textarea className="input" value={selected.reviewers} onChange={(event) => updateSelected('reviewers', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Notification Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.notification}
+                onChange={(value) => updateDraft('notification', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose notification recipient"
+                searchPlaceholder="Search notification suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Notifications:</label>
+              <textarea className="input" value={selected.notifications} onChange={(event) => updateSelected('notifications', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Delegate Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.delegate}
+                onChange={(value) => updateDraft('delegate', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose delegate"
+                searchPlaceholder="Search delegate suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Delegates:</label>
+              <textarea className="input" value={selected.delegates} onChange={(event) => updateSelected('delegates', event.target.value)} rows={4} />
+            </div>
+            <div />
+
+            <div className="mte-pref-field">
+              <label>Approver Email(s):</label>
+              <ValueHelpSelect
+                value={drafts.approver}
+                onChange={(value) => updateDraft('approver', value)}
+                options={preferenceSuggestionOptions}
+                placeholder="Choose approver"
+                searchPlaceholder="Search approver suggestions"
+              />
+            </div>
+            <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
+              <ChevronRight size={15} />
+            </button>
+            <div className="mte-pref-field">
+              <label>Selected Approvers:</label>
+              <textarea className="input" value={selected.approvers} onChange={(event) => updateSelected('approvers', event.target.value)} rows={4} />
+            </div>
+            <div />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function FortnightUnlockPanel({
+  employees,
+  periods,
+  selectedEmployeeId,
+  onSelectedEmployeeIdChange,
+  selectedPeriodValue,
+  onSelectedPeriodValueChange,
+}) {
+  const { notify } = useTimesheetUi();
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [accessState, setAccessState] = useState(null);
+
+  const employeeOptions = useMemo(
+    () => employees.map((employee) => ({
+      value: employee._id,
+      label: employee.name || employee.email || employee.employeeId || employee._id,
+      description: [
+        employee.email,
+        employee.employeeId ? `Employee ID: ${employee.employeeId}` : '',
+        employee.department || '',
+      ].filter(Boolean).join(' • '),
+    })),
+    [employees]
+  );
+
+  const periodOptions = useMemo(
+    () => periods.map((period) => ({
+      value: period.value,
+      label: period.label,
+      description: period.start && period.end ? `${period.start} to ${period.end}` : '',
+    })),
+    [periods]
+  );
+
+  const selectedPeriodOption = useMemo(
+    () => periods.find((item) => item.value === selectedPeriodValue) || periods[0],
+    [periods, selectedPeriodValue]
+  );
+
+  const loadAccessState = useCallback(() => {
+    if (!selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) return;
+    setLoading(true);
+    fetchAPI(`/timesheets/period-access?employee_id=${selectedEmployeeId}&period_start=${selectedPeriodOption.start}&period_end=${selectedPeriodOption.end}`)
+      .then((data) => {
+        setAccessState(data);
+        setNotes(data?.unlock_record?.notes || '');
+      })
+      .catch((err) => notify(`Failed to load fortnight status: ${err.message}`, 'error'))
+      .finally(() => setLoading(false));
+  }, [notify, selectedEmployeeId, selectedPeriodOption]);
+
+  useEffect(() => {
+    loadAccessState();
+  }, [loadAccessState]);
+
+  const handleUnlockToggle = async (nextUnlocked) => {
+    if (!selectedEmployeeId || !selectedPeriodOption?.start || !selectedPeriodOption?.end) {
+      notify('Select an employee and fortnight first.', 'warning');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const response = await fetchAPI('/timesheets/period-unlocks', {
+        method: 'PUT',
+        body: JSON.stringify({
+          employee_id: selectedEmployeeId,
+          period_start: selectedPeriodOption.start,
+          period_end: selectedPeriodOption.end,
+          unlocked: nextUnlocked,
+          notes,
+        }),
+      });
+      setAccessState(response);
+      notify(nextUnlocked ? 'Fortnight unblocked for the employee.' : 'Fortnight blocked again.', 'success');
+    } catch (err) {
+      notify(`Failed to update fortnight access: ${err.message}`, 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
       <div className="mte-module-card-header">
         <div>
-          <h3>Admin Workflow Preferences</h3>
-          <p>Select an employee and fortnight, then define the notification and approval routing moderated by admin.</p>
+          <h3>Admin Fortnight Unblock</h3>
+          <p>Only full Admin users can reopen blocked fortnights for a selected employee and period.</p>
         </div>
-        <button type="button" style={loading ? S.btnDisabled : S.btnPrimary} onClick={savePreferences} disabled={loading}>
-          {loading ? 'Saving...' : 'Save Preferences'}
+        <button type="button" style={loading ? S.btnDisabled : S.btnSecondary} onClick={loadAccessState} disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh Status'}
         </button>
       </div>
 
       <div className="mte-preferences-grid" style={{ marginBottom: '18px' }}>
         <div className="mte-pref-field">
           <label>Employee:</label>
-          <select className="input" value={selectedEmployeeId} onChange={(event) => setSelectedEmployeeId(event.target.value)}>
-            {employees.map((employee) => (
-              <option key={employee._id} value={employee._id}>
-                {employee.name || employee.email || employee._id}
-              </option>
-            ))}
-          </select>
+          <ValueHelpSelect
+            value={selectedEmployeeId}
+            onChange={onSelectedEmployeeIdChange}
+            options={employeeOptions}
+            placeholder="Select employee"
+            searchPlaceholder="Search employees"
+          />
         </div>
         <div />
         <div className="mte-pref-field">
           <label>Fortnight:</label>
-          <select className="input" value={selectedPeriodValue} onChange={(event) => setSelectedPeriodValue(event.target.value)}>
-            {periods.map((period) => (
-              <option key={period.value} value={period.value}>{period.label}</option>
-            ))}
-          </select>
+          <ValueHelpSelect
+            value={selectedPeriodValue}
+            onChange={onSelectedPeriodValueChange}
+            options={periodOptions}
+            placeholder="Select fortnight"
+            searchPlaceholder="Search fortnights"
+          />
         </div>
         <div className="mte-pref-field">
-          <label>Mode:</label>
-          <input className="input" value="Admin managed" readOnly />
+          <label>Deadline:</label>
+          <input className="input" value={accessState?.entry_deadline_date || ''} readOnly />
         </div>
       </div>
 
       <div className="mte-preferences-grid">
         <div className="mte-pref-field">
-          <label>Reviewer Email(s):</label>
-          <input className="input" value={drafts.reviewer} onChange={(event) => updateDraft('reviewer', event.target.value)} placeholder="name@company.com" />
-        </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add reviewer" onClick={() => addPreference('reviewer', 'reviewers')} disabled={!drafts.reviewer.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Reviewers:</label>
-          <textarea className="input" value={selected.reviewers} onChange={(event) => updateSelected('reviewers', event.target.value)} rows={4} />
-        </div>
-        <div />
-
-        <div className="mte-pref-field">
-          <label>Notification Email(s):</label>
-          <input className="input" value={drafts.notification} onChange={(event) => updateDraft('notification', event.target.value)} placeholder="notify@company.com" />
-        </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add notification" onClick={() => addPreference('notification', 'notifications')} disabled={!drafts.notification.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Notifications:</label>
-          <textarea className="input" value={selected.notifications} onChange={(event) => updateSelected('notifications', event.target.value)} rows={4} />
+          <label>Status:</label>
+          <input
+            className="input"
+            value={
+              accessState?.unlock_active
+                ? 'Unblocked by admin'
+                : accessState?.entry_blocked
+                ? 'Blocked'
+                : 'Open'
+            }
+            readOnly
+          />
         </div>
         <div />
-
         <div className="mte-pref-field">
-          <label>Delegate Email(s):</label>
-          <input className="input" value={drafts.delegate} onChange={(event) => updateDraft('delegate', event.target.value)} placeholder="delegate@company.com" />
+          <label>Admin Notes:</label>
+          <textarea
+            className="input"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            rows={4}
+            placeholder="Reason for unblocking or re-blocking"
+          />
         </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add delegate" onClick={() => addPreference('delegate', 'delegates')} disabled={!drafts.delegate.trim()}>
-          <ChevronRight size={15} />
-        </button>
         <div className="mte-pref-field">
-          <label>Selected Delegates:</label>
-          <textarea className="input" value={selected.delegates} onChange={(event) => updateSelected('delegates', event.target.value)} rows={4} />
+          <label>Action:</label>
+          <button
+            type="button"
+            style={saving ? S.btnDisabled : (accessState?.unlock_active ? S.btnSecondary : S.btnPrimary)}
+            onClick={() => handleUnlockToggle(!accessState?.unlock_active)}
+            disabled={saving || !selectedEmployeeId || !selectedPeriodOption?.start}
+          >
+            {saving ? 'Saving...' : accessState?.unlock_active ? 'Block Again' : 'Unblock Fortnight'}
+          </button>
         </div>
-        <div />
-
-        <div className="mte-pref-field">
-          <label>Approver Email(s):</label>
-          <input className="input" value={drafts.approver} onChange={(event) => updateDraft('approver', event.target.value)} placeholder="approver@company.com" />
-        </div>
-        <button type="button" className="mte-pref-arrow" aria-label="Add approver" onClick={() => addPreference('approver', 'approvers')} disabled={!drafts.approver.trim()}>
-          <ChevronRight size={15} />
-        </button>
-        <div className="mte-pref-field">
-          <label>Selected Approvers:</label>
-          <textarea className="input" value={selected.approvers} onChange={(event) => updateSelected('approvers', event.target.value)} rows={4} />
-        </div>
-        <div />
       </div>
-    </div>
+
+      <div style={S.infoBox}>
+        <p style={S.infoTitle}>Current Rule</p>
+        <p style={{ ...S.infoItem, marginBottom: 0 }}>
+          {accessState?.entry_deadline_label || 'Select an employee and fortnight to view the block rule.'}
+        </p>
+      </div>
+    </>
   );
 }
 
@@ -8270,10 +9430,16 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     if (!userId || !period) return;
     setLoading(true);
     if (isAdmin) {
-      Promise.allSettled([
-        fetchAPI('/timesheets/all'),
-        fetchAPI('/expenses?role=Admin'),
-      ])
+      const requests = EXPENSES_FEATURE_ENABLED
+        ? [
+            fetchAPI('/timesheets/all'),
+            fetchAPI('/expenses?role=Admin'),
+          ]
+        : [
+            fetchAPI('/timesheets/all'),
+            Promise.resolve([]),
+          ];
+      Promise.allSettled(requests)
         .then(([timesheetResult, expenseResult]) => {
           const periodTimesheets = timesheetResult.status === 'fulfilled' && Array.isArray(timesheetResult.value)
             ? timesheetResult.value.filter((item) => item.period_start === period.start && item.period_end === period.end)
@@ -8290,11 +9456,18 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
         .finally(() => setLoading(false));
       return;
     }
-    Promise.allSettled([
-      fetchAPI(`/timesheets/employee/${userId}`),
-      fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`),
-      fetchAPI(`/users/${userId}`),
-    ])
+    const requests = EXPENSES_FEATURE_ENABLED
+      ? [
+          fetchAPI(`/timesheets/employee/${userId}`),
+          fetchAPI(`/expenses?employee_id=${userId}&role=${encodeURIComponent(user?.role || '')}`),
+          fetchAPI(`/users/${userId}`),
+        ]
+      : [
+          fetchAPI(`/timesheets/employee/${userId}`),
+          Promise.resolve([]),
+          fetchAPI(`/users/${userId}`),
+        ];
+    Promise.allSettled(requests)
       .then(([timesheetResult, expenseResult, profileResult]) => {
         const timesheets = timesheetResult.status === 'fulfilled' && Array.isArray(timesheetResult.value)
           ? timesheetResult.value
@@ -8995,9 +10168,15 @@ function TimesheetsContent({ user, navigationState }) {
     ...(user?.role === 'Admin' ? [{ key: 'assignments', label: 'ASSIGNMENTS' }] : []),
     { key: 'adjustments', label: 'ADJUSTMENTS' },
     { key: 'summary', label: 'SUMMARY' },
-    { key: 'preferences', label: 'PREFERENCES' },
+    ...(user?.role === 'Admin' ? [{ key: 'preferences', label: 'PREFERENCES' }] : []),
     ...(user?.role === 'Admin' ? [{ key: 'reports', label: 'REPORTS' }] : []),
   ];
+
+  useEffect(() => {
+    if (user?.role !== 'Admin' && activeModule === 'preferences') {
+      setActiveModule('time');
+    }
+  }, [activeModule, user?.role]);
 
   const renderActiveModule = () => {
     switch (activeModule) {
@@ -9051,7 +10230,17 @@ function TimesheetsContent({ user, navigationState }) {
           />
         );
       case 'preferences':
-        return <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />;
+        return user?.role === 'Admin'
+          ? <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />
+          : (
+            <PortalTimeWorkspace
+              user={user}
+              selectedPeriod={selectedPeriod}
+              onSelectedPeriodChange={setSelectedPeriod}
+              onSheetSnapshotChange={handleSheetSnapshotChange}
+              navigationState={navigationState}
+            />
+          );
       case 'reports':
         return user?.role === 'Admin' ? <ReportsPanel user={user} /> : (
           <PortalTimeWorkspace
@@ -9109,7 +10298,9 @@ function TimesheetsContent({ user, navigationState }) {
 }
 
 export default function Timesheets({ user, adminView = false, navigationState = null }) {
-  const effectiveUser = adminView && user?.role !== 'Admin' ? { ...user, role: 'Admin' } : user;
+  const effectiveUser = adminView && user?.role !== 'Admin'
+    ? { ...user, originalRole: user?.role, role: 'Admin' }
+    : { ...user, originalRole: user?.role };
   return (
     <TimesheetUiProvider>
       <TimesheetsContent user={effectiveUser} navigationState={navigationState} />

@@ -217,6 +217,12 @@ const ManagerLeaves = ({ user, navigationState }) => {
       return;
     }
 
+    if (!leave.reason || !leave.reason.trim()) {
+      setMessage("Reason is mandatory for this leave request");
+      setTimeout(() => setMessage(""), 5000);
+      return;
+    }
+
     if (leave.leave_type === "Early Logout" && !leave.logout_time) {
       setMessage("Logout time is mandatory for early logout");
       setTimeout(() => setMessage(""), 5000);
@@ -394,6 +400,7 @@ const ManagerLeaves = ({ user, navigationState }) => {
         { label: "Planned leave", value: myBalance.planned || 0, note: `${myBalance.plannedTotal || 12} allocated` },
         { label: "Optional leave", value: myBalance.optional || 0, note: `${myBalance.optionalTotal || 2} allocated` },
         { label: "LOP used", value: myBalance.lwp || 0, note: "Unpaid leave recorded" },
+        { label: "Comp Offs used", value: myBalance.compOffUsed || 0, note: "Compensatory off recorded" },
       ]
     : [];
 
@@ -659,6 +666,7 @@ const ManagerLeaves = ({ user, navigationState }) => {
                     <option>Sick</option>
                     <option>Planned</option>
                     <option>Optional</option>
+                    <option>Compensatory Off</option>
                     <option>Early Logout</option>
                     <option>Earned</option>
                     <option>LOP</option>

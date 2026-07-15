@@ -688,24 +688,6 @@ const AdminView = ({
           </p>
         </div>
 
-        <div className="admin-hero-meta">
-          <div className="admin-hero-meta-item">
-            <span>Primary View</span>
-            <strong>Hospitality workspace</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Built For</span>
-            <strong>Daily operations</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Includes</span>
-            <strong>Demand, guests, history</strong>
-          </div>
-          <div className="admin-hero-meta-item">
-            <span>Outcome</span>
-            <strong>Smoother service planning</strong>
-          </div>
-        </div>
       </header>
 
       <nav className="page-subtab-strip" aria-label="Tea and coffee admin sections">

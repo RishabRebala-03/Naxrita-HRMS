@@ -37,9 +37,9 @@ const leaveStatusColors = {
   Approved: "#107e3e",
   Pending: "#f0ab00",
   Cancelled: "#4b5563",
-  Rejected: "#bb0000",
+  Rejected: "#5b738b",
 };
-const departmentChartPalette = ["#0a6ed1", "#188918", "#d97706", "#bb0000", "#5b738b", "#91c8f6"];
+const departmentChartPalette = ["#0a6ed1", "#188918", "#d97706", "#5b738b", "#7c3aed", "#14b8a6"];
 
 const getTimeBasedGreeting = () => {
   const hour = new Date().getHours();
@@ -555,10 +555,10 @@ const AdminDashboard = ({ user, onNavigate }) => {
           </div>
           <div className="fiori-chart-shell">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={departmentHeadcountData} barCategoryGap={18}>
+              <BarChart data={departmentHeadcountData} barCategoryGap={22} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                 <CartesianGrid stroke="#e8edf3" vertical={false} />
-                <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
+                <XAxis dataKey="name" tickLine={false} axisLine={false} tickMargin={10} />
+                <YAxis allowDecimals={false} tickLine={false} axisLine={false} tickMargin={10} />
                 <Tooltip content={<ChartTooltip />} />
                 <Bar dataKey="value" radius={[8, 8, 0, 0]}>
                   {departmentHeadcountData.map((entry) => (
@@ -580,7 +580,7 @@ const AdminDashboard = ({ user, onNavigate }) => {
           </div>
           <div className="fiori-chart-shell">
             <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
+              <PieChart margin={{ top: 4, right: 8, bottom: 4, left: 8 }}>
                 <Pie
                   data={leaveStatusData}
                   dataKey="value"
@@ -609,10 +609,10 @@ const AdminDashboard = ({ user, onNavigate }) => {
           </div>
           <div className="fiori-chart-shell">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={monthlyTrendData}>
+              <AreaChart data={monthlyTrendData} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
                 <CartesianGrid stroke="#e8edf3" vertical={false} />
-                <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                <YAxis allowDecimals={false} tickLine={false} axisLine={false} />
+                <XAxis dataKey="name" tickLine={false} axisLine={false} tickMargin={10} />
+                <YAxis allowDecimals={false} tickLine={false} axisLine={false} tickMargin={10} />
                 <Tooltip content={<ChartTooltip />} />
                 <Area
                   type="monotone"

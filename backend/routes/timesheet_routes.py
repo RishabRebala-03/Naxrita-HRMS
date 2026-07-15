@@ -22,7 +22,7 @@ ABSENCE_CHARGE_CODES = {
     "bereavement_leave": {"code": "955X02", "name": "Bereavement Leave"},
     "casual_leave": {"code": "955X10", "name": "Casual leave"},
     "client_specific_holiday": {"code": "970X01", "name": "Client Specific holiday"},
-    "compensatory_off": {"code": "970X01", "name": "Compensatory off"},
+    "compensatory_off": {"code": "970X01", "name": "Compensatory Off"},
     "contingency_leave": {"code": "955X05", "name": "Contingency Leave"},
     "earned_leave": {"code": "900X00", "name": "Earned Leave"},
     "leave_with_loss_of_pay": {"code": "955X18", "name": "Leave with loss of pay"},
@@ -94,6 +94,7 @@ LEAVE_TYPE_DISPLAY_CODES = {
     "leave without pay": "LWP",
     "leave with loss of pay": "LWP",
     "early logout": "EL",
+    "compensatory off": "CO",
 }
 
 
@@ -500,6 +501,304 @@ def queue_timesheet_submission_emails(timesheet_doc, employee=None):
     return queued
 
 
+def get_timesheet_manager_hierarchy(employee_id):
+    """Return the reporting chain for timesheet escalation and multi-step approval."""
+    hierarchy = []
+    current_id = employee_id
+    visited = set()
+
+    while current_id:
+        current_key = str(current_id)
+        if current_key in visited:
+            break
+        visited.add(current_key)
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(current_id)})
+        if not employee or not employee.get("reportsTo"):
+            break
+
+        manager_id = employee.get("reportsTo")
+        manager = mongo.db.users.find_one({"_id": manager_id})
+        if not manager:
+            break
+
+        hierarchy.append({
+            "_id": manager["_id"],
+            "name": manager.get("name", "Unknown"),
+            "email": manager.get("email", ""),
+            "role": manager.get("role", "Manager"),
+        })
+        current_id = manager_id
+
+    return hierarchy
+
+
+def get_timesheet_approval_chain(timesheet, employee=None):
+    """Resolve the ordered approver chain for a timesheet."""
+    if not isinstance(timesheet, dict):
+        return []
+
+    employee = employee or mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
+    chain = []
+    seen = set()
+
+    def append_user(user_doc):
+        if not user_doc or not user_doc.get("_id"):
+            return
+        key = str(user_doc["_id"])
+        if key in seen:
+            return
+        seen.add(key)
+        chain.append({
+            "_id": user_doc["_id"],
+            "name": user_doc.get("name", ""),
+            "email": user_doc.get("email", ""),
+            "role": user_doc.get("role", ""),
+        })
+
+    workflow = (timesheet.get("timesheet_workflow_preferences") or {})
+    for approver_email in normalize_email_list(workflow.get("approvers")):
+        append_user(find_user_by_email(approver_email))
+
+    reporting_lead_id = timesheet.get("reporting_lead_id") or (employee or {}).get("reportsTo")
+    if reporting_lead_id:
+        append_user(mongo.db.users.find_one({"_id": reporting_lead_id}))
+
+    manager_id = timesheet.get("manager_id") or (employee or {}).get("peopleLead")
+    if manager_id:
+        append_user(mongo.db.users.find_one({"_id": manager_id}))
+
+    for manager in get_timesheet_manager_hierarchy(timesheet.get("employee_id")):
+        append_user(manager)
+
+    return chain
+
+
+def get_timesheet_current_approver(timesheet, employee=None):
+    chain = get_timesheet_approval_chain(timesheet, employee=employee)
+    current_id = str((timesheet or {}).get("current_approver_id") or "")
+    if current_id:
+        for approver in chain:
+            if str(approver.get("_id")) == current_id:
+                return approver
+    return chain[0] if chain else None
+
+
+def get_next_timesheet_approver(timesheet, employee=None):
+    chain = get_timesheet_approval_chain(timesheet, employee=employee)
+    if not chain:
+        return None
+
+    current_id = str((timesheet or {}).get("current_approver_id") or "")
+    if not current_id:
+        return chain[0]
+
+    for index, approver in enumerate(chain):
+        if str(approver.get("_id")) == current_id:
+            return chain[index + 1] if index + 1 < len(chain) else None
+    return None
+
+
+def notify_timesheet_pending_approver(timesheet, approver_id, *, event, message, notification_type="timesheet_submitted"):
+    if not approver_id:
+        return
+    target = build_timesheet_notification_target(timesheet, view="approvals")
+    create_notification(
+        user_id=approver_id,
+        notification_type=notification_type,
+        message=message,
+        related_timesheet_id=timesheet.get("_id"),
+        target=target,
+        reminder_group=f"timesheet:{timesheet.get('_id')}:{event}:{approver_id}",
+    )
+    set_timesheet_reminder_state(
+        timesheet.get("_id"),
+        event=event,
+        mode="pending_status",
+        recipient_id=approver_id,
+        target=target,
+        message=message,
+        statuses=["pending_lead", "pending_manager"],
+    )
+
+
+def finalize_timesheet_approval(timesheet, approver_id, approver_name, approval_entry, *, final_stage_label="approver"):
+    now = datetime.utcnow()
+    mongo.db.timesheets.update_one(
+        {"_id": timesheet["_id"]},
+        {
+            "$set": {
+                "status": "approved",
+                "current_approver_id": None,
+                "lead_approved_at": timesheet.get("lead_approved_at") or now,
+                "lead_approved_by": timesheet.get("lead_approved_by") or approver_name,
+                "lead_approved_by_id": timesheet.get("lead_approved_by_id") or approver_id,
+                "manager_approved_at": now if approval_entry.get("stage") == "manager" else timesheet.get("manager_approved_at"),
+                "manager_approved_by": approver_name if approval_entry.get("stage") == "manager" else timesheet.get("manager_approved_by"),
+                "manager_approved_by_id": approver_id if approval_entry.get("stage") == "manager" else timesheet.get("manager_approved_by_id"),
+                "is_locked": True,
+                "requires_reapproval": False,
+                "updated_at": now,
+            },
+            "$push": {"approval_history": approval_entry},
+        },
+    )
+
+    approval_events = [
+        item for item in (timesheet.get("approval_history") or [])
+        if item.get("action") == "approved"
+    ]
+    approval_event = "reapproved" if approval_events else "approved"
+    employee_target = build_timesheet_notification_target(timesheet, view="entry")
+    approval_message = (
+        f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
+        f"has been approved by your {final_stage_label} and is now locked"
+    )
+    create_notification(
+        user_id=timesheet["employee_id"],
+        notification_type="timesheet_approved",
+        message=approval_message,
+        related_timesheet_id=timesheet["_id"],
+        target=employee_target,
+        reminder_group=f"timesheet:{timesheet['_id']}:{approval_event}:{timesheet['employee_id']}",
+    )
+    set_timesheet_reminder_state(
+        timesheet["_id"],
+        event=approval_event,
+        mode="until_read",
+        recipient_id=timesheet["employee_id"],
+        target=employee_target,
+        message=approval_message,
+    )
+
+
+def move_timesheet_to_next_approver(timesheet, next_approver, approval_entry, *, escalation=False):
+    now = datetime.utcnow()
+    next_status = "pending_manager"
+    update_data = {
+        "status": next_status,
+        "current_approver_id": next_approver["_id"],
+        "current_approver_name": next_approver.get("name", ""),
+        "current_approver_email": next_approver.get("email", ""),
+        "updated_at": now,
+    }
+    if escalation:
+        update_data["escalation_level"] = int(timesheet.get("escalation_level", 0) or 0) + 1
+        update_data["escalated_on"] = now
+        update_data["previous_approver_id"] = timesheet.get("current_approver_id")
+
+    push_data = {"approval_history": approval_entry}
+    if escalation:
+        push_data["escalation_history"] = {
+            "from_approver_id": timesheet.get("current_approver_id"),
+            "to_approver_id": next_approver["_id"],
+            "to_approver_name": next_approver.get("name", ""),
+            "escalated_at": now,
+            "level": int(timesheet.get("escalation_level", 0) or 0) + 1,
+        }
+
+    mongo.db.timesheets.update_one(
+        {"_id": timesheet["_id"]},
+        {"$set": update_data, "$push": push_data},
+    )
+
+    action_label = "escalated" if escalation else "forwarded"
+    message = (
+        f"{timesheet.get('employee_name', 'An employee')} submitted a timesheet for "
+        f"{timesheet.get('period_start')} to {timesheet.get('period_end')} and it was {action_label} to you for approval"
+    )
+    notify_timesheet_pending_approver(
+        {**timesheet, "_id": timesheet["_id"], "status": next_status},
+        next_approver["_id"],
+        event="escalated" if escalation else "submitted",
+        message=message,
+        notification_type="timesheet_escalated" if escalation else "timesheet_submitted",
+    )
+
+
+def escalate_timesheet_request(timesheet_id):
+    try:
+        timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
+        if not timesheet or timesheet.get("status") not in ("pending_lead", "pending_manager"):
+            return False
+
+        employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
+        next_approver = get_next_timesheet_approver(timesheet, employee=employee)
+        current_approver = get_timesheet_current_approver(timesheet, employee=employee)
+
+        if not next_approver:
+            admins = list(mongo.db.users.find({"role": "Admin"}).sort("name", 1))
+            current_is_admin = bool(current_approver and current_approver.get("role") == "Admin")
+            if current_is_admin or not admins:
+                return False
+            next_approver = {
+                "_id": admins[0]["_id"],
+                "name": admins[0].get("name", "Admin"),
+                "email": admins[0].get("email", ""),
+                "role": "Admin",
+            }
+
+        approval_entry = {
+            "stage": "manager" if timesheet.get("status") == "pending_manager" else "lead",
+            "action": "escalated",
+            "approver_id": current_approver.get("_id") if current_approver else None,
+            "approver_name": current_approver.get("name", "") if current_approver else "System",
+            "comments": f"Auto-escalated to {next_approver.get('name', 'approver')}",
+            "timestamp": datetime.utcnow(),
+        }
+        move_timesheet_to_next_approver(timesheet, next_approver, approval_entry, escalation=True)
+        return True
+    except Exception as e:
+        print(f"❌ Error escalating timesheet {timesheet_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def check_timesheet_escalations():
+    try:
+        current_time = now_ist().replace(tzinfo=None)
+        pending_timesheets = list(mongo.db.timesheets.find({"status": {"$in": ["pending_lead", "pending_manager"]}}))
+        escalated_count = 0
+
+        for timesheet in pending_timesheets:
+            escalation_level = int(timesheet.get("escalation_level", 0) or 0)
+            reference_date = timesheet.get("escalated_on") or timesheet.get("submitted_at")
+            if not reference_date:
+                continue
+
+            if getattr(reference_date, "tzinfo", None) is not None:
+                reference_date = reference_date.astimezone(now_ist().tzinfo).replace(tzinfo=None)
+
+            days_pending = (current_time - reference_date).days
+            should_escalate = False
+            if escalation_level == 0 and days_pending >= 2:
+                should_escalate = True
+            elif escalation_level > 0 and days_pending >= 1:
+                should_escalate = True
+
+            if should_escalate and escalate_timesheet_request(str(timesheet["_id"])):
+                escalated_count += 1
+
+        return {
+            "message": "Timesheet escalation check completed",
+            "total_pending": len(pending_timesheets),
+            "escalated_count": escalated_count,
+        }
+    except Exception as e:
+        print(f"❌ Error checking timesheet escalations: {str(e)}")
+        raise
+
+
+@timesheet_bp.route("/check_escalations", methods=["POST"])
+def run_timesheet_escalation_check():
+    try:
+        result = check_timesheet_escalations()
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 def get_timesheet_period_bounds(timesheet):
     """Parse the stored period bounds for fortnight-aware edit rules."""
     try:
@@ -513,6 +812,88 @@ def get_timesheet_period_bounds(timesheet):
         )
     except Exception:
         return None, None
+
+
+def get_period_bounds(period_start, period_end):
+    try:
+        start_key = normalize_date_key(period_start)
+        end_key = normalize_date_key(period_end)
+        if not start_key or not end_key:
+            return None, None
+        return (
+            datetime.strptime(start_key, "%Y-%m-%d").date(),
+            datetime.strptime(end_key, "%Y-%m-%d").date(),
+        )
+    except Exception:
+        return None, None
+
+
+def get_fortnight_deadline_date(period_start, period_end):
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not start_date or not end_date:
+        return None
+
+    if start_date.day == 1 and end_date.day == 15:
+        return start_date.replace(day=14)
+    if start_date.day == 16:
+        return start_date.replace(day=28)
+    return None
+
+
+def get_fortnight_deadline_label(period_start, period_end):
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not deadline or not start_date or not end_date:
+        return ""
+
+    if start_date.day == 1 and end_date.day == 15:
+        return "This first-fortnight timesheet is blocked from the 14th onward unless an admin unblocks it."
+    if start_date.day == 16:
+        return "This second-fortnight timesheet is blocked from the 28th onward unless an admin unblocks it."
+    return ""
+
+
+def get_timesheet_period_unlock(employee_id, period_start, period_end):
+    if not employee_id or not period_start or not period_end:
+        return None
+    return mongo.db.timesheet_period_unlocks.find_one({
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "is_active": True,
+    })
+
+
+def is_timesheet_period_unlocked(employee_id, period_start, period_end):
+    return bool(get_timesheet_period_unlock(employee_id, period_start, period_end))
+
+
+def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=None):
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    if not deadline:
+        return False
+
+    current_date = (reference or now_ist()).date()
+    if current_date < deadline:
+        return False
+
+    return not is_timesheet_period_unlocked(employee_id, period_start, period_end)
+
+
+def get_period_access_state(employee_id, period_start, period_end, reference=None):
+    unlock = get_timesheet_period_unlock(employee_id, period_start, period_end)
+    deadline = get_fortnight_deadline_date(period_start, period_end)
+    blocked = is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=reference)
+    return {
+        "employee_id": employee_id,
+        "period_start": period_start,
+        "period_end": period_end,
+        "entry_deadline_date": deadline.strftime("%Y-%m-%d") if deadline else "",
+        "entry_deadline_label": get_fortnight_deadline_label(period_start, period_end),
+        "entry_blocked": blocked,
+        "unlock_active": bool(unlock),
+        "unlock_record": unlock,
+    }
 
 
 def is_approved_edit_window_open(timesheet, reference=None):
@@ -537,9 +918,9 @@ def is_correction_window_open_for_timesheet(timesheet, reference=None):
         return False
 
     if period_start.day == 1 and period_end.day == 15:
-        return current_date.day in (13, 14)
+        return current_date.day == 13
     if period_start.day == 16 and period_end.day >= 28:
-        return current_date.day in (27, 28)
+        return current_date.day == 27
 
     return False
 
@@ -549,21 +930,36 @@ def get_approved_edit_window_label(timesheet):
     if not period_start or not period_end:
         return ""
     if period_start.day == 1 and period_end.day == 15:
-        return "Editable on the 13th and 14th of the same month after approval."
+        return "Editable on the 13th of the same month after approval."
     if period_start.day == 16:
-        return "Editable on the 27th and 28th of the same month after approval."
+        return "Editable on the 27th of the same month after approval."
     return ""
 
 
 def is_employee_editable_timesheet(timesheet):
+    period_blocked = is_fortnight_entry_blocked(
+        timesheet.get("employee_id"),
+        timesheet.get("period_start"),
+        timesheet.get("period_end"),
+    )
     status = (timesheet or {}).get("status")
     if status in ("rejected_by_lead", "rejected_by_manager"):
-        return True
+        return not period_blocked
     if status == "draft":
         if timesheet.get("reopened_from_approved"):
-            return is_correction_window_open_for_timesheet(timesheet)
-        return True
-    return status == "approved" and is_correction_window_open_for_timesheet(timesheet)
+            return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
+                timesheet.get("employee_id"),
+                timesheet.get("period_start"),
+                timesheet.get("period_end"),
+            )
+        return not period_blocked
+    if status == "approved":
+        return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
+            timesheet.get("employee_id"),
+            timesheet.get("period_start"),
+            timesheet.get("period_end"),
+        )
+    return False
 
 
 def build_resubmission_update(ts, update_data):
@@ -586,9 +982,27 @@ def annotate_timesheet_editability(timesheet):
     if not isinstance(timesheet, dict):
         return timesheet
 
+    current_approver_id = timesheet.get("current_approver_id")
+    if current_approver_id and not timesheet.get("current_approver_name"):
+        current_approver = mongo.db.users.find_one({"_id": current_approver_id})
+        if current_approver:
+            timesheet["current_approver_name"] = current_approver.get("name", "")
+            timesheet["current_approver_email"] = current_approver.get("email", "")
+
+    access_state = get_period_access_state(
+        timesheet.get("employee_id"),
+        timesheet.get("period_start"),
+        timesheet.get("period_end"),
+    )
     timesheet["approved_edit_window_open"] = is_approved_edit_window_open(timesheet)
     timesheet["approved_edit_window_label"] = get_approved_edit_window_label(timesheet)
     timesheet["is_employee_editable"] = is_employee_editable_timesheet(timesheet)
+    timesheet["period_entry_blocked"] = access_state["entry_blocked"]
+    timesheet["period_entry_deadline_date"] = access_state["entry_deadline_date"]
+    timesheet["period_entry_deadline_label"] = access_state["entry_deadline_label"]
+    timesheet["period_unlock_active"] = access_state["unlock_active"]
+    if access_state["unlock_record"]:
+        timesheet["period_unlock_record"] = access_state["unlock_record"]
     return timesheet
 
 
@@ -1400,6 +1814,10 @@ def create_timesheet():
             "period_start": period_start,
             "period_end":   period_end,
         })
+        if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
+            return jsonify({
+                "error": get_fortnight_deadline_label(period_start, period_end)
+            }), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
             return jsonify({
                 "error": "This timesheet has already been approved and is locked."
@@ -1438,9 +1856,15 @@ def create_timesheet():
             "updated_at":          now,
             "submitted_at":        now,
             "approval_history":    [],
+            "escalation_level":    0,
+            "escalation_history":  [],
         }
         apply_employee_assignment_snapshot(timesheet, employee)
         apply_timesheet_workflow_preference(timesheet, employee=employee)
+        current_approver = get_timesheet_current_approver(timesheet, employee=employee)
+        if not current_approver:
+            return jsonify({"error": "No approver found for employee"}), 404
+        timesheet["current_approver_id"] = current_approver["_id"]
 
         if existing:
             if existing.get("status") == "approved":
@@ -1455,31 +1879,16 @@ def create_timesheet():
         timesheet["_id"] = timesheet_id
 
         # Notify the reporting lead
-        effective_reporting_lead_id = timesheet.get("reporting_lead_id") or reporting_lead_id
-        reporting_lead = mongo.db.users.find_one({"_id": effective_reporting_lead_id})
-        if reporting_lead:
-            msg = (
-                f"{employee.get('name')} submitted a timesheet for "
-                f"{period_start} to {period_end} ({total_hours}h)"
-            )
-            target = build_timesheet_notification_target(timesheet, view="approvals")
-            create_notification(
-                user_id=effective_reporting_lead_id,
-                notification_type="timesheet_submitted",
-                message=msg,
-                related_timesheet_id=timesheet_id,
-                target=target,
-                reminder_group=f"timesheet:{timesheet_id}:submitted:{effective_reporting_lead_id}",
-            )
-            set_timesheet_reminder_state(
-                timesheet_id,
-                event="submitted",
-                mode="pending_status",
-                recipient_id=effective_reporting_lead_id,
-                target=target,
-                message=msg,
-                statuses=["pending_lead", "pending_manager"],
-            )
+        msg = (
+            f"{employee.get('name')} submitted a timesheet for "
+            f"{period_start} to {period_end} ({total_hours}h)"
+        )
+        notify_timesheet_pending_approver(
+            timesheet,
+            current_approver["_id"],
+            event="submitted",
+            message=msg,
+        )
         queue_timesheet_submission_emails(timesheet, employee=employee)
 
         return jsonify({
@@ -1662,6 +2071,8 @@ def save_timesheet_draft():
             "period_start": period_start,
             "period_end": period_end,
         })
+        if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
+            return jsonify({"error": get_fortnight_deadline_label(period_start, period_end)}), 400
         if existing and existing.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be saved as drafts"}), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
@@ -1755,6 +2166,8 @@ def submit_timesheet(timesheet_id):
         ts = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
+        if is_fortnight_entry_blocked(ts.get("employee_id"), ts.get("period_start"), ts.get("period_end")):
+            return jsonify({"error": get_fortnight_deadline_label(ts.get("period_start"), ts.get("period_end"))}), 400
         if ts.get("status") == "approved" and not is_approved_edit_window_open(ts):
             return jsonify({"error": "Timesheet is already approved"}), 400
         if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(ts):
@@ -1815,6 +2228,9 @@ def submit_timesheet(timesheet_id):
             "submitted_at": now,
             "updated_at":   now,
             "is_locked":    False,
+            "escalation_level": 0,
+            "escalated_on": None,
+            "previous_approver_id": None,
         }
         if ts.get("status") == "approved" or ts.get("reopened_from_approved") or ts.get("requires_reapproval"):
             update_data["resubmitted_after_approval_at"] = now
@@ -1832,6 +2248,10 @@ def submit_timesheet(timesheet_id):
             update_data["reporting_lead_email"] = working_copy.get("reporting_lead_email", "")
         if "timesheet_workflow_preferences" in working_copy:
             update_data["timesheet_workflow_preferences"] = working_copy.get("timesheet_workflow_preferences")
+        current_approver = get_timesheet_current_approver(working_copy, employee=employee)
+        if not current_approver:
+            return jsonify({"error": "No approver found for this timesheet"}), 404
+        update_data["current_approver_id"] = current_approver["_id"]
 
         mongo.db.timesheets.update_one(
             {"_id": ObjectId(timesheet_id)},
@@ -1839,34 +2259,18 @@ def submit_timesheet(timesheet_id):
         )
 
         # Notify reporting lead
-        if ts.get("reporting_lead_id"):
-            employee_name = ts.get("employee_name", "An employee")
-            is_resubmission = bool(ts.get("reopened_from_approved") or ts.get("requires_reapproval") or ts.get("lead_approved_at"))
-            event_name = "resubmitted" if is_resubmission else "submitted"
-            target = build_timesheet_notification_target(working_copy, view="approvals")
-            create_notification(
-                user_id=ts["reporting_lead_id"],
-                notification_type="timesheet_submitted",
-                message=(
-                    f"{employee_name} submitted a timesheet for "
-                    f"{ts.get('period_start')} to {ts.get('period_end')}"
-                ),
-                related_timesheet_id=timesheet_id,
-                target=target,
-                reminder_group=f"timesheet:{timesheet_id}:{event_name}:{ts['reporting_lead_id']}",
-            )
-            set_timesheet_reminder_state(
-                timesheet_id,
-                event=event_name,
-                mode="pending_status",
-                recipient_id=ts["reporting_lead_id"],
-                target=target,
-                message=(
-                    f"{employee_name} submitted a timesheet for "
-                    f"{ts.get('period_start')} to {ts.get('period_end')}"
-                ),
-                statuses=["pending_lead", "pending_manager"],
-            )
+        employee_name = ts.get("employee_name", "An employee")
+        is_resubmission = bool(ts.get("reopened_from_approved") or ts.get("requires_reapproval") or ts.get("lead_approved_at"))
+        event_name = "resubmitted" if is_resubmission else "submitted"
+        notify_timesheet_pending_approver(
+            {**working_copy, "_id": ObjectId(timesheet_id)},
+            current_approver["_id"],
+            event=event_name,
+            message=(
+                f"{employee_name} submitted a timesheet for "
+                f"{ts.get('period_start')} to {ts.get('period_end')}"
+            ),
+        )
         working_copy["_id"] = ObjectId(timesheet_id)
         queue_timesheet_submission_emails(working_copy, employee=employee)
 
@@ -1944,11 +2348,11 @@ def get_pending_for_lead(user_id):
         if not requester:
             return jsonify({"error": "A valid requester is required"}), 401
 
-        query = {"status": "pending_lead"}
+        query = {"status": {"$in": ["pending_lead", "pending_manager"]}}
         if has_admin_menu_access(requester, "timesheets"):
             pass
         elif str(requester.get("_id")) == str(user_id):
-            query["reporting_lead_id"] = ObjectId(user_id)
+            query["current_approver_id"] = ObjectId(user_id)
         else:
             return jsonify({"error": "You do not have permission to view these approvals"}), 403
 
@@ -1970,7 +2374,27 @@ def get_pending_for_lead(user_id):
 
 @timesheet_bp.route("/pending/manager/<user_id>", methods=["GET"])
 def get_pending_for_manager(user_id):
-    return jsonify([]), 200
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        query = {"status": "pending_manager"}
+        if has_admin_menu_access(requester, "timesheets"):
+            pass
+        elif str(requester.get("_id")) == str(user_id):
+            query["current_approver_id"] = ObjectId(user_id)
+        else:
+            return jsonify({"error": "You do not have permission to view these approvals"}), 403
+
+        timesheets = list(mongo.db.timesheets.find(query).sort("submitted_at", -1))
+        timesheets = [refresh_timesheet_for_read(ts) for ts in timesheets]
+        timesheets = [enrich_timesheet_with_employee_assignments(ts) for ts in timesheets]
+        timesheets = [annotate_timesheet_editability(ts) for ts in timesheets]
+        return jsonify(serialize_all(timesheets)), 200
+    except Exception as e:
+        print(f"❌ Error fetching pending timesheets for manager: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ========================================
@@ -1991,13 +2415,13 @@ def lead_approve_timesheet(timesheet_id):
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
             return jsonify({"error": "Timesheet not found"}), 404
-        if timesheet.get("status") != "pending_lead":
-            return jsonify({"error": "Timesheet is not pending lead approval"}), 400
+        if timesheet.get("status") not in ("pending_lead", "pending_manager"):
+            return jsonify({"error": "Timesheet is not pending approval"}), 400
 
         requester_id = str(requester.get("_id"))
-        reporting_lead_id = str(timesheet.get("reporting_lead_id") or "")
+        current_approver_id = str(timesheet.get("current_approver_id") or "")
         is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
-        if not (is_timesheet_admin or requester_id == reporting_lead_id):
+        if not (is_timesheet_admin or requester_id == current_approver_id):
             return jsonify({"error": "You do not have permission to approve this timesheet"}), 403
         if is_timesheet_admin and not approver_name_input:
             return jsonify({"error": "approver_name is required for admin approval"}), 400
@@ -2005,9 +2429,11 @@ def lead_approve_timesheet(timesheet_id):
         approver = requester
         approver_id = approver.get("_id")
         approver_name = approver_name_input or approver.get("name") or ""
+        employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
+        next_approver = None if is_timesheet_admin else get_next_timesheet_approver(timesheet, employee=employee)
 
         approval_entry = {
-            "stage":         "lead",
+            "stage":         "lead" if timesheet.get("status") == "pending_lead" else "manager",
             "action":        "approved",
             "approver_id":   approver_id,
             "approver_name": approver_name,
@@ -2015,51 +2441,23 @@ def lead_approve_timesheet(timesheet_id):
             "timestamp":     datetime.utcnow(),
         }
 
-        now = datetime.utcnow()
-        mongo.db.timesheets.update_one(
-            {"_id": ObjectId(timesheet_id)},
-            {
-                "$set": {
-                    "status":             "approved",
-                    "lead_approved_at":   now,
-                    "lead_approved_by":   approver_name,
-                    "lead_approved_by_id": approver_id,
-                    "is_locked":          True,
-                    "requires_reapproval": False,
-                    "updated_at":         now,
-                },
-                "$push": {"approval_history": approval_entry},
-            },
-        )
+        if next_approver:
+            if timesheet.get("status") == "pending_lead":
+                mongo.db.timesheets.update_one(
+                    {"_id": ObjectId(timesheet_id)},
+                    {"$set": {
+                        "lead_approved_at": datetime.utcnow(),
+                        "lead_approved_by": approver_name,
+                        "lead_approved_by_id": approver_id,
+                    }}
+                )
+            move_timesheet_to_next_approver(timesheet, next_approver, approval_entry, escalation=False)
+            print(f"✅ Timesheet {timesheet_id} advanced to next approver {next_approver.get('name')}")
+            return jsonify({"message": "Timesheet approved and forwarded"}), 200
 
-        approval_events = [
-            item for item in (timesheet.get("approval_history") or [])
-            if item.get("stage") == "lead" and item.get("action") == "approved"
-        ]
-        approval_event = "reapproved" if approval_events else "approved"
-        employee_target = build_timesheet_notification_target(timesheet, view="entry")
-        approval_message = (
-            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-            f"has been approved by your lead and is now locked"
-        )
-        create_notification(
-            user_id=timesheet["employee_id"],
-            notification_type="timesheet_approved",
-            message=approval_message,
-            related_timesheet_id=timesheet_id,
-            target=employee_target,
-            reminder_group=f"timesheet:{timesheet_id}:{approval_event}:{timesheet['employee_id']}",
-        )
-        set_timesheet_reminder_state(
-            timesheet_id,
-            event=approval_event,
-            mode="until_read",
-            recipient_id=timesheet["employee_id"],
-            target=employee_target,
-            message=approval_message,
-        )
-
-        print(f"✅ Timesheet {timesheet_id} fully approved by lead/admin {approver_name}")
+        final_stage_label = "lead" if approval_entry["stage"] == "lead" else "manager"
+        finalize_timesheet_approval(timesheet, approver_id, approver_name, approval_entry, final_stage_label=final_stage_label)
+        print(f"✅ Timesheet {timesheet_id} fully approved by {final_stage_label} {approver_name}")
         return jsonify({"message": "Timesheet approved"}), 200
 
     except Exception as e:
@@ -2088,13 +2486,13 @@ def lead_reject_timesheet(timesheet_id):
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
             return jsonify({"error": "Timesheet not found"}), 404
-        if timesheet.get("status") != "pending_lead":
-            return jsonify({"error": "Timesheet is not pending lead approval"}), 400
+        if timesheet.get("status") not in ("pending_lead", "pending_manager"):
+            return jsonify({"error": "Timesheet is not pending approval"}), 400
 
         requester_id = str(requester.get("_id"))
-        reporting_lead_id = str(timesheet.get("reporting_lead_id") or "")
+        current_approver_id = str(timesheet.get("current_approver_id") or "")
         is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
-        if not (is_timesheet_admin or requester_id == reporting_lead_id):
+        if not (is_timesheet_admin or requester_id == current_approver_id):
             return jsonify({"error": "You do not have permission to reject this timesheet"}), 403
         if is_timesheet_admin and not approver_name_input:
             return jsonify({"error": "approver_name is required for admin rejection"}), 400
@@ -2102,9 +2500,11 @@ def lead_reject_timesheet(timesheet_id):
         rejector = requester
         rejector_id = rejector.get("_id")
         rejector_name = approver_name_input or rejector.get("name") or ""
+        stage = "lead" if timesheet.get("status") == "pending_lead" else "manager"
+        rejected_status = "rejected_by_lead" if stage == "lead" else "rejected_by_manager"
 
         rejection_entry = {
-            "stage":         "lead",
+            "stage":         stage,
             "action":        "rejected",
             "approver_id":   rejector_id,
             "approver_name": rejector_name,
@@ -2116,10 +2516,14 @@ def lead_reject_timesheet(timesheet_id):
             {"_id": ObjectId(timesheet_id)},
             {
                 "$set": {
-                    "status":           "rejected_by_lead",
-                    "lead_rejected_at": datetime.utcnow(),
-                    "lead_rejected_by": rejector_name,
-                    "lead_rejected_by_id": rejector_id,
+                    "status":           rejected_status,
+                    "lead_rejected_at": datetime.utcnow() if stage == "lead" else timesheet.get("lead_rejected_at"),
+                    "lead_rejected_by": rejector_name if stage == "lead" else timesheet.get("lead_rejected_by"),
+                    "lead_rejected_by_id": rejector_id if stage == "lead" else timesheet.get("lead_rejected_by_id"),
+                    "manager_rejected_at": datetime.utcnow() if stage == "manager" else timesheet.get("manager_rejected_at"),
+                    "manager_rejected_by": rejector_name if stage == "manager" else timesheet.get("manager_rejected_by"),
+                    "manager_rejected_by_id": rejector_id if stage == "manager" else timesheet.get("manager_rejected_by_id"),
+                    "current_approver_id": None,
                     "rejection_reason": rejection_reason,
                     "updated_at":       datetime.utcnow(),
                 },
@@ -2130,7 +2534,7 @@ def lead_reject_timesheet(timesheet_id):
         rejection_target = build_timesheet_notification_target(timesheet, view="entry")
         rejection_message = (
             f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-            f"was rejected by your lead. Reason: {rejection_reason}"
+            f"was rejected by your {stage}. Reason: {rejection_reason}"
         )
         create_notification(
             user_id=timesheet["employee_id"],
@@ -2149,7 +2553,7 @@ def lead_reject_timesheet(timesheet_id):
             message=rejection_message,
         )
 
-        return jsonify({"message": "Timesheet rejected by lead"}), 200
+        return jsonify({"message": f"Timesheet rejected by {stage}"}), 200
 
     except Exception as e:
         print(f"❌ Error in lead rejection: {str(e)}")
@@ -2164,12 +2568,12 @@ def lead_reject_timesheet(timesheet_id):
 @timesheet_bp.route("/approve/manager/<timesheet_id>", methods=["PUT"])
 def manager_approve_timesheet(timesheet_id):
     try:
-        data        = request.get_json()
-        approved_by = data.get("approved_by")
-        comments    = data.get("comments", "")
-
-        if not approved_by:
-            return jsonify({"error": "approved_by is required"}), 400
+        data = request.get_json()
+        comments = data.get("comments", "")
+        approver_name_input = str(data.get("approver_name") or "").strip()
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
 
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
@@ -2177,54 +2581,34 @@ def manager_approve_timesheet(timesheet_id):
         if timesheet.get("status") != "pending_manager":
             return jsonify({"error": "Timesheet is not pending manager approval"}), 400
 
-        approver = mongo.db.users.find_one({"_id": ObjectId(approved_by)})
-        if not approver:
-            return jsonify({"error": "Approver not found"}), 404
+        requester_id = str(requester.get("_id"))
+        current_approver_id = str(timesheet.get("current_approver_id") or "")
+        is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
+        if not (is_timesheet_admin or requester_id == current_approver_id):
+            return jsonify({"error": "You do not have permission to approve this timesheet"}), 403
+        if is_timesheet_admin and not approver_name_input:
+            return jsonify({"error": "approver_name is required for admin approval"}), 400
+
+        approver = requester
+        approver_id = approver.get("_id")
+        approver_name = approver_name_input or approver.get("name") or ""
+        employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
+        next_approver = None if is_timesheet_admin else get_next_timesheet_approver(timesheet, employee=employee)
 
         approval_entry = {
             "stage":         "manager",
             "action":        "approved",
-            "approver_id":   ObjectId(approved_by),
-            "approver_name": approver.get("name"),
+            "approver_id":   approver_id,
+            "approver_name": approver_name,
             "comments":      comments,
             "timestamp":     datetime.utcnow(),
         }
 
-        mongo.db.timesheets.update_one(
-            {"_id": ObjectId(timesheet_id)},
-            {
-                "$set": {
-                    "status":              "approved",
-                    "manager_approved_at": datetime.utcnow(),
-                    "manager_approved_by": approver.get("name"),
-                    "updated_at":          datetime.utcnow(),
-                    "is_locked":           True,
-                },
-                "$push": {"approval_history": approval_entry},
-            },
-        )
+        if next_approver:
+            move_timesheet_to_next_approver(timesheet, next_approver, approval_entry, escalation=False)
+            return jsonify({"message": "Timesheet approved and forwarded"}), 200
 
-        manager_target = build_timesheet_notification_target(timesheet, view="entry")
-        manager_message = (
-            f"Your timesheet ({timesheet.get('period_start')} to {timesheet.get('period_end')}) "
-            f"has been fully approved and is now locked"
-        )
-        create_notification(
-            user_id=timesheet["employee_id"],
-            notification_type="timesheet_approved",
-            message=manager_message,
-            related_timesheet_id=timesheet_id,
-            target=manager_target,
-            reminder_group=f"timesheet:{timesheet_id}:approved:{timesheet['employee_id']}",
-        )
-        set_timesheet_reminder_state(
-            timesheet_id,
-            event="approved",
-            mode="until_read",
-            recipient_id=timesheet["employee_id"],
-            target=manager_target,
-            message=manager_message,
-        )
+        finalize_timesheet_approval(timesheet, approver_id, approver_name, approval_entry, final_stage_label="manager")
 
         return jsonify({"message": "Timesheet fully approved"}), 200
 
@@ -2242,13 +2626,14 @@ def manager_approve_timesheet(timesheet_id):
 def manager_reject_timesheet(timesheet_id):
     try:
         data             = request.get_json()
-        rejected_by      = data.get("rejected_by")
         rejection_reason = data.get("rejection_reason", "").strip()
+        approver_name_input = str(data.get("approver_name") or "").strip()
+        requester = resolve_requester()
 
         if not rejection_reason:
             return jsonify({"error": "Rejection reason is required"}), 400
-        if not rejected_by:
-            return jsonify({"error": "rejected_by is required"}), 400
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
 
         timesheet = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
         if not timesheet:
@@ -2256,15 +2641,23 @@ def manager_reject_timesheet(timesheet_id):
         if timesheet.get("status") != "pending_manager":
             return jsonify({"error": "Timesheet is not pending manager approval"}), 400
 
-        rejector = mongo.db.users.find_one({"_id": ObjectId(rejected_by)})
-        if not rejector:
-            return jsonify({"error": "Rejector not found"}), 404
+        requester_id = str(requester.get("_id"))
+        current_approver_id = str(timesheet.get("current_approver_id") or "")
+        is_timesheet_admin = has_admin_menu_access(requester, "timesheets")
+        if not (is_timesheet_admin or requester_id == current_approver_id):
+            return jsonify({"error": "You do not have permission to reject this timesheet"}), 403
+        if is_timesheet_admin and not approver_name_input:
+            return jsonify({"error": "approver_name is required for admin rejection"}), 400
+
+        rejector = requester
+        rejector_id = rejector.get("_id")
+        rejector_name = approver_name_input or rejector.get("name") or ""
 
         rejection_entry = {
             "stage":         "manager",
             "action":        "rejected",
-            "approver_id":   ObjectId(rejected_by),
-            "approver_name": rejector.get("name"),
+            "approver_id":   rejector_id,
+            "approver_name": rejector_name,
             "comments":      rejection_reason,
             "timestamp":     datetime.utcnow(),
         }
@@ -2275,7 +2668,9 @@ def manager_reject_timesheet(timesheet_id):
                 "$set": {
                     "status":              "rejected_by_manager",
                     "manager_rejected_at": datetime.utcnow(),
-                    "manager_rejected_by": rejector.get("name"),
+                    "manager_rejected_by": rejector_name,
+                    "manager_rejected_by_id": rejector_id,
+                    "current_approver_id": None,
                     "rejection_reason":    rejection_reason,
                     "updated_at":          datetime.utcnow(),
                 },
@@ -2389,6 +2784,100 @@ def get_timesheet_preferences():
         return jsonify(serialize_all(preference)), 200
     except Exception as e:
         print(f"❌ Error fetching timesheet preferences: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/period-access", methods=["GET"])
+def get_timesheet_period_access():
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        employee_id = request.args.get("employee_id", "").strip()
+        period_start = request.args.get("period_start", "").strip()
+        period_end = request.args.get("period_end", "").strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        employee_obj_id = ObjectId(employee_id)
+        if not (has_admin_menu_access(requester, "timesheets") or str(requester.get("_id")) == str(employee_obj_id)):
+            return jsonify({"error": "You do not have permission to view this fortnight"}), 403
+
+        access_state = get_period_access_state(employee_obj_id, period_start, period_end)
+        unlock_record = access_state.pop("unlock_record", None)
+        payload = {
+            **access_state,
+            "employee_id": str(employee_obj_id),
+        }
+        if unlock_record:
+            payload["unlock_record"] = serialize_all(unlock_record)
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"❌ Error fetching period access: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/period-unlocks", methods=["PUT"])
+def save_timesheet_period_unlock():
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+        if requester.get("role") != "Admin":
+            return jsonify({"error": "Only Admin users can manage blocked fortnights"}), 403
+
+        data = request.get_json() or {}
+        employee_id = str(data.get("employee_id", "")).strip()
+        period_start = str(data.get("period_start", "")).strip()
+        period_end = str(data.get("period_end", "")).strip()
+        unlocked = bool(data.get("unlocked"))
+        notes = str(data.get("notes", "")).strip()
+        if not all([employee_id, period_start, period_end]):
+            return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
+        if not employee:
+            return jsonify({"error": "Employee not found"}), 404
+
+        update_doc = {
+            "employee_id": employee["_id"],
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+            "period_start": period_start,
+            "period_end": period_end,
+            "is_active": unlocked,
+            "notes": notes,
+            "updated_at": datetime.utcnow(),
+            "updated_by_admin_id": requester.get("_id"),
+            "updated_by_admin_name": requester.get("name", ""),
+        }
+        if unlocked:
+            update_doc["unlocked_at"] = datetime.utcnow()
+        else:
+            update_doc["relocked_at"] = datetime.utcnow()
+
+        mongo.db.timesheet_period_unlocks.update_one(
+            {
+                "employee_id": employee["_id"],
+                "period_start": period_start,
+                "period_end": period_end,
+            },
+            {"$set": update_doc, "$setOnInsert": {"created_at": datetime.utcnow()}},
+            upsert=True,
+        )
+
+        access_state = get_period_access_state(employee["_id"], period_start, period_end)
+        unlock_record = access_state.pop("unlock_record", None)
+        payload = {
+            **access_state,
+            "employee_id": str(employee["_id"]),
+        }
+        if unlock_record:
+            payload["unlock_record"] = serialize_all(unlock_record)
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"❌ Error saving period unlock: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -2619,6 +3108,7 @@ def get_timesheet(timesheet_id):
             return jsonify({"error": "Timesheet not found"}), 404
         ts = refresh_timesheet_for_read(ts)
         ts = enrich_timesheet_with_employee_assignments(ts)
+        ts = annotate_timesheet_editability(ts)
         return jsonify(serialize_all(ts)), 200
 
     except Exception as e:
