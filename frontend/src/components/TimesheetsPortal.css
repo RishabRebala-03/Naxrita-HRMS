@@ -1337,6 +1337,13 @@
   min-width: 1180px;
 }
 
+.mte-expense-type-empty {
+  display: block;
+  padding: 12px 14px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .mte-expense-status-pill {
   display: inline-flex;
   align-items: center;

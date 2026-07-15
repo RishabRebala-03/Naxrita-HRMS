@@ -11,7 +11,7 @@ import {
   Download, TrendingUp, BarChart3, UserCheck,
 	  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
   LayoutGrid, ChevronLeft, ChevronRight, Upload, Paperclip,
-  Save, Search, MoreVertical,
+  Save, Search,
 } from 'lucide-react';
 import {
   BarChart, Bar, PieChart, Pie, Cell,
@@ -27,7 +27,7 @@ const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
   : 'http://localhost:5000/api';
 const DAILY_WORK_HOUR_LIMIT = 9;
-const EXPENSES_FEATURE_ENABLED = String(process.env.REACT_APP_EXPENSES_FEATURE_ENABLED || 'true').trim().toLowerCase() === 'true';
+const EXPENSES_FEATURE_ENABLED = true;
 
 // ─── Design tokens (matches leave/user colour system exactly) ────────────────
 const C = {
@@ -6943,6 +6943,7 @@ function ExpensesPanel({ user }) {
   const [selectedExpenseDate, setSelectedExpenseDate] = useState(today);
   const [selectedExpenseCategory, setSelectedExpenseCategory] = useState('');
   const [isExpenseCategoryOpen, setIsExpenseCategoryOpen] = useState(false);
+  const [expenseCategorySearch, setExpenseCategorySearch] = useState('');
   const [form, setForm] = useState({
     expense_date: today,
     category: 'Travel - Public, Limo, & Other',
@@ -6968,6 +6969,8 @@ function ExpensesPanel({ user }) {
     receipt_total: '',
     miscellaneous_expenses: '',
     comments: '',
+    public_official_over_25: false,
+    no_vendor_gst_number: false,
     documentFile: null,
   });
   const [editingId, setEditingId] = useState('');
@@ -7068,6 +7071,8 @@ function ExpensesPanel({ user }) {
       receipt_total: '',
       miscellaneous_expenses: '',
       comments: '',
+      public_official_over_25: false,
+      no_vendor_gst_number: false,
       documentFile: null,
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -7076,6 +7081,7 @@ function ExpensesPanel({ user }) {
   const openEmployeeExpenseCategory = (category) => {
     setSelectedExpenseCategory(category);
     setIsExpenseCategoryOpen(false);
+    setExpenseCategorySearch('');
     setEditingId('');
     setForm((previous) => ({
       ...previous,
@@ -7129,6 +7135,8 @@ function ExpensesPanel({ user }) {
         receipt_total: form.receipt_total,
         miscellaneous_expenses: form.miscellaneous_expenses,
         comments: form.comments,
+        public_official_over_25: form.public_official_over_25,
+        no_vendor_gst_number: form.no_vendor_gst_number,
       };
       let savedExpense = null;
       if (editingId) {
@@ -7180,6 +7188,8 @@ function ExpensesPanel({ user }) {
       receipt_total: expense.receipt_total || '',
       miscellaneous_expenses: expense.miscellaneous_expenses || '',
       comments: expense.comments || '',
+      public_official_over_25: Boolean(expense.public_official_over_25),
+      no_vendor_gst_number: Boolean(expense.no_vendor_gst_number),
       documentFile: null,
     });
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -7395,16 +7405,24 @@ function ExpensesPanel({ user }) {
     ? Math.max(0, Math.round((parseISO(form.to_date) - parseISO(form.from_date)) / 86400000) + 1)
     : '';
   const perDiemTotal = Number(form.receipt_total || 0) + Number(form.miscellaneous_expenses || 0);
-  const employeeExpensesSubmitted = employeeDateExpenses.length > 0
-    && employeeDateExpenses.every((expense) => ['submitted', 'approved'].includes(expense.status));
-  const expenseStatusLabel = employeeExpensesSubmitted ? 'Submitted' : 'Draft';
+  const expenseStatusLabel = (() => {
+    if (!employeeDateExpenses.length) return 'No Expenses';
+    if (employeeDateExpenses.some((expense) => (expense.status || 'saved') === 'saved')) return 'Draft';
+    if (employeeDateExpenses.some((expense) => expense.status === 'submitted')) return 'Submitted';
+    if (employeeDateExpenses.every((expense) => expense.status === 'approved')) return 'Approved';
+    if (employeeDateExpenses.every((expense) => expense.status === 'rejected')) return 'Rejected';
+    return 'Reviewed';
+  })();
   const expenseStatusText = (status) => ({
     saved: 'Draft',
     submitted: 'Submitted',
     approved: 'Approved',
     rejected: 'Rejected',
   }[status] || status || 'Draft');
-  const canReviewExpense = (expense) => ['saved', 'submitted'].includes(expense.status || 'saved');
+  const canReviewExpense = (expense) => expense.status === 'submitted';
+  const filteredExpenseCategories = expenseCategories.filter((category) =>
+    category.toLowerCase().includes(expenseCategorySearch.trim().toLowerCase())
+  );
   const expenseChargeCodeOptions = useMemo(() => {
     const seen = new Set();
     const options = [];
@@ -7469,14 +7487,23 @@ function ExpensesPanel({ user }) {
             <button type="button" className="mte-expense-submit" onClick={handleSubmitExpenses} disabled={loading}>
               {loading ? 'Submitting' : 'Submit'}
             </button>
-            <button type="button" className="mte-expense-more" aria-label="More expense actions"><MoreVertical size={18} /></button>
           </div>
 
           <div className="mte-expense-picker-row">
             <div className="mte-expense-type-picker">
               <div className="mte-expense-type-search">
                 <Search size={17} />
-                <input type="search" placeholder="Search" aria-label="Search expenses" />
+                <input
+                  type="search"
+                  placeholder="Search expense types"
+                  aria-label="Search expense types"
+                  value={expenseCategorySearch}
+                  onFocus={() => setIsExpenseCategoryOpen(true)}
+                  onChange={(event) => {
+                    setExpenseCategorySearch(event.target.value);
+                    setIsExpenseCategoryOpen(true);
+                  }}
+                />
                 <button
                   type="button"
                   className={`mte-expense-type-caret ${isExpenseCategoryOpen ? 'is-open' : ''}`}
@@ -7489,11 +7516,12 @@ function ExpensesPanel({ user }) {
               </div>
               {isExpenseCategoryOpen ? (
                 <div className="mte-expense-type-menu">
-                  {expenseCategories.map((category) => (
+                  {filteredExpenseCategories.map((category) => (
                     <button type="button" key={category} onClick={() => openEmployeeExpenseCategory(category)}>
                       {category}
                     </button>
                   ))}
+                  {filteredExpenseCategories.length === 0 ? <span className="mte-expense-type-empty">No matching expense type</span> : null}
                 </div>
               ) : null}
             </div>
@@ -7746,8 +7774,20 @@ function ExpensesPanel({ user }) {
                 <div className="mte-expense-divider" />
 
                 <div className="mte-expense-checkbox-row">
-                  <label><input type="checkbox" /> Provided to a Public Official with value above $25?</label>
-                  <label><input type="checkbox" /> No Vendor GST Number on Invoice</label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.public_official_over_25}
+                      onChange={(event) => setForm({ ...form, public_official_over_25: event.target.checked })}
+                    /> Provided to a Public Official with value above $25?
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.no_vendor_gst_number}
+                      onChange={(event) => setForm({ ...form, no_vendor_gst_number: event.target.checked })}
+                    /> No Vendor GST Number on Invoice
+                  </label>
                 </div>
                 <p className="mte-expense-important"><strong>IMPORTANT</strong>- Once this checkbox is selected, Naxrita will be liable to pay additional GST. It is advisable that you deal <u>ONLY</u> with GST registered vendors.</p>
 
@@ -7789,7 +7829,18 @@ function ExpensesPanel({ user }) {
           </section>
 
           <aside className="mte-expense-receipts">
-            <div className="mte-expense-dropzone" onClick={() => fileInputRef.current?.click()} role="button" tabIndex={0}>
+            <div
+              className="mte-expense-dropzone"
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              role="button"
+              tabIndex={0}
+            >
               <span>Drag and Drop to Upload</span>
               <Upload size={18} />
             </div>
@@ -8097,7 +8148,7 @@ function ExpensesPanel({ user }) {
                 <td>{expense.client_code || '-'}</td>
                 <td>{expense.category}</td>
                 <td>{expense.description || '-'}</td>
-                <td>{Number(expense.amount || 0).toFixed(2)}</td>
+                <td>{expense.currency || 'INR'} {Number(expense.amount || 0).toFixed(2)}</td>
                 <td>
                   <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
                     {expenseStatusText(expense.status)}
