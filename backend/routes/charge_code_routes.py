@@ -30,6 +30,30 @@ def clean_text(value):
     return str(value or "").strip()
 
 
+def normalize_charge_code_domain(value, default="time", allow_blank=False):
+    raw = clean_text(value).lower()
+    if not raw:
+        return "" if allow_blank else default
+    if raw not in {"time", "expense"}:
+        raise ValueError("domain must be either 'time' or 'expense'")
+    return raw
+
+
+def build_domain_query(domain):
+    if not domain:
+        return {}
+    if domain == "expense":
+        return {"domain": "expense"}
+    return {
+        "$or": [
+            {"domain": "time"},
+            {"domain": {"$exists": False}},
+            {"domain": ""},
+            {"domain": None},
+        ]
+    }
+
+
 def first_non_empty(*values):
     """Return the first value that is not None or blank after trimming."""
     for value in values:
@@ -163,6 +187,7 @@ def ensure_reference_charge_codes():
                 "$set": {
                     "code": item["code"],
                     "name": description or item["code"],
+                    "domain": "time",
                     "description": description,
                     "project_name": "",
                     "type": item["type"],
@@ -218,6 +243,7 @@ def create_charge_code():
         is_active    = bool(data.get("is_active", True))
         created_by   = data.get("created_by")
         owner_id     = data.get("owner_id")
+        domain       = normalize_charge_code_domain(data.get("domain"), default="time")
 
         if not all([code, name, created_by]):
             return jsonify({"error": "code, name, and created_by are required"}), 400
@@ -260,6 +286,7 @@ def create_charge_code():
             "sub_type":     sub_type,
             "client":       client,
             "country":      country,
+            "domain":       domain,
             "is_active":    is_active,
             "created_by":   creator_id,
             "owner_id":     owner["_id"],
@@ -278,6 +305,8 @@ def create_charge_code():
             "code":           code,
         }), 201
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Error creating charge code: {str(e)}")
         import traceback; traceback.print_exc()
@@ -290,7 +319,7 @@ def create_charge_code():
 
 @charge_code_bp.route("/all", methods=["GET"])
 def get_all_charge_codes():
-    """Get all charge codes. Optional: ?active_only=true"""
+    """Get all charge codes. Optional: ?active_only=true&domain=time|expense"""
     try:
         _, error_response = require_admin_menu_access("timesheets")
         if error_response:
@@ -298,7 +327,9 @@ def get_all_charge_codes():
 
         ensure_reference_charge_codes()
         active_only = request.args.get("active_only", "false").lower() == "true"
+        domain = normalize_charge_code_domain(request.args.get("domain"), allow_blank=True)
         query = {"code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES}}
+        query.update(build_domain_query(domain))
         if active_only:
             query["is_active"] = True
         codes = list(mongo.db.charge_codes.find(query).sort("code", 1))
@@ -317,6 +348,8 @@ def get_all_charge_codes():
                 continue
         return jsonify(serialize_all(codes)), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Error fetching charge codes: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -372,6 +405,8 @@ def update_charge_code(charge_code_id):
             update_data["country"] = clean_text(data["country"])
         if "country_region" in data:
             update_data["country"] = clean_text(data["country_region"])
+        if "domain" in data:
+            update_data["domain"] = normalize_charge_code_domain(data.get("domain"), default="time")
         if "owner_id" in data:
             owner_value = data.get("owner_id")
             if owner_value:
@@ -397,6 +432,8 @@ def update_charge_code(charge_code_id):
 
         return jsonify({"message": "Charge code updated successfully"}), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Error updating charge code: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -546,6 +583,7 @@ def assign_charge_code():
                         "sub_type": charge_code.get("sub_type", ""),
                         "client": charge_code.get("client", ""),
                         "country": charge_code.get("country", ""),
+                        "domain": charge_code.get("domain", "time"),
                         "owner_name": charge_code.get("owner_name", ""),
                         "owner_email": charge_code.get("owner_email", ""),
                         "assigned_by": assigner_obj_id,
@@ -572,6 +610,7 @@ def assign_charge_code():
                 "sub_type":         charge_code.get("sub_type", ""),
                 "client":           charge_code.get("client", ""),
                 "country":          charge_code.get("country", ""),
+                "domain":           charge_code.get("domain", "time"),
                 "owner_name":       charge_code.get("owner_name", ""),
                 "owner_email":      charge_code.get("owner_email", ""),
                 "assigned_by":      assigner_obj_id,
@@ -622,10 +661,12 @@ def get_employee_charge_codes(employee_id):
 
         active_only = request.args.get("active_only", "true").lower() == "true"
         include_existing = request.args.get("include_existing", "true").lower() == "true"
+        domain = normalize_charge_code_domain(request.args.get("domain"), allow_blank=True)
 
         query = {"employee_id": ObjectId(employee_id)}
         if active_only:
             query["is_active"] = True
+        query.update(build_domain_query(domain))
 
         assignments = list(mongo.db.charge_code_assignments.find(query))
 
@@ -650,6 +691,7 @@ def get_employee_charge_codes(employee_id):
                     "sub_type":         first_non_empty(assignment.get("sub_type"), charge_code.get("sub_type")),
                     "client":           first_non_empty(assignment.get("client"), charge_code.get("client")),
                     "country":          first_non_empty(assignment.get("country"), charge_code.get("country")),
+                    "domain":           first_non_empty(assignment.get("domain"), charge_code.get("domain"), "time"),
                     "owner_name":       first_non_empty(assignment.get("owner_name"), charge_code.get("owner_name")),
                     "owner_email":      first_non_empty(assignment.get("owner_email"), charge_code.get("owner_email")),
                 })
@@ -657,6 +699,7 @@ def get_employee_charge_codes(employee_id):
 
         if include_existing:
             existing_query = {"code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES}}
+            existing_query.update(build_domain_query(domain))
             if active_only:
                 existing_query["is_active"] = True
             existing_codes = list(mongo.db.charge_codes.find(existing_query).sort("code", 1))
@@ -675,6 +718,7 @@ def get_employee_charge_codes(employee_id):
                     "sub_type":         charge_code.get("sub_type", ""),
                     "client":           charge_code.get("client", ""),
                     "country":          charge_code.get("country", ""),
+                    "domain":           charge_code.get("domain", "time"),
                     "owner_name":       charge_code.get("owner_name", ""),
                     "owner_email":      charge_code.get("owner_email", ""),
                     "source":           "existing",
@@ -684,6 +728,8 @@ def get_employee_charge_codes(employee_id):
         print(f"✅ Found {len(result)} charge codes for employee {employee_id}")
         return jsonify(result), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Error fetching employee charge codes: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -702,13 +748,16 @@ def get_all_assignments():
             return error_response
 
         cleanup_deprecated_charge_codes()
-        assignments = list(
-            mongo.db.charge_code_assignments.find({
-                "charge_code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES},
-            }).sort("assigned_at", -1)
-        )
+        domain = normalize_charge_code_domain(request.args.get("domain"), allow_blank=True)
+        query = {
+            "charge_code": {"$nin": DEPRECATED_CHARGE_CODE_VALUES},
+        }
+        query.update(build_domain_query(domain))
+        assignments = list(mongo.db.charge_code_assignments.find(query).sort("assigned_at", -1))
         return jsonify(serialize_all(assignments)), 200
 
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         print(f"❌ Error fetching all assignments: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -824,6 +873,7 @@ def bulk_assign_charge_codes():
                     "sub_type":         charge_code.get("sub_type", ""),
                     "client":           charge_code.get("client", ""),
                     "country":          charge_code.get("country", ""),
+                    "domain":           charge_code.get("domain", "time"),
                     "owner_name":       charge_code.get("owner_name", ""),
                     "owner_email":      charge_code.get("owner_email", ""),
                     "assigned_by":      ObjectId(assigned_by),

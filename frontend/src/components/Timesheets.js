@@ -5746,9 +5746,11 @@ function getEmployeeProjectNames(employee = {}) {
   return Array.from(projectNames);
 }
 
-function ChargeCodesWorkspace({ user, adminMode = false }) {
+function ChargeCodesWorkspace({ user, adminMode = false, domain = 'time', workspaceLabel = 'Charge' }) {
   const { notify } = useTimesheetUi();
   const userId = getUserId(user);
+  const singularLabel = workspaceLabel === 'Expense' ? 'Expense Charge Code' : 'Charge Code';
+  const pluralLabel = workspaceLabel === 'Expense' ? 'Expense Charge Codes' : 'Charge Codes';
   const [codes, setCodes] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [selectedRows, setSelectedRows] = useState([]);
@@ -5773,8 +5775,8 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
     if (!userId) return;
     setLoading(true);
     const endpoint = adminMode
-      ? '/charge_codes/all'
-      : `/charge_codes/employee/${userId}?active_only=true`;
+      ? `/charge_codes/all?domain=${encodeURIComponent(domain)}`
+      : `/charge_codes/employee/${userId}?active_only=true&domain=${encodeURIComponent(domain)}`;
     fetchAPI(endpoint)
       .then((data) => {
         const items = Array.isArray(data) ? data : [];
@@ -5793,7 +5795,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
       })
       .catch((err) => notify(`Failed to load charge codes: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [adminMode, notify, userId]);
+  }, [adminMode, domain, notify, userId]);
 
   useEffect(() => {
     loadCodes();
@@ -5946,6 +5948,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
           client: chargeCodeForm.client.trim(),
           country: chargeCodeForm.country.trim(),
           owner_id: chargeCodeForm.ownerId || '',
+          domain,
           is_active: true,
           created_by: userId,
         }),
@@ -6035,12 +6038,12 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
             <div className="mte-chargecodes-card-header">
               <div>
                 <h3>Create Charge Code</h3>
-                <p>Add charge-code details and choose a clear owner.</p>
+                <p>{`Add ${singularLabel.toLowerCase()} details and choose a clear owner.`}</p>
               </div>
             </div>
             <div className="mte-chargecodes-add-grid">
               <label className="mte-chargecodes-field">
-                <span>Charge Code</span>
+                <span>{singularLabel}</span>
                 <input
                   value={chargeCodeForm.code}
                   onChange={(event) => setChargeCodeForm((previous) => ({ ...previous, code: event.target.value }))}
@@ -6114,7 +6117,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
             <div className="mte-chargecodes-add-actions">
               <button type="button" onClick={handleAddCode} disabled={loading}>
                 <Plus size={14} />
-                <span>{loading ? 'Adding...' : 'Add Charge Code'}</span>
+                <span>{loading ? 'Adding...' : `Add ${singularLabel}`}</span>
               </button>
             </div>
           </section>
@@ -6123,10 +6126,10 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
         <section className={`mte-chargecodes-card mte-chargecodes-assign-card ${adminMode ? '' : 'is-display-preferences-card'}`}>
           <div className="mte-chargecodes-card-header">
             <div>
-              <h3>{adminMode ? 'Assign Charge Codes' : 'Display Preferences'}</h3>
+              <h3>{adminMode ? `Assign ${pluralLabel}` : 'Display Preferences'}</h3>
               <p>
                 {adminMode
-                  ? 'Select employees and assign the selected charge codes.'
+                  ? `Select employees and assign the selected ${pluralLabel.toLowerCase()}.`
                   : 'Choose which charge codes should remain visible.'}
               </p>
             </div>
@@ -6202,7 +6205,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
               </button>
               <button type="button" onClick={toggleSelectAllVisibleRows}>
                 <CheckCircle size={13} />
-                <span>{allVisibleRowsSelected ? 'Clear Charge Codes' : 'Select All Charge Codes'}</span>
+                <span>{allVisibleRowsSelected ? `Clear ${pluralLabel}` : `Select All ${pluralLabel}`}</span>
               </button>
               <span>{assignmentScopedEmployees.length} employee{assignmentScopedEmployees.length === 1 ? '' : 's'} match</span>
             </div>
@@ -6241,7 +6244,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
             ) : null}
             <button type="button" onClick={toggleSelectAllVisibleRows}>
               <CheckCircle size={14} />
-              <span>{allVisibleRowsSelected ? 'Clear Charge Codes' : 'Select All Charge Codes'}</span>
+              <span>{allVisibleRowsSelected ? `Clear ${pluralLabel}` : `Select All ${pluralLabel}`}</span>
             </button>
             <button type="button" onClick={() => {
               setChargeCodeForm(emptyChargeCodeForm);
@@ -6283,7 +6286,7 @@ function ChargeCodesWorkspace({ user, adminMode = false }) {
               <th>Client</th>
               <th>Country</th>
               <th>Description</th>
-              <th>Charge Code</th>
+              <th>{singularLabel}</th>
               <th>Owner</th>
             </tr>
           </thead>
@@ -6894,7 +6897,7 @@ function AssignedChargeCodesPanel({ user }) {
   return <ChargeCodesWorkspace user={user} />;
 }
 
-function ExpensesPanel({ user }) {
+function ExpensesPanel({ user, onNavigateToProfile }) {
   const { notify, confirmAction, promptAction } = useTimesheetUi();
   const isAdmin = user?.role === 'Admin';
   const userId = getUserId(user);
@@ -6991,6 +6994,7 @@ function ExpensesPanel({ user }) {
     from: '',
     to: '',
   });
+  const [adminExpenseSubtab, setAdminExpenseSubtab] = useState('review');
 
   const loadExpenses = useCallback(() => {
     if (!userId) return;
@@ -7012,8 +7016,8 @@ function ExpensesPanel({ user }) {
   useEffect(() => {
     if (!EXPENSES_FEATURE_ENABLED || !userId) return;
     const endpoint = isAdmin
-      ? '/charge_codes/all?active_only=true'
-      : `/charge_codes/employee/${userId}?active_only=true&include_existing=true`;
+      ? '/charge_codes/all?active_only=true&domain=expense'
+      : `/charge_codes/employee/${userId}?active_only=true&include_existing=false&domain=expense`;
     fetchAPI(endpoint)
       .then((data) => setExpenseChargeCodes(Array.isArray(data) ? data : []))
       .catch((err) => {
@@ -7226,6 +7230,10 @@ function ExpensesPanel({ user }) {
   };
 
   const handleApproveExpense = (expense) => {
+    if ((expense?.status || 'saved') !== 'submitted') {
+      notify('Only submitted expenses can be approved. Ask the employee to submit the claim first.', 'warning');
+      return;
+    }
     setExpenseApprovalModal({
       show: true,
       expense,
@@ -7262,6 +7270,10 @@ function ExpensesPanel({ user }) {
   };
 
   const handleRejectExpense = async (expense) => {
+    if ((expense?.status || 'saved') !== 'submitted') {
+      notify('Only submitted expenses can be rejected. Ask the employee to submit the claim first.', 'warning');
+      return;
+    }
     const rejectionComments = await promptAction({
       title: 'Reject Expense',
       message: `Add rejection comments for ${expense.employee_name || 'this employee'}'s ${expense.category || 'expense'} claim. The employee must create and submit a new expense.`,
@@ -7419,9 +7431,16 @@ function ExpensesPanel({ user }) {
     approved: 'Approved',
     rejected: 'Rejected',
   }[status] || status || 'Draft');
-  const canReviewExpense = (expense) => expense.status === 'submitted';
+  const canReviewExpense = (expense) => ['saved', 'submitted'].includes(expense?.status || 'saved');
   const filteredExpenseCategories = expenseCategories.filter((category) =>
     category.toLowerCase().includes(expenseCategorySearch.trim().toLowerCase())
+  );
+  const openExpenseEmployeeProfile = (expense) => {
+    if (!expense?.employee_id || typeof onNavigateToProfile !== 'function') return;
+    onNavigateToProfile(expense.employee_id);
+  };
+  const getExpenseAuditEntries = (expense) => (
+    Array.isArray(expense?.audit_log) ? expense.audit_log : []
   );
   const expenseChargeCodeOptions = useMemo(() => {
     const seen = new Set();
@@ -7926,110 +7945,125 @@ function ExpensesPanel({ user }) {
         </div>
       ) : null}
 
-      <div className="mte-expense-summary-grid">
-        <article>
-          <span>Total claims</span>
-          <strong>{expenses.length}</strong>
-        </article>
-        <article>
-          <span>Total amount</span>
-          <strong>{totalExpenseAmount.toFixed(2)}</strong>
-        </article>
-        <article>
-          <span>Documents</span>
-          <strong>{attachedDocumentCount}</strong>
-        </article>
-      </div>
-
       {isAdmin ? (
-        <section className="mte-expense-form-panel mte-expense-filter-card">
-          <div className="mte-module-card-header">
-            <div>
-              <h3>Expense Review Filters</h3>
-              <p>{visibleExpenses.length} of {expenses.length} claims{activeExpenseFilterCount ? ` with ${activeExpenseFilterCount} filter${activeExpenseFilterCount === 1 ? '' : 's'}` : ''}</p>
-            </div>
-            <button type="button" className="mte-icon-text-button" onClick={loadExpenses}>
-              <RefreshCw size={16} />
-              <span>Refresh</span>
-            </button>
-          </div>
-          <div className="mte-expense-filter-grid mte-expense-filter-grid-admin">
-            <label className="mte-expense-filter-field mte-expense-filter-search">
-              <span>Search</span>
-              <ValueHelpSearch
-                value={expenseFilters.search}
-                onChange={(value) => setExpenseFilters((previous) => ({ ...previous, search: value }))}
-                suggestions={expenseSearchSuggestions}
-                placeholder="Employee, email, department, client code, or category"
-              />
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>Department</span>
-              <select
-                value={expenseFilters.department}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, department: event.target.value }))}
-              >
-                <option value="all">All departments</option>
-                {expenseDepartmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
-              </select>
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>Category</span>
-              <select
-                value={expenseFilters.category}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, category: event.target.value }))}
-              >
-                <option value="all">All categories</option>
-                {expenseCategoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}
-              </select>
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>Client / Charge Code</span>
-              <select
-                value={expenseFilters.clientCode}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, clientCode: event.target.value }))}
-              >
-                <option value="all">All client codes</option>
-                {expenseClientCodeOptions.map((clientCode) => <option key={clientCode} value={clientCode}>{clientCode}</option>)}
-              </select>
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>Document</span>
-              <select
-                value={expenseFilters.document}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, document: event.target.value }))}
-              >
-                <option value="all">All documents</option>
-                <option value="with">With document</option>
-                <option value="without">Without document</option>
-              </select>
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>From</span>
-              <input
-                type="date"
-                value={expenseFilters.from}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, from: event.target.value }))}
-              />
-            </label>
-            <label className="mte-expense-filter-field">
-              <span>To</span>
-              <input
-                type="date"
-                value={expenseFilters.to}
-                onChange={(event) => setExpenseFilters((previous) => ({ ...previous, to: event.target.value }))}
-              />
-            </label>
-            <div className="mte-expense-filter-actions">
-              <button type="button" onClick={resetExpenseFilters}>
-                <RefreshCw size={14} />
-                <span>Reset</span>
-              </button>
-            </div>
-          </div>
-        </section>
+        <div className="mte-subtabs" style={{ marginBottom: '18px' }}>
+          <button type="button" className={adminExpenseSubtab === 'review' ? 'is-active' : ''} onClick={() => setAdminExpenseSubtab('review')}>
+            Expense Review
+          </button>
+          <button type="button" className={adminExpenseSubtab === 'charge_codes' ? 'is-active' : ''} onClick={() => setAdminExpenseSubtab('charge_codes')}>
+            Expense Charge Codes
+          </button>
+        </div>
+      ) : null}
+
+      {isAdmin && adminExpenseSubtab === 'charge_codes' ? (
+        <ChargeCodesWorkspace user={user} adminMode domain="expense" workspaceLabel="Expense" />
       ) : (
-        <section className="mte-expense-form-panel">
+        <>
+          <div className="mte-expense-summary-grid">
+            <article>
+              <span>Total claims</span>
+              <strong>{expenses.length}</strong>
+            </article>
+            <article>
+              <span>Total amount</span>
+              <strong>{totalExpenseAmount.toFixed(2)}</strong>
+            </article>
+            <article>
+              <span>Documents</span>
+              <strong>{attachedDocumentCount}</strong>
+            </article>
+          </div>
+
+          {isAdmin ? (
+            <section className="mte-expense-form-panel mte-expense-filter-card">
+              <div className="mte-module-card-header">
+                <div>
+                  <h3>Expense Review Filters</h3>
+                  <p>{visibleExpenses.length} of {expenses.length} claims{activeExpenseFilterCount ? ` with ${activeExpenseFilterCount} filter${activeExpenseFilterCount === 1 ? '' : 's'}` : ''}</p>
+                </div>
+                <button type="button" className="mte-icon-text-button" onClick={loadExpenses}>
+                  <RefreshCw size={16} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+              <div className="mte-expense-filter-grid mte-expense-filter-grid-admin">
+                <label className="mte-expense-filter-field mte-expense-filter-search">
+                  <span>Search</span>
+                  <ValueHelpSearch
+                    value={expenseFilters.search}
+                    onChange={(value) => setExpenseFilters((previous) => ({ ...previous, search: value }))}
+                    suggestions={expenseSearchSuggestions}
+                    placeholder="Employee, email, department, client code, or category"
+                  />
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>Department</span>
+                  <select
+                    value={expenseFilters.department}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, department: event.target.value }))}
+                  >
+                    <option value="all">All departments</option>
+                    {expenseDepartmentOptions.map((department) => <option key={department} value={department}>{department}</option>)}
+                  </select>
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>Category</span>
+                  <select
+                    value={expenseFilters.category}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, category: event.target.value }))}
+                  >
+                    <option value="all">All categories</option>
+                    {expenseCategoryOptions.map((category) => <option key={category} value={category}>{category}</option>)}
+                  </select>
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>Client / Charge Code</span>
+                  <select
+                    value={expenseFilters.clientCode}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, clientCode: event.target.value }))}
+                  >
+                    <option value="all">All client codes</option>
+                    {expenseClientCodeOptions.map((clientCode) => <option key={clientCode} value={clientCode}>{clientCode}</option>)}
+                  </select>
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>Document</span>
+                  <select
+                    value={expenseFilters.document}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, document: event.target.value }))}
+                  >
+                    <option value="all">All documents</option>
+                    <option value="with">With document</option>
+                    <option value="without">Without document</option>
+                  </select>
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>From</span>
+                  <input
+                    type="date"
+                    value={expenseFilters.from}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, from: event.target.value }))}
+                  />
+                </label>
+                <label className="mte-expense-filter-field">
+                  <span>To</span>
+                  <input
+                    type="date"
+                    value={expenseFilters.to}
+                    onChange={(event) => setExpenseFilters((previous) => ({ ...previous, to: event.target.value }))}
+                  />
+                </label>
+                <div className="mte-expense-filter-actions">
+                  <button type="button" onClick={resetExpenseFilters}>
+                    <RefreshCw size={14} />
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="mte-expense-form-panel">
           <div className="mte-module-card-header">
             <div>
               <h3>{editingId ? 'Edit Expense' : 'Add Expense'}</h3>
@@ -8114,103 +8148,146 @@ function ExpensesPanel({ user }) {
               <span>{editingId ? 'Update Expense' : 'Save Expense'}</span>
             </button>
           </div>
-        </section>
+            </section>
+          )}
+          <div className="mte-simple-table-wrap mte-expense-table-shell">
+            <table className="mte-simple-table">
+              <thead>
+                <tr>
+                  {[
+                    'Date',
+                    ...(isAdmin ? ['Employee', 'Department'] : []),
+                    'Client / Charge Code',
+                    'Category',
+                    'Description',
+                    'Amount',
+                    'Status',
+                    'Document',
+                    ...(isAdmin ? ['Log'] : []),
+                    'Action',
+                  ].map((header) => (
+                    <th key={header}>{header}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading && visibleExpenses.length === 0 ? (
+                  <tr><td colSpan={isAdmin ? 11 : expenseTableColSpan}>Loading expenses...</td></tr>
+                ) : visibleExpenses.length === 0 ? (
+                  <tr><td colSpan={isAdmin ? 11 : expenseTableColSpan}>{isAdmin ? 'No expense claims match the current filters.' : 'No expenses added yet.'}</td></tr>
+                ) : visibleExpenses.map((expense) => (
+                  <tr key={expense._id}>
+                    <td>
+                      <div className="fiori-primary-cell">
+                        <strong>{expense.expense_date || '-'}</strong>
+                        {expense.created_at ? <span>Created {formatDateTime(expense.created_at)}</span> : null}
+                        {expense.submitted_at ? <span>Submitted {formatDateTime(expense.submitted_at)}</span> : null}
+                      </div>
+                    </td>
+                    {isAdmin ? (
+                      <td>
+                        <button
+                          type="button"
+                          className="fiori-primary-cell"
+                          onClick={() => openExpenseEmployeeProfile(expense)}
+                          style={{
+                            width: '100%',
+                            textAlign: 'left',
+                            background: 'transparent',
+                            border: 'none',
+                            padding: 0,
+                            cursor: expense.employee_id ? 'pointer' : 'default',
+                          }}
+                          disabled={!expense.employee_id}
+                          title={expense.employee_id ? 'Open employee profile' : undefined}
+                        >
+                          <strong>{expense.employee_name || 'Employee'}</strong>
+                          <span>{expense.employee_email || 'No email on record'}</span>
+                        </button>
+                      </td>
+                    ) : null}
+                    {isAdmin ? <td>{expense.employee_department || 'Unassigned'}</td> : null}
+                    <td>{expense.client_code || '-'}</td>
+                    <td>{expense.category}</td>
+                    <td>{expense.description || expense.charge_code_name || '-'}</td>
+                    <td>{expense.currency || 'INR'} {Number(expense.amount || 0).toFixed(2)}</td>
+                    <td>
+                      <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
+                        {expenseStatusText(expense.status)}
+                      </span>
+                      {expense.status === 'rejected' && expense.rejection_comments ? (
+                        <div className="mte-expense-rejection-note">{expense.rejection_comments}</div>
+                      ) : null}
+                      {expense.status === 'approved' && expense.approved_by_admin_name ? (
+                        <div className="mte-expense-approval-note">
+                          {`Approved by ${expense.approved_by_admin_name}${expense.approved_at ? ` on ${formatDateTime(expense.approved_at)}` : ''}`}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>
+                      {expense.document?.url ? (
+                        <span className="mte-document-cell">
+                          <Paperclip size={14} />
+                          <a href={expense.document.url} target="_blank" rel="noreferrer">
+                            {expense.document.name || 'Document'}
+                          </a>
+                          <a className="mte-document-view" href={expense.document.url} target="_blank" rel="noreferrer" title="View document">
+                            <Eye size={14} />
+                          </a>
+                        </span>
+                      ) : '-'}
+                    </td>
+                    {isAdmin ? (
+                      <td>
+                        <div className="fiori-primary-cell">
+                          {getExpenseAuditEntries(expense).length ? getExpenseAuditEntries(expense).slice().reverse().map((entry, index) => (
+                            <span key={`${expense._id}-audit-${index}`}>
+                              {`${String(entry.action || 'updated').replace(/_/g, ' ')}${entry.actor_name ? ` by ${entry.actor_name}` : ''}${entry.timestamp ? ` • ${formatDateTime(entry.timestamp)}` : ''}`}
+                            </span>
+                          )) : <span>No audit events yet</span>}
+                        </div>
+                      </td>
+                    ) : null}
+                    <td>
+                      {isAdmin ? (
+                        <div className="mte-expense-review-actions">
+                          <button
+                            type="button"
+                            className="mte-expense-approve-button"
+                            onClick={() => handleApproveExpense(expense)}
+                            disabled={loading || !canReviewExpense(expense)}
+                          >
+                            <CheckCircle2 size={14} />
+                            <span>Approve</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="mte-expense-reject-button"
+                            onClick={() => handleRejectExpense(expense)}
+                            disabled={loading || !canReviewExpense(expense)}
+                          >
+                            <XCircle size={14} />
+                            <span>Reject</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                            <FileText size={14} />
+                          </button>
+                          <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense" disabled={(expense.status || 'saved') !== 'saved'}>
+                            <Trash2 size={14} />
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
-        <div className="mte-simple-table-wrap mte-expense-table-shell">
-        <table className="mte-simple-table">
-          <thead>
-            <tr>
-              {[
-                'Date',
-                ...(isAdmin ? ['Employee', 'Department'] : []),
-                'Client / Charge Code',
-                'Category',
-                'Description',
-                'Amount',
-                'Status',
-                'Document',
-                'Action',
-              ].map((header) => (
-                <th key={header}>{header}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading && visibleExpenses.length === 0 ? (
-              <tr><td colSpan={expenseTableColSpan}>Loading expenses...</td></tr>
-            ) : visibleExpenses.length === 0 ? (
-              <tr><td colSpan={expenseTableColSpan}>{isAdmin ? 'No expense claims match the current filters.' : 'No expenses added yet.'}</td></tr>
-            ) : visibleExpenses.map((expense) => (
-              <tr key={expense._id}>
-                <td>{expense.expense_date}</td>
-                {isAdmin ? <td>{expense.employee_name || 'Employee'}</td> : null}
-                {isAdmin ? <td>{expense.employee_department || 'Unassigned'}</td> : null}
-                <td>{expense.client_code || '-'}</td>
-                <td>{expense.category}</td>
-                <td>{expense.description || '-'}</td>
-                <td>{expense.currency || 'INR'} {Number(expense.amount || 0).toFixed(2)}</td>
-                <td>
-                  <span className={`mte-expense-status-pill is-${expense.status || 'saved'}`}>
-                    {expenseStatusText(expense.status)}
-                  </span>
-                  {expense.status === 'rejected' && expense.rejection_comments ? (
-                    <div className="mte-expense-rejection-note">{expense.rejection_comments}</div>
-                  ) : null}
-                  {expense.status === 'approved' && expense.approved_by_admin_name ? (
-                    <div className="mte-expense-approval-note">Approved by {expense.approved_by_admin_name}</div>
-                  ) : null}
-                </td>
-                <td>
-                  {expense.document?.url ? (
-                    <span className="mte-document-cell">
-                      <Paperclip size={14} />
-                      <a href={expense.document.url} target="_blank" rel="noreferrer">
-                        {expense.document.name || 'Document'}
-                      </a>
-                      <a className="mte-document-view" href={expense.document.url} target="_blank" rel="noreferrer" title="View document">
-                        <Eye size={14} />
-                      </a>
-                    </span>
-                  ) : '-'}
-                </td>
-                <td>
-                  {isAdmin ? (
-                    <div className="mte-expense-review-actions">
-                      <button
-                        type="button"
-                        className="mte-expense-approve-button"
-                        onClick={() => handleApproveExpense(expense)}
-                        disabled={loading || !canReviewExpense(expense)}
-                      >
-                        <CheckCircle2 size={14} />
-                        <span>Approve</span>
-                      </button>
-                      <button
-                        type="button"
-                        className="mte-expense-reject-button"
-                        onClick={() => handleRejectExpense(expense)}
-                        disabled={loading || !canReviewExpense(expense)}
-                      >
-                        <XCircle size={14} />
-                        <span>Reject</span>
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <button type="button" style={S.btnIcon} onClick={() => handleEditExpense(expense)} title="Edit expense" disabled={(expense.status || 'saved') !== 'saved'}>
-                        <FileText size={14} />
-                      </button>
-                      <button type="button" style={{ ...S.btnIcon, color: C.red }} onClick={() => handleDeleteExpense(expense._id)} title="Delete expense" disabled={(expense.status || 'saved') !== 'saved'}>
-                        <Trash2 size={14} />
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
@@ -10104,7 +10181,7 @@ function PortalSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
-function TimesheetsContent({ user, navigationState }) {
+function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
   const periods = useMemo(() => getAvailablePeriods(), []);
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
@@ -10191,7 +10268,7 @@ function TimesheetsContent({ user, navigationState }) {
           />
         );
       case 'expenses':
-        return <ExpensesPanel user={user} />;
+        return <ExpensesPanel user={user} onNavigateToProfile={onNavigateToProfile} />;
       case 'locations':
         return (
           <LocationsPanel
@@ -10297,13 +10374,13 @@ function TimesheetsContent({ user, navigationState }) {
   );
 }
 
-export default function Timesheets({ user, adminView = false, navigationState = null }) {
+export default function Timesheets({ user, adminView = false, navigationState = null, onNavigateToProfile = null }) {
   const effectiveUser = adminView && user?.role !== 'Admin'
     ? { ...user, originalRole: user?.role, role: 'Admin' }
     : { ...user, originalRole: user?.role };
   return (
     <TimesheetUiProvider>
-      <TimesheetsContent user={effectiveUser} navigationState={navigationState} />
+      <TimesheetsContent user={effectiveUser} navigationState={navigationState} onNavigateToProfile={onNavigateToProfile} />
     </TimesheetUiProvider>
   );
 }

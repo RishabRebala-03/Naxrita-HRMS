@@ -665,11 +665,11 @@ function App() {
                 personalLabel="My Timesheets"
                 adminLabel="Admin Timesheets"
                 ariaLabel="Timesheet workspace tabs"
-                renderPersonal={() => <Timesheets user={currentUser} navigationState={sectionState} />}
-                renderAdmin={() => <Timesheets user={currentUser} adminView navigationState={sectionState} />}
+                renderPersonal={() => <Timesheets user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />}
+                renderAdmin={() => <Timesheets user={currentUser} adminView navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />}
               />
             ) : (
-              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} navigationState={sectionState} />
+              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />
             )}
           </div>
         );

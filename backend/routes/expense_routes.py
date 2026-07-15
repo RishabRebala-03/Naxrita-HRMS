@@ -110,6 +110,49 @@ def parse_positive_amount(value):
     return round(amount, 2)
 
 
+def build_expense_audit_entry(action, actor_id=None, actor_name="", details=None, timestamp=None):
+    return {
+        "action": action,
+        "actor_id": actor_id,
+        "actor_name": actor_name,
+        "details": details or {},
+        "timestamp": timestamp or datetime.utcnow(),
+    }
+
+
+def resolve_actor_name(user, fallback=""):
+    return str(
+        (user or {}).get("name")
+        or (user or {}).get("email")
+        or fallback
+        or "System"
+    ).strip()
+
+
+def resolve_expense_charge_code(employee_id, client_code):
+    code = str(client_code or "").strip().upper()
+    if not code:
+        raise ValueError("Expense charge code is required")
+
+    charge_code = mongo.db.charge_codes.find_one({
+        "code": code,
+        "is_active": True,
+        "domain": "expense",
+    })
+    if not charge_code:
+        raise ValueError("Select a valid expense charge code")
+
+    assignment = mongo.db.charge_code_assignments.find_one({
+        "employee_id": employee_id,
+        "charge_code_id": charge_code["_id"],
+        "is_active": True,
+        "domain": "expense",
+    })
+    if not assignment:
+        raise ValueError("This expense charge code is not assigned to the employee")
+    return charge_code
+
+
 @expense_bp.route("", methods=["GET"])
 def list_expenses():
     try:
@@ -146,6 +189,7 @@ def create_expense():
         if not category:
             return jsonify({"error": "Category is required"}), 400
         employee = resolve_target_employee(requester, data.get("employee_id"))
+        charge_code = resolve_expense_charge_code(employee["_id"], client_code) if client_code else None
 
         now = datetime.utcnow()
         expense = {
@@ -155,7 +199,10 @@ def create_expense():
             "employee_department": employee.get("department", ""),
             "expense_date": expense_date,
             "category": category,
-            "client_code": client_code,
+            "client_code": charge_code.get("code", client_code) if charge_code else client_code,
+            "charge_code_id": charge_code.get("_id") if charge_code else None,
+            "charge_code_name": charge_code.get("name", "") if charge_code else "",
+            "charge_code_domain": "expense" if charge_code else "",
             "description": description,
             "country": data.get("country", ""),
             "currency": data.get("currency", ""),
@@ -181,6 +228,19 @@ def create_expense():
             "amount": amount,
             "status": "saved",
             "document": data.get("document") if isinstance(data.get("document"), dict) else None,
+            "audit_log": [
+                build_expense_audit_entry(
+                    "created",
+                    actor_id=requester.get("_id"),
+                    actor_name=resolve_actor_name(requester, employee.get("name", "")),
+                    details={
+                        "employee_id": employee["_id"],
+                        "employee_name": employee.get("name", ""),
+                        "status": "saved",
+                    },
+                    timestamp=now,
+                )
+            ],
             "created_at": now,
             "updated_at": now,
         }
@@ -218,7 +278,18 @@ def submit_expenses():
         now = datetime.utcnow()
         result = mongo.db.expenses.update_many(
             {**query, "status": "saved"},
-            {"$set": {"status": "submitted", "submitted_at": now, "updated_at": now}},
+            {
+                "$set": {"status": "submitted", "submitted_at": now, "updated_at": now},
+                "$push": {
+                    "audit_log": build_expense_audit_entry(
+                        "submitted",
+                        actor_id=requester.get("_id"),
+                        actor_name=resolve_actor_name(requester, employee.get("name", "")),
+                        details={"status": "submitted", "expense_date": expense_date},
+                        timestamp=now,
+                    )
+                },
+            },
         )
         return jsonify({
             "message": "Expenses submitted successfully",
@@ -253,6 +324,7 @@ def update_expense(expense_id):
             return jsonify({"error": "Only draft expenses can be updated. Create a new expense if the claim was rejected."}), 400
 
         update_data = {"updated_at": datetime.utcnow()}
+        audit_entry = None
 
         if "expense_date" in data:
             update_data["expense_date"] = validate_expense_date(data["expense_date"])
@@ -262,7 +334,18 @@ def update_expense(expense_id):
                 return jsonify({"error": "Category is required"}), 400
             update_data["category"] = category
         if "client_code" in data:
-            update_data["client_code"] = (data.get("client_code") or "").strip()
+            next_client_code = str(data.get("client_code") or "").strip()
+            if next_client_code:
+                charge_code = resolve_expense_charge_code(expense["employee_id"], next_client_code)
+                update_data["client_code"] = charge_code.get("code", "")
+                update_data["charge_code_id"] = charge_code.get("_id")
+                update_data["charge_code_name"] = charge_code.get("name", "")
+                update_data["charge_code_domain"] = "expense"
+            else:
+                update_data["client_code"] = ""
+                update_data["charge_code_id"] = None
+                update_data["charge_code_name"] = ""
+                update_data["charge_code_domain"] = ""
         if "description" in data:
             update_data["description"] = (data.get("description") or "").strip()
         for field in [
@@ -294,10 +377,17 @@ def update_expense(expense_id):
             update_data["amount"] = parse_positive_amount(data.get("amount"))
         if "document" in data and (isinstance(data.get("document"), dict) or data.get("document") is None):
             update_data["document"] = data.get("document")
+        audit_entry = build_expense_audit_entry(
+            "updated",
+            actor_id=requester.get("_id"),
+            actor_name=resolve_actor_name(requester, expense.get("employee_name", "")),
+            details={"status": expense.get("status", "saved")},
+            timestamp=update_data["updated_at"],
+        )
 
         mongo.db.expenses.update_one(
             {"_id": expense_oid},
-            {"$set": update_data},
+            {"$set": update_data, "$push": {"audit_log": audit_entry}},
         )
 
         expense = mongo.db.expenses.find_one({"_id": expense_oid})
@@ -342,6 +432,18 @@ def approve_expense(expense_id):
                     "updated_at": now,
                 },
                 "$unset": {"rejection_comments": "", "rejected_at": "", "rejected_by_admin_id": "", "rejected_by_admin_name": ""},
+                "$push": {
+                    "audit_log": build_expense_audit_entry(
+                        "approved",
+                        actor_id=requester.get("_id"),
+                        actor_name=approver_name,
+                        details={
+                            "status": "approved",
+                            "approved_expense_date": approved_expense_date or expense.get("expense_date", ""),
+                        },
+                        timestamp=now,
+                    )
+                },
             },
         )
         updated = mongo.db.expenses.find_one({"_id": expense_oid})
@@ -380,9 +482,21 @@ def reject_expense(expense_id):
                     "rejection_comments": rejection_comments,
                     "rejected_at": now,
                     "rejected_by_admin_id": requester.get("_id"),
-                    "rejected_by_admin_name": requester.get("name", ""),
+                    "rejected_by_admin_name": resolve_actor_name(requester),
                     "updated_at": now,
-                }
+                },
+                "$push": {
+                    "audit_log": build_expense_audit_entry(
+                        "rejected",
+                        actor_id=requester.get("_id"),
+                        actor_name=resolve_actor_name(requester),
+                        details={
+                            "status": "rejected",
+                            "rejection_comments": rejection_comments,
+                        },
+                        timestamp=now,
+                    )
+                },
             },
         )
         updated = mongo.db.expenses.find_one({"_id": expense_oid})
@@ -445,7 +559,17 @@ def upload_expense_document(expense_id):
         }
         mongo.db.expenses.update_one(
             {"_id": expense_oid},
-            {"$set": {"document": document, "updated_at": datetime.utcnow()}},
+            {
+                "$set": {"document": document, "updated_at": datetime.utcnow()},
+                "$push": {
+                    "audit_log": build_expense_audit_entry(
+                        "document_uploaded",
+                        actor_id=requester.get("_id"),
+                        actor_name=resolve_actor_name(requester, expense.get("employee_name", "")),
+                        details={"filename": original_name},
+                    )
+                },
+            },
         )
         return jsonify(serialize_all(document)), 200
     except ValueError as e:
