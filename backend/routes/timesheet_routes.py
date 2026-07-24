@@ -918,9 +918,9 @@ def is_correction_window_open_for_timesheet(timesheet, reference=None):
         return False
 
     if period_start.day == 1 and period_end.day == 15:
-        return current_date.day == 13
+        return current_date.day in (13, 14)
     if period_start.day == 16 and period_end.day >= 28:
-        return current_date.day == 27
+        return current_date.day in (26, 27)
 
     return False
 
@@ -930,9 +930,9 @@ def get_approved_edit_window_label(timesheet):
     if not period_start or not period_end:
         return ""
     if period_start.day == 1 and period_end.day == 15:
-        return "Editable on the 13th of the same month after approval."
+        return "Editable on the 13th and 14th of the same month after approval."
     if period_start.day == 16:
-        return "Editable on the 27th of the same month after approval."
+        return "Editable on the 26th and 27th of the same month after approval."
     return ""
 
 
@@ -2430,7 +2430,12 @@ def lead_approve_timesheet(timesheet_id):
         approver_id = approver.get("_id")
         approver_name = approver_name_input or approver.get("name") or ""
         employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
-        next_approver = None if is_timesheet_admin else get_next_timesheet_approver(timesheet, employee=employee)
+        # Lead approval is always final — only look for a next approver when
+        # the timesheet is already at the manager stage (pending_manager).
+        if is_timesheet_admin or timesheet.get("status") == "pending_lead":
+            next_approver = None
+        else:
+            next_approver = get_next_timesheet_approver(timesheet, employee=employee)
 
         approval_entry = {
             "stage":         "lead" if timesheet.get("status") == "pending_lead" else "manager",
@@ -2442,15 +2447,6 @@ def lead_approve_timesheet(timesheet_id):
         }
 
         if next_approver:
-            if timesheet.get("status") == "pending_lead":
-                mongo.db.timesheets.update_one(
-                    {"_id": ObjectId(timesheet_id)},
-                    {"$set": {
-                        "lead_approved_at": datetime.utcnow(),
-                        "lead_approved_by": approver_name,
-                        "lead_approved_by_id": approver_id,
-                    }}
-                )
             move_timesheet_to_next_approver(timesheet, next_approver, approval_entry, escalation=False)
             print(f"✅ Timesheet {timesheet_id} advanced to next approver {next_approver.get('name')}")
             return jsonify({"message": "Timesheet approved and forwarded"}), 200
