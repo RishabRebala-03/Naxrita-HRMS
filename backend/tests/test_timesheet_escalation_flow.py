@@ -110,10 +110,10 @@ def seed_charge_code(employee):
 def draft_payload(employee, charge_code_id):
     return {
         "employee_id": str(employee["_id"]),
-        "period_start": "2026-07-01",
-        "period_end": "2026-07-15",
+        "period_start": "2026-08-01",
+        "period_end": "2026-08-15",
         "entries": [{
-            "date": "2026-07-01",
+            "date": "2026-08-03",
             "entry_type": "work",
             "charge_code_id": str(charge_code_id),
             "hours": 9,
@@ -169,36 +169,34 @@ def run():
             headers=header(lead["_id"]),
         )
         assert_status(lead_approve, 200, "Lead approve escalated timesheet")
-        forwarded_doc = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
-        assert_true(forwarded_doc.get("status") == "pending_manager", "After lead approval, timesheet should move to pending_manager")
-        assert_true(str(forwarded_doc.get("current_approver_id")) == str(manager["_id"]), "Manager should become the next approver")
-        results.append("PASS: lead approval forwards the timesheet to the next approver")
-
-        manager_pending = client.get(
-            f"/api/timesheets/pending/manager/{manager['_id']}",
-            headers=header(manager["_id"]),
-        )
-        assert_status(manager_pending, 200, "Manager pending queue")
-        manager_items = manager_pending.get_json()
-        assert_true(any(item.get("_id") == timesheet_id for item in manager_items), "Manager should see the escalated timesheet")
-        results.append("PASS: manager queue includes the escalated timesheet")
-
-        manager_approve = client.put(
-            f"/api/timesheets/approve/manager/{timesheet_id}",
-            json={"approved_by": str(manager["_id"]), "comments": "Approved by manager"},
-            headers=header(manager["_id"]),
-        )
-        assert_status(manager_approve, 200, "Manager final approval")
         approved_doc = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
-        assert_true(approved_doc.get("status") == "approved", "Manager approval should fully approve the timesheet")
-        results.append("PASS: final approver approval locks the timesheet")
+        assert_true(approved_doc.get("status") == "approved", "Lead approval should fully approve the timesheet")
+        assert_true(approved_doc.get("current_approver_id") is None, "Approved timesheet should not keep a current approver")
+        assert_true(approved_doc.get("is_locked") is True, "Lead-approved timesheet should be locked")
+
+        mongo.db.timesheets.update_one(
+            {"_id": ObjectId(timesheet_id)},
+            {"$set": {"submitted_at": datetime.utcnow() - timedelta(days=3)}},
+        )
+        approved_escalation_result = check_timesheet_escalations()
+        still_approved_doc = mongo.db.timesheets.find_one({"_id": ObjectId(timesheet_id)})
+        assert_true(still_approved_doc.get("status") == "approved", "Approved timesheet should not be escalated")
+        assert_true(still_approved_doc.get("escalation_level", 0) == 0, "Approved timesheet should keep escalation level unchanged")
+        assert_true(approved_escalation_result.get("escalated_count", 0) == 0, "Escalation job should ignore approved timesheets")
+        results.append("PASS: lead approval fully approves and prevents later escalation")
 
         second_draft = client.post(
             "/api/timesheets/save_draft",
             json={
                 **draft_payload(employee, charge_code_id),
-                "period_start": "2026-08-01",
-                "period_end": "2026-08-15",
+                "period_start": "2026-09-01",
+                "period_end": "2026-09-15",
+                "entries": [{
+                    "date": "2026-09-01",
+                    "entry_type": "work",
+                    "charge_code_id": str(charge_code_id),
+                    "hours": 9,
+                }],
             },
             headers=header(employee["_id"]),
         )
