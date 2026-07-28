@@ -1,6 +1,7 @@
 from datetime import datetime
 from io import BytesIO
 import os
+from xml.sax.saxutils import escape
 
 import openpyxl
 from bson import ObjectId
@@ -9,9 +10,9 @@ from pymongo import ASCENDING, DESCENDING
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
-from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Table, TableStyle
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import Paragraph, Table, TableStyle
 from werkzeug.utils import secure_filename
 
 from config.db import mongo
@@ -308,17 +309,6 @@ def _format_plain_number(value):
     return str(int(numeric_value)) if numeric_value.is_integer() else str(numeric_value).rstrip("0").rstrip(".")
 
 
-def _fit_text(text, max_width, font_name="Helvetica", font_size=8):
-    value = str(text or "")
-    if stringWidth(value, font_name, font_size) <= max_width:
-        return value
-
-    trimmed = value
-    while trimmed and stringWidth(f"{trimmed}...", font_name, font_size) > max_width:
-        trimmed = trimmed[:-1]
-    return f"{trimmed}..." if trimmed else ""
-
-
 def _resolve_profile_value(employee, keys, default=""):
     for key in keys:
         value = employee.get(key)
@@ -346,23 +336,23 @@ def _build_pdf(employee, payslip):
     purple_color = colors.HexColor("#7030A0")
     border_color = colors.black
     y_position = height - 120
-    detail_table_height = 17 + 18 + (18 * 8)
-    detail_table_top = y_position - 180 + detail_table_height
+    detail_table_top = y_position - 1
     logo_width = 135
     logo_height = 20
     logo_header_gap = 12
+    value_style = ParagraphStyle(
+        "PayslipDetailValue",
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        wordWrap="LTR",
+        splitLongWords=True,
+        spaceBefore=0,
+        spaceAfter=0,
+    )
 
-    if os.path.exists(LOGO_PATH):
-        logo = ImageReader(LOGO_PATH)
-        pdf.drawImage(
-            logo,
-            left,
-            detail_table_top + logo_header_gap,
-            width=logo_width,
-            height=logo_height,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
+    def wrap_value(value):
+        return Paragraph(escape(str(value or "")), value_style)
 
     table_data = [
         ["Naxrita Solutions Private Limited", "", "", ""],
@@ -379,13 +369,13 @@ def _build_pdf(employee, payslip):
 
     for row_index, row in enumerate(table_data[2:], start=2):
         table_data[row_index] = [
-            _fit_text(row[0], 95, "Helvetica-Bold", 8),
-            _fit_text(row[1], 125),
-            _fit_text(row[2], 115, "Helvetica-Bold", 8),
-            _fit_text(row[3], 125),
+            row[0],
+            wrap_value(row[1]),
+            row[2],
+            wrap_value(row[3]),
         ]
 
-    detail_table = Table(table_data, colWidths=[110, 130, 105, 120], rowHeights=[17, 18] + [18] * 8)
+    detail_table = Table(table_data, colWidths=[110, 130, 105, 120], rowHeights=[17, 18] + [None] * 8)
     detail_table.setStyle(TableStyle([
         ("SPAN", (0, 0), (-1, 0)),
         ("SPAN", (0, 1), (-1, 1)),
@@ -410,8 +400,21 @@ def _build_pdf(employee, payslip):
         ("TOPPADDING", (0, 0), (-1, -1), 2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
-    detail_table.wrapOn(pdf, width, height)
-    detail_table.drawOn(pdf, left, y_position - 180)
+    _, detail_table_height = detail_table.wrapOn(pdf, width, height)
+
+    if os.path.exists(LOGO_PATH):
+        logo = ImageReader(LOGO_PATH)
+        pdf.drawImage(
+            logo,
+            left,
+            detail_table_top + logo_header_gap,
+            width=logo_width,
+            height=logo_height,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+
+    detail_table.drawOn(pdf, left, detail_table_top - detail_table_height)
 
     earnings = payslip.get("earnings") or [
         _money_line("BASIC", payslip.get("basic", 0), "basic"),
