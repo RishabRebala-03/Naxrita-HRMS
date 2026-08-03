@@ -126,6 +126,27 @@ def _stringify_excel_value(value):
     return str(value).strip()
 
 
+def _format_date_only(value):
+    """Return a date value without an Excel/database time component."""
+    if value in (None, ""):
+        return ""
+
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+
+    raw = str(value).strip()
+    if not raw:
+        return ""
+
+    # Handle ISO timestamps such as 2025-10-01T00:00:00 and the legacy
+    # string representation shown in older uploaded payslips.
+    for separator in ("T", " "):
+        if separator in raw:
+            raw = raw.split(separator, 1)[0]
+            break
+    return raw
+
+
 def _get_excel_value(row, column_name, default=""):
     if column_name in row:
         value = row.get(column_name, default)
@@ -359,7 +380,7 @@ def _build_pdf(employee, payslip):
         [f"Payslip For {payslip['month']} {payslip['year']}", "", "", ""],
         ["Employee ID", _resolve_profile_value(employee, ["employeeId", "employee_id"], payslip.get("employee_id", "")), "Name", _resolve_profile_value(employee, ["name"], "").upper()],
         ["Bank", _resolve_profile_value(employee, ["bank"], "HDFC"), "Bank A/c No", _resolve_profile_value(employee, ["bank_account_no", "bankAccountNo"], "")],
-        ["DOJ", _resolve_profile_value(employee, ["doj"], ""), "LOP Days", _format_plain_number(payslip.get("lop_days", 0))],
+        ["DOJ", _format_date_only(_resolve_profile_value(employee, ["doj"], "")), "LOP Days", _format_plain_number(payslip.get("lop_days", 0))],
         ["PF NO", _resolve_profile_value(employee, ["pf_no", "pfNo"], ""), "STD Days", _format_plain_number(payslip.get("std_days", 30))],
         ["Location", _resolve_profile_value(employee, ["location"], "Hyderabad"), "Worked Days", _format_plain_number(payslip.get("worked_days", 30))],
         ["Department", _resolve_profile_value(employee, ["department"], "NTCI"), "Management Level", _resolve_profile_value(employee, ["management_level", "managementLevel"], "11")],
@@ -397,8 +418,8 @@ def _build_pdf(employee, payslip):
         ("BACKGROUND", (2, 2), (2, -1), grey_fill),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
     ]))
     _, detail_table_height = detail_table.wrapOn(pdf, width, height)
 
@@ -482,7 +503,7 @@ def _build_pdf(employee, payslip):
     earnings_table.drawOn(pdf, left, y_position - 345)
 
     pdf.setFont("Helvetica", 8)
-    pdf.drawString(left + 45, y_position - 405, "**This is a computer-generated payslip does not require signature and stamp.")
+    pdf.drawCentredString(width / 2, y_position - 405, "**This is a computer-generated payslip does not require signature and stamp.")
 
     pdf.save()
     buffer.seek(0)
