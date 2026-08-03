@@ -6,15 +6,19 @@ from utils.timezone import month_start_ist, now_ist
 def accrue_monthly_leaves():
     """
     Runs on the 1st of every month to credit leaves
-    1 day planned + 0.5 days sick per employee
-    Planned leaves are capped at 12
+    1 day planned + 0.5 days sick per employee.
+    Year-end carry-forward is responsible for applying the planned-leave cap.
     """
     try:
         today = now_ist()
         first_of_month = month_start_ist(today).replace(tzinfo=None)
         
-        # Find all active employees
-        employees = mongo.db.users.find({})
+        # Include employees unless they are explicitly marked inactive. This
+        # preserves support for older records that do not have is_active yet.
+        employees = mongo.db.users.find({
+            "role": "Employee",
+            "is_active": {"$ne": False}
+        })
         
         updated_count = 0
         for employee in employees:
@@ -26,7 +30,6 @@ def accrue_monthly_leaves():
                 if last_accrual.year == today.year and last_accrual.month == today.month:
                     continue
             
-            # 🔹 Fortnight rule – only credit if joined on or before 15th
             join_date = employee.get("dateOfJoining")
             if not join_date:
                 # No joining date → skip crediting to be safe
@@ -38,35 +41,45 @@ def accrue_monthly_leaves():
                 except Exception:
                     print(f"⏭️ Skipping {employee.get('name')} – invalid dateOfJoining format")
                     continue
-            if join_date.day > 15:
-                print(f"⏭️ Skipping {employee.get('name')} – joined after 15th")
+            # Skip employees who have not joined yet
+            if join_date.date() > today.date():
+                print(f"⏭️ Skipping {employee.get('name')} – joining date is in the future")
+                continue
+
+            # Apply fortnight rule only in the employee's joining month
+            if (
+                join_date.year == today.year
+                and join_date.month == today.month
+                and join_date.day > 15
+            ):
+                print(
+                    f"⏭️ Skipping {employee.get('name')} – "
+                    f"joined after the 15th of the current month"
+                )
                 continue
             # 🔹 END fortnight check
             
-            # ⭐ CHANGE 2: Credit new leaves WITH CAPPING          
-            # ⭐ NEW: Level-based accrual system
+            # Level-based accrual system
             employee_level = employee.get("level", 0)
             
             if employee_level == 14:
-                # Level 14: Only 1 sick leave per month (no planned/optional)
                 leave_balance["sick"] = leave_balance.get("sick", 0) + 1.0
                 leave_balance["sickTotal"] = leave_balance.get("sickTotal", 0) + 1.0
-                leave_balance["lastAccrualDate"] = first_of_month
-                
+
                 print(f"✅ Level 14 - {employee.get('name')}: Credited 1 sick leave")
+
             else:
-                # Other levels: Normal accrual (0.5 sick + 1 planned, capped at 12)
-                planned_current = leave_balance.get("planned", 0) + 1.0
-                planned_capped = min(planned_current, 12)  # Cap at 12
-                
-                leave_balance["planned"] = planned_capped
-                leave_balance["plannedTotal"] = leave_balance.get("plannedTotal", 0) + 1.0
+                leave_balance["planned"] = leave_balance.get("planned", 0) + 1.0
+                leave_balance["plannedTotal"] = (
+                    leave_balance.get("plannedTotal", 0) + 1.0
+                )
                 leave_balance["sick"] = leave_balance.get("sick", 0) + 0.5
-                leave_balance["sickTotal"] = leave_balance.get("sickTotal", 0) + 0.5
-                leave_balance["lastAccrualDate"] = first_of_month
-                
-                if planned_current > 12:
-                    print(f"⚠️ {employee.get('name')} planned leave capped at 12 (would have been {planned_current})")
+                leave_balance["sickTotal"] = (
+                    leave_balance.get("sickTotal", 0) + 0.5
+                )
+
+            leave_balance["lastAccrualDate"] = first_of_month
+            leave_balance["lastAccrualMonth"] = today.strftime("%Y-%m")
             
             # Update employee
             mongo.db.users.update_one(
