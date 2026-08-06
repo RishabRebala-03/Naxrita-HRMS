@@ -6,7 +6,6 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock3,
-  Download,
   Filter,
   GitBranch,
   RotateCcw,
