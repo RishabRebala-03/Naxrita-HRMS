@@ -6,7 +6,7 @@ import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
 import ValueHelpSelect from "./ValueHelpSelect";
 
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
 
 const getReportingLeadLabel = (item = {}) =>
   item.reportingLeadName ||

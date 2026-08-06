@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { buildRequesterHeaders } from "../utils/requester";
 
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
 const MAIL_API = `${API_BASE}/api/mail`;
 
 const DEFAULT_SETTINGS = {

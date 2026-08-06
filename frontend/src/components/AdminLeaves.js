@@ -208,12 +208,14 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
     try {
       setLoading(true);
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+
       const [pendingRes, allLeavesRes, usersRes] = await Promise.all([
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/pending/admin`, {
+        axios.get(`${backendUrl}/api/leaves/pending/admin`, {
           headers: buildRequesterHeaders(user),
         }),
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/all`),
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/users/`, {
+        axios.get(`${backendUrl}/api/leaves/all`),
+        axios.get(`${backendUrl}/api/users/`, {
           headers: buildRequesterHeaders(user),
         }),
       ]);
@@ -740,8 +742,9 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
         }
       }
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const response = await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
+        `${backendUrl}/api/leaves/update_status/${leaveId}`,
         payload,
         { headers: buildRequesterHeaders(user) }
       );

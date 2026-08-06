@@ -28,7 +28,7 @@ const getNotificationTarget = (notification = {}) => {
     return {
       section: "timesheets",
       timesheetId: notification.related_timesheet_id,
-      activeView: type === "timesheet_submitted" || type.includes("submitted")
+      activeView: type.includes("submitted") || type.includes("escalated") || type.includes("pending")
         ? "approvals"
         : "entry",
     };
@@ -39,9 +39,11 @@ const getNotificationTarget = (notification = {}) => {
     return {
       section: "leaves",
       leaveId: notification.related_leave_id,
-      activeTab: type.includes("approved") || type.includes("rejected")
+      activeTab: (type.includes("approved") || type.includes("rejected") || type.includes("cancelled"))
         ? "my-leaves"
-        : "pending",
+        : (type.includes("request") || type.includes("escalated") || type.includes("pending"))
+          ? "team-leaves"
+          : "my-leaves",
     };
   }
 
@@ -63,8 +65,9 @@ const Notifications = ({ currentUser, onNavigate }) => {
       const userId = currentUser?.id || currentUser?._id;
       if (!userId) return;
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const response = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/notifications/${userId}`
+        `${backendUrl}/api/notifications/${userId}`
       );
 
       setNotifications(response.data.notifications || []);
@@ -123,8 +126,9 @@ const Notifications = ({ currentUser, onNavigate }) => {
 
   const markAsRead = async (notificationId) => {
     try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/notifications/mark_read/${notificationId}`
+        `${backendUrl}/api/notifications/mark_read/${notificationId}`
       );
       fetchNotifications();
     } catch (error) {
@@ -136,8 +140,9 @@ const Notifications = ({ currentUser, onNavigate }) => {
     try {
       setLoading(true);
       const userId = currentUser?.id || currentUser?._id;
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/notifications/mark_all_read/${userId}`
+        `${backendUrl}/api/notifications/mark_all_read/${userId}`
       );
       fetchNotifications();
     } catch (error) {
@@ -151,8 +156,9 @@ const Notifications = ({ currentUser, onNavigate }) => {
     try {
       setLoading(true);
       const userId = currentUser?.id || currentUser?._id;
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.delete(
-        `${process.env.REACT_APP_BACKEND_URL}/api/notifications/clear_all/${userId}`
+        `${backendUrl}/api/notifications/clear_all/${userId}`
       );
       setNotifications([]);
       setUnreadCount(0);
@@ -168,8 +174,9 @@ const Notifications = ({ currentUser, onNavigate }) => {
 
   const deleteNotification = async (notificationId) => {
     try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.delete(
-        `${process.env.REACT_APP_BACKEND_URL}/api/notifications/${notificationId}`
+        `${backendUrl}/api/notifications/${notificationId}`
       );
       fetchNotifications();
     } catch (error) {

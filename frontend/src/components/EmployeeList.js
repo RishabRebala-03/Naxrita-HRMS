@@ -145,8 +145,10 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
         params.manager_email = user.email;
       }
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+
       const response = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/directory`,
+        `${backendUrl}/api/users/directory`,
         {
           params,
           headers: requesterHeaders,
@@ -193,8 +195,9 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
   const handleActiveToggle = async (employeeId, nextStatus) => {
     try {
       setActionLoadingId(employeeId);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const response = await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/set_active/${employeeId}`,
+        `${backendUrl}/api/users/set_active/${employeeId}`,
         { is_active: nextStatus },
         { headers: requesterHeaders }
       );

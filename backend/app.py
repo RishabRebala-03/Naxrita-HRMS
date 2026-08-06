@@ -25,8 +25,21 @@ from services.mail_service import (
     send_pending_leave_reminders,
 )
 from workers.mail_worker import process_mail_queue_once, start_mail_worker
-import requests
+import sys
 import os
+
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
+import requests
 
 app = Flask(__name__, static_url_path="/static", static_folder="static")
 
@@ -100,7 +113,8 @@ def send_leave_reminder_public_alias():
 
 with app.app_context():
     ensure_mail_indexes()
-    start_mail_worker(app)
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        start_mail_worker(app)
 
 # ✅ UPDATED ESCALATION FUNCTION - USE LOCALHOST
 def check_leave_escalations():
@@ -286,8 +300,10 @@ scheduler.add_job(
     id="daily_leave_summary_mail"
 )
 
-# Start the scheduler
-scheduler.start()
+# Start the scheduler in worker process
+if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+    if not scheduler.running:
+        scheduler.start()
 
 print("\n" + "="*80)
 print("✅ SCHEDULER STARTED WITH 10 AUTOMATED JOBS")
@@ -370,8 +386,9 @@ if __name__ == "__main__":
     try:
         print("🚀 Starting Flask application on http://localhost:5000")
         print("="*80 + "\n")
-        app.run(debug=True, host='127.0.0.1', port=5000)
+        app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
     except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+        if scheduler.running:
+            scheduler.shutdown()
         print("\n✅ Scheduler shutdown complete")
         print("👋 Application stopped gracefully")

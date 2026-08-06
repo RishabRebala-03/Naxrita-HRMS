@@ -18,7 +18,7 @@ import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import "../App.css";
 
-const API_BASE = `${process.env.REACT_APP_BACKEND_URL}/api/tea_coffee`;
+const API_BASE = `${process.env.REACT_APP_BACKEND_URL || "http://localhost:5000"}/api/tea_coffee`;
 const MORNING_CUTOFF = "10:30";
 const EVENING_CUTOFF = "14:30";
 const EMPLOYEE_HISTORY_PAGE_SIZE = 6;

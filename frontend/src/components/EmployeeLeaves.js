@@ -202,6 +202,15 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   const [activeTab, setActiveTab] = useState("my-leaves");
   const [calendarFocusDate, setCalendarFocusDate] = useState("");
 
+  const [teamHistorySearch, setTeamHistorySearch] = useState("");
+  const [teamHistoryStatus, setTeamHistoryStatus] = useState("all");
+  const [teamHistoryType, setTeamHistoryType] = useState("all");
+  const [teamHistoryFromDate, setTeamHistoryFromDate] = useState("");
+  const [teamHistoryToDate, setTeamHistoryToDate] = useState("");
+  const [teamHistorySortBy, setTeamHistorySortBy] = useState("newest");
+  const [teamHistoryPage, setTeamHistoryPage] = useState(1);
+  const [teamHistoryPageSize, setTeamHistoryPageSize] = useState(6);
+
   const isIntern = user?.employment_type === "Intern";
   const requestedLeaveDays = useMemo(() => {
     if (!leave.start_date || !leave.end_date || leave.leave_type === "Early Logout") return null;
@@ -212,9 +221,10 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const [balanceRes, historyRes] = await Promise.all([
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/balance/${user.id}`),
-        axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/history/${user.id}`),
+        axios.get(`${backendUrl}/api/leaves/balance/${user.id}`),
+        axios.get(`${backendUrl}/api/leaves/history/${user.id}`),
       ]);
 
       setBalance(balanceRes.data);
@@ -227,25 +237,11 @@ const EmployeeLeaves = ({ user, navigationState }) => {
     }
   }, [user.id]);
 
-  const checkForReportees = useCallback(async () => {
-    try {
-      const res = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_employees_by_manager/${encodeURIComponent(user.email)}`
-      );
-      const nextReportees = Array.isArray(res.data) ? res.data : [];
-      setReportees(nextReportees);
-      setHasReportees(nextReportees.length > 0);
-    } catch (err) {
-      console.error("Error checking reportees:", err);
-      setReportees([]);
-      setHasReportees(false);
-    }
-  }, [user.email]);
-
   const fetchTeamPendingLeaves = useCallback(async () => {
     try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const res = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/pending/${encodeURIComponent(user.email)}`
+        `${backendUrl}/api/leaves/pending/${encodeURIComponent(user.email)}`
       );
       setTeamPendingLeaves(Array.isArray(res.data) ? res.data : []);
     } catch (err) {
@@ -254,20 +250,22 @@ const EmployeeLeaves = ({ user, navigationState }) => {
     }
   }, [user.email]);
 
-  const fetchTeamDecisionHistory = useCallback(async () => {
-    if (!reportees.length) {
+  const fetchTeamDecisionHistory = useCallback(async (targetReportees = reportees) => {
+    const list = Array.isArray(targetReportees) && targetReportees.length ? targetReportees : reportees;
+    if (!list.length) {
       setTeamDecisionHistory([]);
       return;
     }
 
     try {
       setTeamHistoryLoading(true);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
 
       const historyResponses = await Promise.all(
-        reportees.map(async (reportee) => {
+        list.map(async (reportee) => {
           const employeeId = reportee._id || reportee.id;
           const response = await axios.get(
-            `${process.env.REACT_APP_BACKEND_URL}/api/leaves/history/${employeeId}`
+            `${backendUrl}/api/leaves/history/${employeeId}`
           );
 
           const records = Array.isArray(response.data) ? response.data : [];
@@ -283,10 +281,10 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
       const flattened = historyResponses
         .flat()
-        .filter((record) => ["Approved", "Rejected"].includes(record.status))
+        .filter((record) => ["Approved", "Rejected", "Cancelled"].includes(record.status))
         .sort((first, second) => {
-          const firstDate = new Date(first.approved_on || first.rejected_on || first.applied_on || 0);
-          const secondDate = new Date(second.approved_on || second.rejected_on || second.applied_on || 0);
+          const firstDate = new Date(first.approved_on || first.rejected_on || first.cancelled_on || first.applied_on || 0);
+          const secondDate = new Date(second.approved_on || second.rejected_on || second.cancelled_on || second.applied_on || 0);
           return secondDate - firstDate;
         });
 
@@ -298,6 +296,26 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       setTeamHistoryLoading(false);
     }
   }, [reportees]);
+
+  const checkForReportees = useCallback(async () => {
+    try {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+      const res = await axios.get(
+        `${backendUrl}/api/users/get_employees_by_manager/${encodeURIComponent(user.email)}`
+      );
+      const nextReportees = Array.isArray(res.data) ? res.data : [];
+      setReportees(nextReportees);
+      setHasReportees(nextReportees.length > 0);
+      if (nextReportees.length > 0) {
+        fetchTeamPendingLeaves();
+        fetchTeamDecisionHistory(nextReportees);
+      }
+    } catch (err) {
+      console.error("Error checking reportees:", err);
+      setReportees([]);
+      setHasReportees(false);
+    }
+  }, [user.email, fetchTeamPendingLeaves, fetchTeamDecisionHistory]);
 
   useEffect(() => {
     if (user?.id && user?.email) {
@@ -460,7 +478,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
     try {
       setLoading(true);
-      const res = await axios.post(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/apply`, {
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+      const res = await axios.post(`${backendUrl}/api/leaves/apply`, {
         employee_id: user.id,
         leave_type: leave.leave_type,
         start_date: leave.start_date,
@@ -506,8 +525,9 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
     try {
       setLoading(true);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const res = await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update/${editingLeave._id}`,
+        `${backendUrl}/api/leaves/update/${editingLeave._id}`,
         {
           leave_type: editingLeave.leave_type,
           start_date: editingLeave.start_date,
@@ -541,7 +561,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
     try {
       setLoading(true);
-      const res = await axios.put(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/cancel/${leaveId}`);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+      const res = await axios.put(`${backendUrl}/api/leaves/cancel/${leaveId}`);
 
       if (res.status === 200) {
         setMessage("Leave cancelled successfully");
@@ -566,8 +587,9 @@ const EmployeeLeaves = ({ user, navigationState }) => {
         payload.rejection_reason = rejectionReason;
       }
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const res = await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/update_status/${leaveId}`,
+        `${backendUrl}/api/leaves/update_status/${leaveId}`,
         payload,
         { headers: buildRequesterHeaders(user) }
       );
@@ -589,8 +611,9 @@ const EmployeeLeaves = ({ user, navigationState }) => {
 
     try {
       setLoading(true);
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       const res = await axios.put(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/cancel_by_lead/${leaveId}`,
+        `${backendUrl}/api/leaves/cancel_by_lead/${leaveId}`,
         {
           lead_id: user.id || user._id,
           lead_email: user.email,
@@ -1463,7 +1486,87 @@ const EmployeeLeaves = ({ user, navigationState }) => {
               <h3>Approval and rejection history</h3>
               <p>Recent decisions across your reportees so you can review what was actioned.</p>
             </div>
-            <span className="fiori-status-pill is-neutral">{teamDecisionHistory.length} decisions</span>
+            <span className="fiori-status-pill is-neutral">{filteredTeamHistory.length} decisions</span>
+          </div>
+
+          <div className="leave-filter-grid">
+            <div className="fiori-form-field leave-filter-field-search">
+              <label className="leave-field-label">Search history</label>
+              <ValueHelpSearch
+                value={teamHistorySearch}
+                onChange={setTeamHistorySearch}
+                suggestions={teamHistorySearchSuggestions}
+                placeholder="Search by employee, email, department, or reason"
+              />
+            </div>
+
+            <div className="fiori-form-field">
+              <label className="leave-field-label">Status</label>
+              <ValueHelpSelect
+                value={teamHistoryStatus}
+                onChange={setTeamHistoryStatus}
+                searchPlaceholder="Search status"
+                options={[
+                  { value: "all", label: "All statuses" },
+                  { value: "Approved", label: "Approved" },
+                  { value: "Rejected", label: "Rejected" },
+                  { value: "Cancelled", label: "Cancelled" },
+                ]}
+              />
+            </div>
+
+            <div className="fiori-form-field">
+              <label className="leave-field-label">Type</label>
+              <ValueHelpSelect
+                value={teamHistoryType}
+                onChange={setTeamHistoryType}
+                searchPlaceholder="Search type"
+                options={[
+                  { value: "all", label: "All types" },
+                  { value: "Sick", label: "Sick Leave" },
+                  { value: "Planned", label: "Planned Leave" },
+                  { value: "Optional", label: "Optional Leave" },
+                  { value: "Compensatory Off", label: "Compensatory Off" },
+                  { value: "Early Logout", label: "Early Logout" },
+                  { value: "LWP", label: "LOP / LWP" },
+                ]}
+              />
+            </div>
+
+            <div className="fiori-form-field">
+              <label className="leave-field-label">From</label>
+              <input
+                type="date"
+                className="fiori-input"
+                value={teamHistoryFromDate}
+                onChange={(e) => setTeamHistoryFromDate(e.target.value)}
+              />
+            </div>
+
+            <div className="fiori-form-field">
+              <label className="leave-field-label">To</label>
+              <input
+                type="date"
+                className="fiori-input"
+                value={teamHistoryToDate}
+                onChange={(e) => setTeamHistoryToDate(e.target.value)}
+              />
+            </div>
+
+            <div className="fiori-form-field">
+              <label className="leave-field-label">Sort by</label>
+              <ValueHelpSelect
+                value={teamHistorySortBy}
+                onChange={setTeamHistorySortBy}
+                searchPlaceholder="Search sort options"
+                options={[
+                  { value: "newest", label: "Newest first" },
+                  { value: "oldest", label: "Oldest first" },
+                  { value: "name", label: "Employee name" },
+                  { value: "department", label: "Department" },
+                ]}
+              />
+            </div>
           </div>
 
           {teamHistoryLoading ? (
@@ -1474,79 +1577,137 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                 <p>We are compiling approvals and rejections from your reportees.</p>
               </div>
             </div>
-          ) : teamDecisionHistory.length === 0 ? (
+          ) : filteredTeamHistory.length === 0 ? (
             <div className="admin-empty-state">
               <Users size={22} />
               <div>
-                <strong>No team decisions recorded yet</strong>
-                <p>Approvals and rejections will appear here once you start acting on requests.</p>
+                <strong>{teamDecisionHistory.length === 0 ? "No team decisions recorded yet" : "No decisions match these filters"}</strong>
+                <p>Approvals and rejections will appear here once actioned.</p>
               </div>
             </div>
           ) : (
-            <div className="admin-approval-list employee-team-history-list">
-              {teamDecisionHistory.slice(0, 12).map((record) => (
-                <article key={`${record._id}-${record.status}`} className="admin-approval-card employee-team-history-card">
-                  <div className="admin-approval-card-header">
-                    <div>
-                      <h4>{record.employee_name || "Unknown employee"}</h4>
-                      <p>
-                        {record.employee_designation ? `${record.employee_designation} • ` : ""}
-                        {record.employee_department || "Department not set"}
-                      </p>
-                    </div>
-                    <span className={`fiori-status-pill ${statusToneMap[record.status] || "is-neutral"}`}>
-                      {record.status}
-                    </span>
-                  </div>
-
-                  <div className="admin-approval-metadata">
-                    <span>{record.leave_type}</span>
-                    <span>
-                      {formatDate(record.start_date)} to {formatDate(record.end_date)}
-                    </span>
-                    <span>{record.days || 0} day(s)</span>
-                    <span>{record.employee_email || "No email"}</span>
-                  </div>
-
-                  <div className="admin-approval-details">
-                    <div>
-                      <span>Applied on</span>
-                      <strong>{formatDateTime(record.applied_on)}</strong>
-                    </div>
-                    <div>
-                      <span>Resolved on</span>
-                      <strong>{formatDateTime(record.approved_on || record.rejected_on)}</strong>
-                    </div>
-                    <div className="is-wide">
-                      <span>Reason</span>
-                      <strong>{record.reason || "No reason shared"}</strong>
-                    </div>
-                    {record.approved_by ? (
+            <>
+              <div className="admin-approval-list employee-team-history-list">
+                {paginatedTeamHistory.map((record) => (
+                  <article key={`${record._id}-${record.status}`} className="admin-approval-card employee-team-history-card">
+                    <div className="admin-approval-card-header">
                       <div>
-                        <span>Approved by</span>
-                        <strong>{record.approved_by}</strong>
+                        <h4>{record.employee_name || "Unknown employee"}</h4>
+                        <p>
+                          {record.employee_designation ? `${record.employee_designation} • ` : ""}
+                          {record.employee_department || "Department not set"}
+                        </p>
                       </div>
-                    ) : null}
-                    {record.rejection_reason ? (
-                      <div className="is-wide">
-                        <span>Rejection note</span>
-                        <strong>{record.rejection_reason}</strong>
-                      </div>
-                    ) : null}
-                  </div>
-                  {canLeadCancelApprovedLeave(record) ? (
-                    <div className="admin-approval-actions">
-                      <button
-                        className="fiori-button secondary danger"
-                        onClick={() => cancelTeamApprovedLeave(record._id)}
-                      >
-                        Cancel Approved Leave
-                      </button>
+                      <span className={`fiori-status-pill ${statusToneMap[record.status] || "is-neutral"}`}>
+                        {record.status}
+                      </span>
                     </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
+
+                    <div className="admin-approval-metadata">
+                      <span>{record.leave_type}</span>
+                      <span>
+                        {formatDate(record.start_date)} to {formatDate(record.end_date)}
+                      </span>
+                      <span>{record.days || 0} day(s)</span>
+                      <span>{record.employee_email || "No email"}</span>
+                    </div>
+
+                    <div className="admin-approval-details">
+                      <div>
+                        <span>Applied on</span>
+                        <strong>{formatDateTime(record.applied_on)}</strong>
+                      </div>
+                      <div>
+                        <span>Resolved on</span>
+                        <strong>{formatDateTime(record.approved_on || record.rejected_on || record.cancelled_on)}</strong>
+                      </div>
+                      <div className="is-wide">
+                        <span>Reason</span>
+                        <strong>{record.reason || "No reason shared"}</strong>
+                      </div>
+                      {record.approved_by ? (
+                        <div>
+                          <span>Approved by</span>
+                          <strong>{record.approved_by}</strong>
+                        </div>
+                      ) : null}
+                      {record.rejection_reason ? (
+                        <div className="is-wide">
+                          <span>Rejection note</span>
+                          <strong>{record.rejection_reason}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                    {canLeadCancelApprovedLeave(record) ? (
+                      <div className="admin-approval-actions">
+                        <button
+                          className="fiori-button secondary danger"
+                          onClick={() => cancelTeamApprovedLeave(record._id)}
+                        >
+                          Cancel Approved Leave
+                        </button>
+                      </div>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+
+              {filteredTeamHistory.length > 0 ? (
+                <div className="leave-history-pagination" style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="fiori-stat-note">
+                      Showing {Math.min((teamHistoryPage - 1) * teamHistoryPageSize + 1, filteredTeamHistory.length)}–
+                      {Math.min(teamHistoryPage * teamHistoryPageSize, filteredTeamHistory.length)} of {filteredTeamHistory.length} decisions
+                    </span>
+                    <select
+                      className="fiori-input"
+                      style={{ width: 'auto', padding: '4px 8px', fontSize: '13px' }}
+                      value={teamHistoryPageSize}
+                      onChange={(e) => setTeamHistoryPageSize(Number(e.target.value))}
+                    >
+                      <option value={6}>6 per page</option>
+                      <option value={10}>10 per page</option>
+                      <option value={25}>25 per page</option>
+                      <option value={50}>50 per page</option>
+                    </select>
+                  </div>
+
+                  <div className="leave-history-page-controls" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="fiori-button secondary"
+                      onClick={() => setTeamHistoryPage((p) => Math.max(1, p - 1))}
+                      disabled={teamHistoryPage === 1}
+                    >
+                      Prev
+                    </button>
+                    {teamHistoryPageNumbers.map((page, index) => {
+                      const prev = teamHistoryPageNumbers[index - 1];
+                      return (
+                        <React.Fragment key={page}>
+                          {prev && page - prev > 1 ? <span className="leave-history-page-gap">...</span> : null}
+                          <button
+                            type="button"
+                            className={`leave-history-page-number ${teamHistoryPage === page ? "is-active" : ""}`}
+                            onClick={() => setTeamHistoryPage(page)}
+                          >
+                            {page}
+                          </button>
+                        </React.Fragment>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="fiori-button secondary"
+                      onClick={() => setTeamHistoryPage((p) => Math.min(teamHistoryPageCount, p + 1))}
+                      disabled={teamHistoryPage === teamHistoryPageCount}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
         </section>
         </div>

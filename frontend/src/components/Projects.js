@@ -26,7 +26,7 @@ import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
 
-const API_BASE = process.env.REACT_APP_BACKEND_URL || "";
+const API_BASE = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
 const STATUSES = ["All", "Active", "Completed", "On Hold", "Planning"];
 const PROJECT_TABS = [
   { key: "portfolio", label: "Portfolio" },

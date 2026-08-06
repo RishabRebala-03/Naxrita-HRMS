@@ -288,8 +288,10 @@ const ManagerDashboard = ({ user, onNavigate, onNavigateToProfile }) => {
       setLoading(true);
       setMessage("");
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+
       const teamRes = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_employees_by_manager/${encodeURIComponent(user.email)}`
+        `${backendUrl}/api/users/get_employees_by_manager/${encodeURIComponent(user.email)}`
       );
 
       let team = [];
@@ -303,12 +305,12 @@ const ManagerDashboard = ({ user, onNavigate, onNavigateToProfile }) => {
       setTeamMembers(team);
 
       const pendingRes = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/leaves/pending/${encodeURIComponent(user.email)}`
+        `${backendUrl}/api/leaves/pending/${encodeURIComponent(user.email)}`
       );
       const pending = Array.isArray(pendingRes.data) ? pendingRes.data : [];
       setPendingLeaves(pending);
 
-      const allLeavesRes = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/all`);
+      const allLeavesRes = await axios.get(`${backendUrl}/api/leaves/all`);
       const allLeaves = Array.isArray(allLeavesRes.data) ? allLeavesRes.data : [];
       const teamIds = new Set(team.map((member) => normalizeId(member._id)).filter(Boolean));
       const scopedTeamLeaves = allLeaves.filter((leave) => teamIds.has(normalizeId(leave.employee_id)));
@@ -328,7 +330,7 @@ const ManagerDashboard = ({ user, onNavigate, onNavigateToProfile }) => {
       setEmployeesOnLeave(onLeaveToday);
 
       try {
-        const holidaysRes = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/holidays/`);
+        const holidaysRes = await axios.get(`${backendUrl}/api/holidays/`);
         const holidays = Array.isArray(holidaysRes.data) ? holidaysRes.data : [];
         const todayDate = new Date();
         todayDate.setHours(0, 0, 0, 0);

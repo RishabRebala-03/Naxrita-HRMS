@@ -224,20 +224,22 @@ const AdminDashboard = ({ user, onNavigate }) => {
     try {
       setLoading(true);
 
+      const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
+
       const employeesRes = await axios.get(
-        `${process.env.REACT_APP_BACKEND_URL}/api/users/get_all_employees`,
+        `${backendUrl}/api/users/get_all_employees`,
         { headers: buildRequesterHeaders(user) }
       );
       const employees = Array.isArray(employeesRes.data)
         ? employeesRes.data.filter((employee) => employee && employee._id)
         : [];
 
-      const adminsRes = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/users/`);
+      const adminsRes = await axios.get(`${backendUrl}/api/users/`);
       const adminIds = (adminsRes.data || [])
         .filter((admin) => admin.role === "Admin")
         .map((admin) => admin._id);
 
-      const allLeavesRes = await axios.get(`${process.env.REACT_APP_BACKEND_URL}/api/leaves/all`);
+      const allLeavesRes = await axios.get(`${backendUrl}/api/leaves/all`);
       const leaves = allLeavesRes.data || [];
 
       const pending = leaves.filter(
