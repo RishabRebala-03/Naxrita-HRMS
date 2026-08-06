@@ -23,31 +23,26 @@ const getNotificationTarget = (notification = {}) => {
     return notification.target;
   }
 
-  if (notification.related_timesheet_id) {
-    const type = notification.type || "";
+  const type = String(notification.type || "").toLowerCase();
+  const msg = String(notification.message || "").toLowerCase();
+
+  if (notification.related_timesheet_id || type.includes("timesheet") || msg.includes("timesheet")) {
     return {
       section: "timesheets",
       timesheetId: notification.related_timesheet_id,
-      activeView: type.includes("submitted") || type.includes("escalated") || type.includes("pending")
+      activeView: type.includes("submitted") || type.includes("escalated") || type.includes("pending") || msg.includes("submitted") || msg.includes("approval")
         ? "approvals"
         : "entry",
     };
   }
 
-  if (notification.related_leave_id) {
-    const type = notification.type || "";
-    return {
-      section: "leaves",
-      leaveId: notification.related_leave_id,
-      activeTab: (type.includes("approved") || type.includes("rejected") || type.includes("cancelled"))
-        ? "my-leaves"
-        : (type.includes("request") || type.includes("escalated") || type.includes("pending"))
-          ? "team-leaves"
-          : "my-leaves",
-    };
-  }
+  const isTeamTarget = type.includes("request") || type.includes("escalated") || type.includes("pending") || type.includes("submit") || msg.includes("submitted") || msg.includes("request") || msg.includes("escalat");
 
-  return null;
+  return {
+    section: "leaves",
+    leaveId: notification.related_leave_id || notification._id,
+    activeTab: isTeamTarget ? "team-leaves" : "my-leaves",
+  };
 };
 
 const Notifications = ({ currentUser, onNavigate }) => {
@@ -293,11 +288,11 @@ const Notifications = ({ currentUser, onNavigate }) => {
     setShowDropdown(false);
   };
 
-  const handleNotificationClick = async (notification) => {
+  const handleNotificationClick = (notification) => {
     if (!notification) return;
 
     if (!notification.read) {
-      await markAsRead(notification._id);
+      markAsRead(notification._id);
     }
 
     const target = getNotificationTarget(notification);

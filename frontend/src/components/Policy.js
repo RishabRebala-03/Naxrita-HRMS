@@ -178,17 +178,29 @@ const getPolicySectionElement = (root, section) => {
   if (!root || !section) return null;
 
   const sectionId = String(section.id || "").trim();
-  const exactMatch = sectionId ? root.ownerDocument.getElementById(sectionId) : null;
-
-  if (exactMatch && root.contains(exactMatch)) {
-    return exactMatch;
+  if (sectionId) {
+    const exactMatch = root.querySelector(`#${sectionId}`) || root.ownerDocument.getElementById(sectionId);
+    if (exactMatch && root.contains(exactMatch)) {
+      return exactMatch;
+    }
   }
 
-  const sectionTitle = String(section.title || "").trim().toLowerCase();
-  if (!sectionTitle) return null;
+  const rawTitle = String(section.title || "").trim().toLowerCase();
+  if (!rawTitle) return null;
 
-  const headingMatch = Array.from(root.querySelectorAll("h2, h3")).find(
-    (heading) => heading.textContent.trim().toLowerCase() === sectionTitle
+  const cleanTitle = rawTitle.replace(/^[0-9]+\.\s*/, "").trim();
+
+  const headingMatch = Array.from(root.querySelectorAll("h1, h2, h3, h4, h5, h6")).find(
+    (heading) => {
+      const headingText = heading.textContent.trim().toLowerCase();
+      const cleanHeadingText = headingText.replace(/^[0-9]+\.\s*/, "").trim();
+      return (
+        headingText === rawTitle ||
+        cleanHeadingText === cleanTitle ||
+        headingText.includes(cleanTitle) ||
+        cleanTitle.includes(cleanHeadingText)
+      );
+    }
   );
 
   if (headingMatch && sectionId && !headingMatch.id) {
@@ -355,16 +367,14 @@ const Policy = ({ user }) => {
       getPolicySectionElement(contentRootRef.current, section);
 
     if (!element) {
+      console.warn("⚠️ Section element not found for ID:", sectionId);
       return;
     }
 
     contentRefs.current[sectionId] = element;
-
     window.history.replaceState(null, "", `#${sectionId}`);
-    element.setAttribute("tabindex", "-1");
-    element.focus({ preventScroll: true });
 
-    scrollPolicyElementIntoView(element, scrollContainerRef.current, "smooth");
+    element.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const openEditModal = () => {

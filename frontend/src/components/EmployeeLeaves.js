@@ -322,14 +322,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       fetchData();
       checkForReportees();
     }
-  }, [checkForReportees, fetchData, user?.email, user?.id]);
-
-  useEffect(() => {
-    if (hasReportees && activeTab === "team-leaves") {
-      fetchTeamPendingLeaves();
-      fetchTeamDecisionHistory();
-    }
-  }, [activeTab, fetchTeamDecisionHistory, fetchTeamPendingLeaves, hasReportees]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.email]);
 
   useEffect(() => {
     if (!navigationState) return;
@@ -359,6 +353,86 @@ const EmployeeLeaves = ({ user, navigationState }) => {
       setActiveTab("my-leaves");
     }
   }, [navigationState]);
+
+  const teamHistorySearchSuggestions = useMemo(
+    () => buildSuggestions(teamDecisionHistory, ["employee_name", "employee_email", "employee_department", "employee_designation", "reason"]),
+    [teamDecisionHistory]
+  );
+
+  const filteredTeamHistory = useMemo(() => {
+    return teamDecisionHistory
+      .filter((record) => {
+        if (teamHistorySearch.trim()) {
+          const query = teamHistorySearch.toLowerCase().trim();
+          const matchable = [
+            record.employee_name,
+            record.employee_email,
+            record.employee_department,
+            record.employee_designation,
+            record.reason,
+            record.leave_type,
+          ]
+            .filter(Boolean)
+            .some((val) => String(val).toLowerCase().includes(query));
+          if (!matchable) return false;
+        }
+
+        if (teamHistoryStatus !== "all") {
+          if (record.status !== teamHistoryStatus) return false;
+        }
+
+        if (teamHistoryType !== "all") {
+          if (!matchesLeaveTypeFilter(record.leave_type, teamHistoryType)) return false;
+        }
+
+        if (teamHistoryFromDate || teamHistoryToDate) {
+          if (!leaveOverlapsRange(record, { start: teamHistoryFromDate, end: teamHistoryToDate })) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((first, second) => {
+        if (teamHistorySortBy === "name") {
+          return (first.employee_name || "").localeCompare(second.employee_name || "");
+        }
+        if (teamHistorySortBy === "department") {
+          return (first.employee_department || "").localeCompare(second.employee_department || "");
+        }
+        const firstDate = new Date(first.approved_on || first.rejected_on || first.cancelled_on || first.applied_on || 0);
+        const secondDate = new Date(second.approved_on || second.rejected_on || second.cancelled_on || second.applied_on || 0);
+        if (teamHistorySortBy === "oldest") {
+          return firstDate - secondDate;
+        }
+        return secondDate - firstDate;
+      });
+  }, [teamDecisionHistory, teamHistorySearch, teamHistoryStatus, teamHistoryType, teamHistoryFromDate, teamHistoryToDate, teamHistorySortBy]);
+
+  useEffect(() => {
+    setTeamHistoryPage(1);
+  }, [teamHistorySearch, teamHistoryStatus, teamHistoryType, teamHistoryFromDate, teamHistoryToDate, teamHistorySortBy, teamHistoryPageSize]);
+
+  const teamHistoryPageCount = Math.ceil(filteredTeamHistory.length / teamHistoryPageSize) || 1;
+
+  const paginatedTeamHistory = useMemo(() => {
+    const start = (teamHistoryPage - 1) * teamHistoryPageSize;
+    return filteredTeamHistory.slice(start, start + teamHistoryPageSize);
+  }, [filteredTeamHistory, teamHistoryPage, teamHistoryPageSize]);
+
+  const teamHistoryPageNumbers = useMemo(() => {
+    const pageNumbers = [];
+    for (let index = 1; index <= teamHistoryPageCount; index += 1) {
+      if (
+        index === 1 ||
+        index === teamHistoryPageCount ||
+        Math.abs(index - teamHistoryPage) <= 1
+      ) {
+        pageNumbers.push(index);
+      }
+    }
+    return pageNumbers;
+  }, [teamHistoryPage, teamHistoryPageCount]);
 
   const getMinDate = (leaveType) => {
     const type = (leaveType || leave.leave_type).toLowerCase();
@@ -1378,7 +1452,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
             <span className="fiori-status-pill is-pending">{displayTeamLeaves.length} pending</span>
           </div>
 
-          <div className="leave-filter-grid leave-filter-grid-compact">
+          <div className="team-leaves-filter-bar">
             <div className="fiori-form-field">
               <label className="leave-field-label">Search employee</label>
               <ValueHelpSearch
@@ -1489,83 +1563,87 @@ const EmployeeLeaves = ({ user, navigationState }) => {
             <span className="fiori-status-pill is-neutral">{filteredTeamHistory.length} decisions</span>
           </div>
 
-          <div className="leave-filter-grid">
-            <div className="fiori-form-field leave-filter-field-search">
-              <label className="leave-field-label">Search history</label>
-              <ValueHelpSearch
-                value={teamHistorySearch}
-                onChange={setTeamHistorySearch}
-                suggestions={teamHistorySearchSuggestions}
-                placeholder="Search by employee, email, department, or reason"
-              />
+          <div className="team-history-filter-bar">
+            <div className="team-history-filter-row top-row">
+              <div className="fiori-form-field leave-filter-field-search">
+                <label className="leave-field-label">Search history</label>
+                <ValueHelpSearch
+                  value={teamHistorySearch}
+                  onChange={setTeamHistorySearch}
+                  suggestions={teamHistorySearchSuggestions}
+                  placeholder="Search by employee, email, department, or reason"
+                />
+              </div>
+
+              <div className="fiori-form-field leave-filter-field-sort">
+                <label className="leave-field-label">Sort by</label>
+                <ValueHelpSelect
+                  value={teamHistorySortBy}
+                  onChange={setTeamHistorySortBy}
+                  searchPlaceholder="Search sort options"
+                  options={[
+                    { value: "newest", label: "Newest first" },
+                    { value: "oldest", label: "Oldest first" },
+                    { value: "name", label: "Employee name" },
+                    { value: "department", label: "Department" },
+                  ]}
+                />
+              </div>
             </div>
 
-            <div className="fiori-form-field">
-              <label className="leave-field-label">Status</label>
-              <ValueHelpSelect
-                value={teamHistoryStatus}
-                onChange={setTeamHistoryStatus}
-                searchPlaceholder="Search status"
-                options={[
-                  { value: "all", label: "All statuses" },
-                  { value: "Approved", label: "Approved" },
-                  { value: "Rejected", label: "Rejected" },
-                  { value: "Cancelled", label: "Cancelled" },
-                ]}
-              />
-            </div>
+            <div className="team-history-filter-row bottom-row">
+              <div className="fiori-form-field">
+                <label className="leave-field-label">Status</label>
+                <ValueHelpSelect
+                  value={teamHistoryStatus}
+                  onChange={setTeamHistoryStatus}
+                  searchPlaceholder="Search status"
+                  options={[
+                    { value: "all", label: "All statuses" },
+                    { value: "Approved", label: "Approved" },
+                    { value: "Rejected", label: "Rejected" },
+                    { value: "Cancelled", label: "Cancelled" },
+                  ]}
+                />
+              </div>
 
-            <div className="fiori-form-field">
-              <label className="leave-field-label">Type</label>
-              <ValueHelpSelect
-                value={teamHistoryType}
-                onChange={setTeamHistoryType}
-                searchPlaceholder="Search type"
-                options={[
-                  { value: "all", label: "All types" },
-                  { value: "Sick", label: "Sick Leave" },
-                  { value: "Planned", label: "Planned Leave" },
-                  { value: "Optional", label: "Optional Leave" },
-                  { value: "Compensatory Off", label: "Compensatory Off" },
-                  { value: "Early Logout", label: "Early Logout" },
-                  { value: "LWP", label: "LOP / LWP" },
-                ]}
-              />
-            </div>
+              <div className="fiori-form-field">
+                <label className="leave-field-label">Type</label>
+                <ValueHelpSelect
+                  value={teamHistoryType}
+                  onChange={setTeamHistoryType}
+                  searchPlaceholder="Search type"
+                  options={[
+                    { value: "all", label: "All types" },
+                    { value: "Sick", label: "Sick Leave" },
+                    { value: "Planned", label: "Planned Leave" },
+                    { value: "Optional", label: "Optional Leave" },
+                    { value: "Compensatory Off", label: "Compensatory Off" },
+                    { value: "Early Logout", label: "Early Logout" },
+                    { value: "LWP", label: "LOP / LWP" },
+                  ]}
+                />
+              </div>
 
-            <div className="fiori-form-field">
-              <label className="leave-field-label">From</label>
-              <input
-                type="date"
-                className="fiori-input"
-                value={teamHistoryFromDate}
-                onChange={(e) => setTeamHistoryFromDate(e.target.value)}
-              />
-            </div>
+              <div className="fiori-form-field">
+                <label className="leave-field-label">From date</label>
+                <input
+                  type="date"
+                  className="fiori-input team-date-input"
+                  value={teamHistoryFromDate}
+                  onChange={(e) => setTeamHistoryFromDate(e.target.value)}
+                />
+              </div>
 
-            <div className="fiori-form-field">
-              <label className="leave-field-label">To</label>
-              <input
-                type="date"
-                className="fiori-input"
-                value={teamHistoryToDate}
-                onChange={(e) => setTeamHistoryToDate(e.target.value)}
-              />
-            </div>
-
-            <div className="fiori-form-field">
-              <label className="leave-field-label">Sort by</label>
-              <ValueHelpSelect
-                value={teamHistorySortBy}
-                onChange={setTeamHistorySortBy}
-                searchPlaceholder="Search sort options"
-                options={[
-                  { value: "newest", label: "Newest first" },
-                  { value: "oldest", label: "Oldest first" },
-                  { value: "name", label: "Employee name" },
-                  { value: "department", label: "Department" },
-                ]}
-              />
+              <div className="fiori-form-field">
+                <label className="leave-field-label">To date</label>
+                <input
+                  type="date"
+                  className="fiori-input team-date-input"
+                  value={teamHistoryToDate}
+                  onChange={(e) => setTeamHistoryToDate(e.target.value)}
+                />
+              </div>
             </div>
           </div>
 

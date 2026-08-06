@@ -5856,13 +5856,215 @@ button:hover:not(:disabled) {
 }
 
 .employee-team-history-list {
-  gap: 14px;
+  gap: 12px;
 }
 
-.employee-team-history-card .admin-approval-card-header p,
-.employee-team-history-card .admin-approval-details strong,
+/* High-quality modern CSS for Team Leaves page filter bars */
+.team-leaves-filter-bar {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-end !important;
+  gap: 16px !important;
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+  margin-bottom: 20px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+}
+
+.team-leaves-filter-bar .fiori-form-field:first-child {
+  flex: 1 1 auto !important;
+}
+
+.team-leaves-filter-bar .fiori-form-field:last-child {
+  flex: 0 0 220px !important;
+}
+
+.team-history-filter-bar {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: 18px 20px !important;
+  margin-bottom: 22px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02) !important;
+}
+
+.team-history-filter-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 14px !important;
+  align-items: flex-end !important;
+  width: 100% !important;
+}
+
+.team-history-filter-row.top-row .leave-filter-field-search {
+  flex: 1 1 300px !important;
+}
+
+.team-history-filter-row.top-row .leave-filter-field-sort {
+  flex: 0 0 220px !important;
+}
+
+.team-history-filter-row.bottom-row .fiori-form-field {
+  flex: 1 1 140px !important;
+  min-width: 130px !important;
+}
+
+.team-date-input {
+  height: 38px !important;
+  box-sizing: border-box !important;
+  border-radius: 8px !important;
+  border: 1px solid #cbd5e1 !important;
+  background: #ffffff !important;
+  padding: 0 12px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: #0f172a !important;
+  width: 100% !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+  transition: all 0.15s ease !important;
+}
+
+.team-date-input:hover {
+  border-color: #94a3b8 !important;
+}
+
+.team-date-input:focus {
+  border-color: #3b82f6 !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+
+@media (max-width: 768px) {
+  .team-leaves-filter-bar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .team-leaves-filter-bar .fiori-form-field:last-child {
+    flex: 1 1 100% !important;
+  }
+  .team-history-filter-row.top-row .leave-filter-field-sort {
+    flex: 1 1 100% !important;
+  }
+}
+
+/* Modern, compact UI-friendly styling for Employee Team History Cards */
+.employee-team-history-card {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 12px !important;
+  padding: 16px 20px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02) !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease !important;
+}
+
+.employee-team-history-card:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06) !important;
+}
+
+.employee-team-history-card .admin-approval-card-header h4 {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.employee-team-history-card .admin-approval-card-header p {
+  font-size: 12px !important;
+  color: #64748b !important;
+  margin-top: 2px !important;
+}
+
+.employee-team-history-card .admin-approval-metadata {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 10px 0 12px !important;
+}
+
 .employee-team-history-card .admin-approval-metadata span {
-  line-height: 1.6;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 4px 10px !important;
+  border-radius: 6px !important;
+  background: #f1f5f9 !important;
+  color: #334155 !important;
+  border: 1px solid #e2e8f0 !important;
+  line-height: 1.5 !important;
+}
+
+.employee-team-history-card .admin-approval-metadata span:first-child {
+  background: #eff6ff !important;
+  color: #1d4ed8 !important;
+  border-color: #bfdbfe !important;
+}
+
+.employee-team-history-card .admin-approval-details {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 12px 28px !important;
+  background: #f8fafc !important;
+  border: 1px solid #edf2f7 !important;
+  border-radius: 8px !important;
+  padding: 12px 16px !important;
+  margin-top: 8px !important;
+}
+
+.employee-team-history-card .admin-approval-details div {
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  min-width: fit-content !important;
+}
+
+.employee-team-history-card .admin-approval-details div.is-wide {
+  flex: 1 1 100% !important;
+}
+
+.employee-team-history-card .admin-approval-details span {
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  color: #64748b !important;
+  margin-bottom: 2px !important;
+}
+
+.employee-team-history-card .admin-approval-details strong {
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #1e293b !important;
+  line-height: 1.5 !important;
+}
+
+.employee-team-history-card .admin-approval-actions {
+  margin-top: 12px !important;
+  padding-top: 8px !important;
+  display: flex !important;
+  justify-content: flex-end !important;
+}
+
+.employee-team-history-card .admin-approval-actions button {
+  padding: 6px 14px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  border-radius: 8px !important;
+  border: 1px solid #fca5a5 !important;
+  background: #ffffff !important;
+  color: #dc2626 !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+
+.employee-team-history-card .admin-approval-actions button:hover {
+  background: #fef2f2 !important;
+  border-color: #f87171 !important;
 }
 
 .leave-tab-strip {
