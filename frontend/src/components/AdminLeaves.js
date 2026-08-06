@@ -6,8 +6,10 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock3,
+  Download,
   Filter,
   GitBranch,
+  RotateCcw,
   Search,
   ShieldAlert,
   Users,
@@ -30,8 +32,10 @@ import {
 } from "recharts";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import LeaveDetailModal from "./LeaveDetailModal";
 import { buildRequesterHeaders } from "../utils/requester";
 import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
+import { exportToCSV } from "../utils/csvExport";
 
 const defaultLeaveTypeFilters = ["Sick", "Planned", "Optional", "Compensatory Off", "Early Logout", "LWP"];
 const lopAliases = new Set(["lop", "lwp", "leave without pay", "leave with loss of pay"]);
@@ -194,6 +198,7 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
   const [escalationSearch, setEscalationSearch] = useState("");
   const [selectedEscalationOwner, setSelectedEscalationOwner] = useState(null);
   const [rejectModal, setRejectModal] = useState({ show: false, leaveId: null, reason: "" });
+  const [selectedLeaveDetails, setSelectedLeaveDetails] = useState(null);
   const [approvalModal, setApprovalModal] = useState({
     show: false,
     leaveId: null,
@@ -349,6 +354,54 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
         }
       });
   }, [activeTab, allLeaves, dateRange, departmentFilter, pendingLeaves, searchTerm, sortBy, statusFilter, typeFilter]);
+
+  const hasActiveFilters = useMemo(() => {
+    return Boolean(
+      searchTerm.trim() !== "" ||
+      statusFilter !== "all" ||
+      departmentFilter !== "all" ||
+      typeFilter !== "all" ||
+      dateRange.start !== "" ||
+      dateRange.end !== "" ||
+      sortBy !== "newest"
+    );
+  }, [searchTerm, statusFilter, departmentFilter, typeFilter, dateRange, sortBy]);
+
+  const handleClearFilters = () => {
+    setSearchTerm("");
+    setStatusFilter("all");
+    setDepartmentFilter("all");
+    setTypeFilter("all");
+    setDateRange({ start: "", end: "" });
+    setSortBy("newest");
+  };
+
+  const handleExportLeaves = () => {
+    if (!filteredLeaves.length) {
+      alert("No leave records available to export for the current filters.");
+      return;
+    }
+
+    const headers = [
+      { label: "Employee Name", key: (l) => l.employee_name || "Unknown employee" },
+      { label: "Email", key: (l) => l.employee_email || "" },
+      { label: "Designation", key: (l) => l.employee_designation || "" },
+      { label: "Department", key: (l) => l.employee_department || "" },
+      { label: "Leave Type", key: (l) => getLeaveTypeDisplayLabel(l.leave_type) },
+      { label: "Days", key: (l) => l.approved_days || l.days || 0 },
+      { label: "Start Date", key: (l) => formatDate(l.approved_start_date || l.start_date) },
+      { label: "End Date", key: (l) => formatDate(l.approved_end_date || l.end_date) },
+      { label: "Status", key: (l) => l.status || "Pending" },
+      { label: "Current Approver", key: (l) => userMap[l.current_approver_id]?.name || "Administration queue" },
+      { label: "Approved By", key: (l) => l.approved_by || "" },
+      { label: "Applied On", key: (l) => formatDateTime(l.applied_on) },
+      { label: "Reason", key: (l) => l.reason || "" },
+      { label: "Rejection Reason", key: (l) => l.rejection_reason || "" },
+    ];
+
+    const fileName = `${activeTab === "pending" ? "Pending_Leave_Requests" : "Leave_Records"}_${new Date().toISOString().slice(0, 10)}.csv`;
+    exportToCSV(fileName, headers, filteredLeaves);
+  };
 
   const searchSuggestions = useMemo(
     () =>
@@ -948,94 +1001,114 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
               </div>
             </div>
 
-            <div className="leave-filter-grid leave-history-filter-grid">
-              <label className="fiori-form-field">
-                <span className="leave-field-label">Search</span>
-                <ValueHelpSearch
-                  value={searchTerm}
-                  onChange={setSearchTerm}
-                  suggestions={searchSuggestions}
-                  placeholder="Search by employee, email, designation, department, or approver"
-                />
-              </label>
+            <div className="lhf-bar-container">
+              {/* Row 1: Search, Status, Department, Leave type, Sort */}
+              <div className="lhf-row-top" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr" }}>
+                <div className="lhf-field">
+                  <span className="lhf-label">Search</span>
+                  <ValueHelpSearch
+                    value={searchTerm}
+                    onChange={setSearchTerm}
+                    suggestions={searchSuggestions}
+                    placeholder="Search employee, email, department..."
+                  />
+                </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">Status</span>
-                <ValueHelpSelect
-                  value={statusFilter}
-                  onChange={setStatusFilter}
-                  searchPlaceholder="Search statuses"
-                  options={[
-                    { value: "all", label: "All statuses" },
-                    { value: "Pending", label: "Pending" },
-                    { value: "Approved", label: "Approved" },
-                    { value: "Rejected", label: "Rejected" },
-                    { value: "Cancelled", label: "Cancelled" },
-                  ]}
-                />
-              </label>
+                <div className="lhf-field">
+                  <span className="lhf-label">Status</span>
+                  <ValueHelpSelect
+                    value={statusFilter}
+                    onChange={setStatusFilter}
+                    searchPlaceholder="Search statuses"
+                    options={[
+                      { value: "all", label: "All statuses" },
+                      { value: "Pending", label: "Pending" },
+                      { value: "Approved", label: "Approved" },
+                      { value: "Rejected", label: "Rejected" },
+                      { value: "Cancelled", label: "Cancelled" },
+                    ]}
+                  />
+                </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">Department</span>
-                <ValueHelpSelect
-                  value={departmentFilter}
-                  onChange={setDepartmentFilter}
-                  searchPlaceholder="Search departments"
-                  options={availableDepartments.map((department) => ({
-                    value: department,
-                    label: department === "all" ? "All departments" : department,
-                  }))}
-                />
-              </label>
+                <div className="lhf-field">
+                  <span className="lhf-label">Department</span>
+                  <ValueHelpSelect
+                    value={departmentFilter}
+                    onChange={setDepartmentFilter}
+                    searchPlaceholder="Search departments"
+                    options={availableDepartments.map((department) => ({
+                      value: department,
+                      label: department === "all" ? "All departments" : department,
+                    }))}
+                  />
+                </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">Leave type</span>
-                <ValueHelpSelect
-                  value={typeFilter}
-                  onChange={setTypeFilter}
-                  searchPlaceholder="Search leave types"
-                  options={availableTypes.map((type) => ({
-                    value: type,
-                    label: type === "all" ? "All leave types" : getLeaveTypeDisplayLabel(type),
-                  }))}
-                />
-              </label>
+                <div className="lhf-field">
+                  <span className="lhf-label">Leave type</span>
+                  <ValueHelpSelect
+                    value={typeFilter}
+                    onChange={setTypeFilter}
+                    searchPlaceholder="Search leave types"
+                    options={availableTypes.map((type) => ({
+                      value: type,
+                      label: type === "all" ? "All leave types" : getLeaveTypeDisplayLabel(type),
+                    }))}
+                  />
+                </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">Sort by</span>
-                <ValueHelpSelect
-                  value={sortBy}
-                  onChange={setSortBy}
-                  searchPlaceholder="Search sort options"
-                  options={[
-                    { value: "newest", label: "Newest first" },
-                    { value: "oldest", label: "Oldest first" },
-                    { value: "name", label: "Employee name" },
-                    { value: "department", label: "Department" },
-                    { value: "status", label: "Status" },
-                  ]}
-                />
-              </label>
+                <div className="lhf-field">
+                  <span className="lhf-label">Sort by</span>
+                  <ValueHelpSelect
+                    value={sortBy}
+                    onChange={setSortBy}
+                    searchPlaceholder="Search sort options"
+                    options={[
+                      { value: "newest", label: "Newest first" },
+                      { value: "oldest", label: "Oldest first" },
+                      { value: "name", label: "Employee name" },
+                      { value: "department", label: "Department" },
+                      { value: "status", label: "Status" },
+                    ]}
+                  />
+                </div>
+              </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">From</span>
-                <input
-                  className="input"
-                  type="date"
-                  value={dateRange.start}
-                  onChange={(event) => setDateRange((previous) => ({ ...previous, start: event.target.value }))}
-                />
-              </label>
+              {/* Row 2: Date Range (Left) & Actions (Right) */}
+              <div className="lhf-row-bottom">
+                <div className="lhf-date-group">
+                  <div className="lhf-field lhf-field-date">
+                    <span className="lhf-label">From</span>
+                    <input
+                      className="lhf-date-input"
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(event) => setDateRange((previous) => ({ ...previous, start: event.target.value }))}
+                    />
+                  </div>
 
-              <label className="fiori-form-field">
-                <span className="leave-field-label">To</span>
-                <input
-                  className="input"
-                  type="date"
-                  value={dateRange.end}
-                  onChange={(event) => setDateRange((previous) => ({ ...previous, end: event.target.value }))}
-                />
-              </label>
+                  <div className="lhf-field lhf-field-date">
+                    <span className="lhf-label">To</span>
+                    <input
+                      className="lhf-date-input"
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(event) => setDateRange((previous) => ({ ...previous, end: event.target.value }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="lhf-actions-group">
+                  <button
+                    type="button"
+                    className="lhf-btn lhf-btn-clear"
+                    onClick={handleClearFilters}
+                    disabled={!hasActiveFilters}
+                    title="Clear all active filters"
+                  >
+                    <RotateCcw size={15} /> Clear filters
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="leave-results-bar">
@@ -1045,9 +1118,11 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                   Showing {filteredLeaves.length} of {activeTab === "pending" ? pendingLeaves.length : allLeaves.length} records
                 </span>
               </div>
-              <button className="fiori-button secondary" onClick={fetchLeaveWorkspace}>
-                Refresh
-              </button>
+              <div className="leave-results-actions" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button type="button" className="fiori-button secondary" onClick={fetchLeaveWorkspace}>
+                  Refresh
+                </button>
+              </div>
             </div>
           </section>
 
@@ -1086,6 +1161,8 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                         <tr
                           key={leave._id}
                           id={`admin-leave-${leave._id}`}
+                          onClick={() => setSelectedLeaveDetails(leave)}
+                          style={{ cursor: "pointer" }}
                           className={navigationState?.leaveId === leave._id ? "employee-history-row-highlight" : ""}
                         >
                           <td>
@@ -1817,6 +1894,14 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
           {message}
         </div>
       )}
+
+      {selectedLeaveDetails ? (
+        <LeaveDetailModal
+          leave={selectedLeaveDetails}
+          onClose={() => setSelectedLeaveDetails(null)}
+          isAdminOrManager
+        />
+      ) : null}
     </section>
   );
 };

@@ -9,8 +9,8 @@ import {
   Plus, Trash2, AlertCircle,
   CheckCircle, CheckCircle2, XCircle, Clock, Eye,
   Download, TrendingUp, BarChart3, UserCheck,
-	  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
-  LayoutGrid, ChevronLeft, ChevronRight, Upload, Paperclip,
+  FileText, Calendar, CalendarRange, RefreshCw, CircleHelp, Users, Building2,
+  LayoutGrid, ChevronLeft, ChevronRight, ChevronDown, Upload, Paperclip,
   Save, Search,
 } from 'lucide-react';
 import {
@@ -1303,7 +1303,9 @@ function TimesheetGrid({
         type="button"
         className={`mte-sheet-edit-cell mte-sheet-adjustment-display ${displayValue ? 'has-value' : ''}`}
         disabled={disabled}
-        onDoubleClick={() => setEditingCell(cellKey)}
+        onClick={() => {
+          if (!disabled) setEditingCell(cellKey);
+        }}
         aria-label={`${getAdjustmentLabel(kind)} ${dateStr}`}
       >
         {displayValue}
@@ -1512,11 +1514,21 @@ function TimesheetGrid({
                     const isFullDayLeave = leaveEntry && !leaveEntry.isHalfDay;
                     const rowHourLimit = maxHoursForRowOnDate(row.id, d);
                     return (
-                      <td key={d} style={{
-                        padding: '8px', textAlign: 'center',
-                        borderLeft: `1px solid ${C.borderLight}`,
-                        background: isHol || isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
-                      }}>
+                      <td
+                        key={d}
+                        onClick={() => {
+                          if (!readOnly && !isHol && !isFullDayLeave) {
+                            onRowSelect?.(row.id);
+                            setEditingCell(`work-${row.id}-${d}`);
+                          }
+                        }}
+                        style={{
+                          padding: '8px', textAlign: 'center',
+                          borderLeft: `1px solid ${C.borderLight}`,
+                          background: isHol || isWeekend ? '#e5e7eb' : leaveEntry ? C.purpleLight : 'transparent',
+                          cursor: (!readOnly && !isHol && !isFullDayLeave) ? 'pointer' : 'default',
+                        }}
+                      >
                         {isHol ? null : isFullDayLeave ? (
                           <span
                             style={{
@@ -1601,11 +1613,10 @@ function TimesheetGrid({
                               type="button"
                               className={`mte-sheet-edit-cell ${displayValue ? 'has-value' : ''}`}
                               title={leaveEntry ? `${leaveEntry.label} covers ${displayHours(leaveEntry.hours)} hours on this date` : undefined}
-                              onClick={() => onRowSelect?.(row.id)}
-                              onDoubleClick={(event) => {
+                              onClick={(event) => {
                                 event.stopPropagation();
                                 onRowSelect?.(row.id);
-                                setEditingCell(cellKey);
+                                if (!readOnly) setEditingCell(cellKey);
                               }}
                               aria-label={`Work hours ${d}`}
                             >
@@ -2024,6 +2035,18 @@ function TimesheetPage({
   useEffect(() => {
     setProfile(user || {});
   }, [user]);
+
+  useEffect(() => {
+    if (!chargeCodes || chargeCodes.length === 0) return;
+    const validChargeCodeIds = new Set(chargeCodes.map((cc) => cc.charge_code_id || cc._id || cc.charge_code));
+    setRows((prevRows) => {
+      const filtered = prevRows.filter((row) => !row.chargeCodeId || validChargeCodeIds.has(row.chargeCodeId));
+      if (filtered.length === 0) {
+        return [createEmptyWorkRow('row1', dates, lockedDateSet, halfDayWorkDefaultsByDate)];
+      }
+      return filtered;
+    });
+  }, [chargeCodes, dates, lockedDateSet, halfDayWorkDefaultsByDate]);
 
   useEffect(() => {
     if (!dates.length) return;
@@ -9146,6 +9169,7 @@ function ReportsPanel() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [isFilterCollapsed, setIsFilterCollapsed] = useState(false);
 
   const updateRange = (rangeValue) => {
     if (rangeValue === 'custom') {
@@ -9224,74 +9248,82 @@ function ReportsPanel() {
             <strong>Loss Of Pay Summary</strong>
           </div>
         </div>
-        <button type="button" className="mte-report-export" onClick={exportReport} disabled={exporting}>
-          <Download size={15} />
-          <span>{exporting ? 'Exporting...' : 'Export as'}</span>
-        </button>
-      </section>
-
-      <section className="mte-report-filters">
-        <label className="mte-report-filter-field">
-          <span>Date Range :</span>
-          <ValueHelpSelect
-            value={filters.range}
-            onChange={updateRange}
-            options={REPORT_RANGE_OPTIONS}
-            placeholder="Select date range"
-            searchPlaceholder="Search date ranges"
-          />
-        </label>
-        <label className="mte-report-filter-field">
-          <span>From</span>
-          <input
-            type="date"
-            value={filters.startDate}
-            onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', startDate: event.target.value }))}
-          />
-        </label>
-        <label className="mte-report-filter-field">
-          <span>To</span>
-          <input
-            type="date"
-            value={filters.endDate}
-            onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', endDate: event.target.value }))}
-          />
-        </label>
-        <label className="mte-report-filter-field">
-          <span>Department</span>
-          <ValueHelpSelect
-            value={filters.department}
-            onChange={(value) => setFilters((previous) => ({ ...previous, department: value }))}
-            options={departmentOptions}
-            placeholder="All Departments"
-            searchPlaceholder="Search departments"
-          />
-        </label>
-        <label className="mte-report-filter-field">
-          <span>Status</span>
-          <ValueHelpSelect
-            value={filters.employeeStatus}
-            onChange={(value) => setFilters((previous) => ({ ...previous, employeeStatus: value }))}
-            options={statusOptions}
-            placeholder="All Employees"
-            searchPlaceholder="Search statuses"
-          />
-        </label>
-        <label className="mte-report-filter-field mte-report-search">
-          <span>Employee Value Help</span>
-          <ValueHelpSearch
-            value={filters.search}
-            onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))}
-            suggestions={filterOptions.employees}
-            placeholder="Employee, email, ID, department"
-          />
-        </label>
-        <div className="mte-report-submit-cell">
-          <button type="button" className="mte-report-run" onClick={loadReport} disabled={loading}>
-            {loading ? 'Submitting...' : 'Submit'}
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+          <button type="button" className="mte-report-export" onClick={() => setIsFilterCollapsed(!isFilterCollapsed)} title={isFilterCollapsed ? 'Expand filters' : 'Collapse filters'}>
+            <ChevronDown size={15} style={{ transform: isFilterCollapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            <span>{isFilterCollapsed ? 'Expand Filters' : 'Collapse Filters'}</span>
+          </button>
+          <button type="button" className="mte-report-export" onClick={exportReport} disabled={exporting}>
+            <Download size={15} />
+            <span>{exporting ? 'Exporting...' : 'Export as'}</span>
           </button>
         </div>
       </section>
+
+      {!isFilterCollapsed ? (
+        <section className="mte-report-filters" onKeyDown={(e) => { if (e.key === 'Enter') loadReport(); }}>
+          <label className="mte-report-filter-field">
+            <span>Date Range :</span>
+            <ValueHelpSelect
+              value={filters.range}
+              onChange={updateRange}
+              options={REPORT_RANGE_OPTIONS}
+              placeholder="Select date range"
+              searchPlaceholder="Search date ranges"
+            />
+          </label>
+          <label className="mte-report-filter-field">
+            <span>From</span>
+            <input
+              type="date"
+              value={filters.startDate}
+              onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', startDate: event.target.value }))}
+            />
+          </label>
+          <label className="mte-report-filter-field">
+            <span>To</span>
+            <input
+              type="date"
+              value={filters.endDate}
+              onChange={(event) => setFilters((previous) => ({ ...previous, range: 'custom', endDate: event.target.value }))}
+            />
+          </label>
+          <label className="mte-report-filter-field">
+            <span>Department</span>
+            <ValueHelpSelect
+              value={filters.department}
+              onChange={(value) => setFilters((previous) => ({ ...previous, department: value }))}
+              options={departmentOptions}
+              placeholder="All Departments"
+              searchPlaceholder="Search departments"
+            />
+          </label>
+          <label className="mte-report-filter-field">
+            <span>Status</span>
+            <ValueHelpSelect
+              value={filters.employeeStatus}
+              onChange={(value) => setFilters((previous) => ({ ...previous, employeeStatus: value }))}
+              options={statusOptions}
+              placeholder="All Employees"
+              searchPlaceholder="Search statuses"
+            />
+          </label>
+          <label className="mte-report-filter-field mte-report-search">
+            <span>Employee Value Help</span>
+            <ValueHelpSearch
+              value={filters.search}
+              onChange={(value) => setFilters((previous) => ({ ...previous, search: value }))}
+              suggestions={filterOptions.employees}
+              placeholder="Employee, email, ID, department"
+            />
+          </label>
+          <div className="mte-report-submit-cell">
+            <button type="button" className="mte-report-run" onClick={loadReport} disabled={loading}>
+              {loading ? 'Submitting...' : 'Submit'}
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       <section className="mte-report-card">
         <div className="mte-report-table-header">
@@ -9497,6 +9529,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     month: '',
   });
   const [appliedSummaryFilters, setAppliedSummaryFilters] = useState(summaryFilters);
+  const [isFilterCollapsed, setIsFilterCollapsed] = useState(false);
 
   const dates = useMemo(() => {
     if (!period) return [];
@@ -9576,10 +9609,44 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     ? liveTimesheetSnapshot
     : null;
   const summaryTimesheet = liveTimesheet || timesheet;
-  const entries = getEffectiveSummaryEntries(summaryTimesheet?.entries || []);
-  const workEntries = entries.filter((entry) => (entry.entry_type || 'work') === 'work');
-  const absenceEntries = entries.filter((entry) => ['leave', 'holiday'].includes(entry.entry_type));
-  const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
+
+  const annualTimesheets = useMemo(() => {
+    if (isAdmin) return allTimesheets;
+    const currentYear = String(new Date().getFullYear());
+    return (allTimesheets || []).filter((ts) => {
+      const year = (ts.period_start || '').slice(0, 4);
+      return year === currentYear || !ts.period_start;
+    });
+  }, [allTimesheets, isAdmin]);
+
+  const annualEntries = useMemo(() => {
+    if (isAdmin) return [];
+    return annualTimesheets.flatMap((ts) => getEffectiveSummaryEntries(ts.entries || []));
+  }, [annualTimesheets, isAdmin]);
+
+  const entries = annualEntries.length > 0
+    ? annualEntries
+    : getEffectiveSummaryEntries(summaryTimesheet?.entries || []);
+  const summaryDateInRange = useCallback((dateValue) => {
+    const dateKey = String(dateValue || '').slice(0, 10);
+    if (!dateKey) return true;
+    if (appliedSummaryFilters.month && !dateKey.startsWith(appliedSummaryFilters.month)) return false;
+    if (appliedSummaryFilters.periodFrom && dateKey < appliedSummaryFilters.periodFrom) return false;
+    if (appliedSummaryFilters.periodTo && dateKey > appliedSummaryFilters.periodTo) return false;
+    return true;
+  }, [appliedSummaryFilters.month, appliedSummaryFilters.periodFrom, appliedSummaryFilters.periodTo]);
+
+  const filteredEntries = useMemo(() => {
+    return entries.filter((entry) => summaryDateInRange(entry.date));
+  }, [entries, summaryDateInRange]);
+
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((expense) => summaryDateInRange(expense.expense_date));
+  }, [expenses, summaryDateInRange]);
+
+  const workEntries = filteredEntries.filter((entry) => (entry.entry_type || 'work') === 'work');
+  const absenceEntries = filteredEntries.filter((entry) => ['leave', 'holiday'].includes(entry.entry_type));
+  const expenseTotal = filteredExpenses.reduce((sum, expense) => sum + Number(expense.amount || 0), 0);
   const workHours = workEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
   const absenceHours = absenceEntries.reduce((sum, entry) => sum + Number(entry.hours || 0), 0);
   const workScheduleByDate = getTimesheetWorkScheduleByDate(summaryTimesheet || {}, dates.map((date) => format(date, 'yyyy-MM-dd')));
@@ -9614,7 +9681,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
       return grouped[key];
     };
 
-    entries.forEach((entry) => {
+    filteredEntries.forEach((entry) => {
       const meta = getTimesheetEntryChargeCodeMeta(entry);
       const key = meta.code || entry.charge_code_id || entry.charge_code || 'Unassigned';
       const row = ensureRow(
@@ -9629,7 +9696,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
       }
     });
 
-    expenses.forEach((expense, index) => {
+    filteredExpenses.forEach((expense, index) => {
       const clientCode = String(expense.client_code || '').trim();
       const normalizedClientCode = normalizeSummaryCode(clientCode);
       const matchedKey = normalizedClientCode ? codeToKey[normalizedClientCode] : '';
@@ -9648,7 +9715,7 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
       clientCode: formatClientCodeList(row.clientCodes),
       clientCodes: Array.from(new Set(row.clientCodes)),
     }));
-  }, [entries, expenses]);
+  }, [filteredEntries, filteredExpenses]);
 
   const summaryRows = useMemo(() => {
     const clientCodeSummary = formatClientCodeList(chargeRows.flatMap((row) => row.clientCodes || []));
@@ -9671,14 +9738,6 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
     const numberValue = Number(value);
     return Number.isFinite(numberValue) ? numberValue.toFixed(decimals) : value;
   };
-  const summaryDateInRange = useCallback((dateValue) => {
-    const dateKey = String(dateValue || '').slice(0, 10);
-    if (!dateKey) return true;
-    if (appliedSummaryFilters.month && !dateKey.startsWith(appliedSummaryFilters.month)) return false;
-    if (appliedSummaryFilters.periodFrom && dateKey < appliedSummaryFilters.periodFrom) return false;
-    if (appliedSummaryFilters.periodTo && dateKey > appliedSummaryFilters.periodTo) return false;
-    return true;
-  }, [appliedSummaryFilters.month, appliedSummaryFilters.periodFrom, appliedSummaryFilters.periodTo]);
 
   const adminEmployeeRows = useMemo(() => {
     if (!isAdmin) return [];
@@ -9881,6 +9940,10 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           <p>{isAdmin ? 'Find employees by name, email, department, client code, or records with hours, expenses, and documents.' : 'Find summary rows by charge code, client code, or category name.'}</p>
         </div>
         <div className="mte-summary-filter-actions">
+          <button type="button" onClick={() => setIsFilterCollapsed(!isFilterCollapsed)} title={isFilterCollapsed ? 'Expand filters' : 'Collapse filters'}>
+            <ChevronDown size={14} style={{ transform: isFilterCollapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+            <span>{isFilterCollapsed ? 'Expand' : 'Collapse'}</span>
+          </button>
           <button type="button" onClick={resetSummaryFilters}>
             <RefreshCw size={14} />
             <span>Reset</span>
@@ -9891,105 +9954,107 @@ function MyTimeSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
           </button>
         </div>
       </div>
-      <div className={`mte-summary-filter-grid ${isAdmin ? '' : 'is-employee'}`}>
-        <label className="mte-summary-filter-field mte-summary-filter-search">
-          <span>Search</span>
-          <ValueHelpSearch
-            value={summaryFilters.search}
-            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, search: value }))}
-            suggestions={isAdmin ? summaryEmployeeSuggestions : summaryRows.map((row) => ({
-              value: row.label,
-              label: row.label,
-              description: row.clientCode || '',
-            }))}
-            placeholder={isAdmin ? 'Employee, email, department, or client code' : 'Charge code, client code, or summary row'}
-          />
-        </label>
-        {isAdmin ? (
-          <>
-            <label className="mte-summary-filter-field">
-              <span>Employee</span>
-              <ValueHelpSearch
-                value={summaryFilters.employee}
-                onChange={(value) => setSummaryFilters((previous) => ({ ...previous, employee: value }))}
-                suggestions={summaryEmployeeSuggestions}
-                placeholder="All Employees"
-              />
-            </label>
-            <label className="mte-summary-filter-field">
-              <span>Department</span>
-              <ValueHelpSelect
-                value={summaryFilters.department}
-                onChange={(value) => setSummaryFilters((previous) => ({ ...previous, department: value }))}
-                options={[
-                  { value: 'all', label: 'All Departments' },
-                  ...summaryDepartmentOptions.map((department) => ({ value: department, label: department })),
-                ]}
-                placeholder="All Departments"
-                searchPlaceholder="Search departments"
-              />
-            </label>
-          </>
-        ) : null}
-        <label className="mte-summary-filter-field">
-          <span>Client Code</span>
-          <ValueHelpSelect
-            value={summaryFilters.clientCode}
-            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, clientCode: value }))}
-            options={[
-              { value: 'all', label: 'All Client Codes' },
-              ...summaryClientCodeOptions.map((clientCode) => ({ value: clientCode, label: clientCode })),
-            ]}
-            placeholder="All Client Codes"
-            searchPlaceholder="Search client codes"
-          />
-        </label>
-        <label className="mte-summary-filter-field">
-          <span>Metric</span>
-          <ValueHelpSelect
-            value={summaryFilters.metric}
-            onChange={(value) => setSummaryFilters((previous) => ({ ...previous, metric: value }))}
-            options={[
-              { value: 'all', label: 'All Records' },
-              { value: 'hours', label: 'With Hours' },
-              { value: 'expenses', label: 'With Expenses' },
-              ...(isAdmin ? [{ value: 'documents', label: 'With Documents' }] : []),
-            ]}
-            placeholder="All Records"
-            searchPlaceholder="Search metrics"
-          />
-        </label>
-        <label className="mte-summary-filter-field">
-          <span>Month Wise</span>
-          <input
-            type="month"
-            value={summaryFilters.month}
-            onChange={(event) => updateSummaryMonth(event.target.value)}
-          />
-        </label>
-        <label className="mte-summary-filter-field">
-          <span>Period From</span>
-          <input
-            type="date"
-            value={summaryFilters.periodFrom}
-            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodFrom: event.target.value }))}
-          />
-        </label>
-        <label className="mte-summary-filter-field">
-          <span>Period To</span>
-          <input
-            type="date"
-            value={summaryFilters.periodTo}
-            onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodTo: event.target.value }))}
-          />
-        </label>
-        <div className="mte-summary-filter-submit-row">
-          <button type="button" className="is-primary" onClick={applySummaryFilters}>
-            <CheckCircle2 size={14} />
-            <span>Submit</span>
-          </button>
+      {!isFilterCollapsed ? (
+        <div className={`mte-summary-filter-grid ${isAdmin ? '' : 'is-employee'}`} onKeyDown={(e) => { if (e.key === 'Enter') applySummaryFilters(); }}>
+          <label className="mte-summary-filter-field mte-summary-filter-search">
+            <span>Search</span>
+            <ValueHelpSearch
+              value={summaryFilters.search}
+              onChange={(value) => setSummaryFilters((previous) => ({ ...previous, search: value }))}
+              suggestions={isAdmin ? summaryEmployeeSuggestions : summaryRows.map((row) => ({
+                value: row.label,
+                label: row.label,
+                description: row.clientCode || '',
+              }))}
+              placeholder={isAdmin ? 'Employee, email, department, or client code' : 'Charge code, client code, or summary row'}
+            />
+          </label>
+          {isAdmin ? (
+            <>
+              <label className="mte-summary-filter-field">
+                <span>Employee</span>
+                <ValueHelpSearch
+                  value={summaryFilters.employee}
+                  onChange={(value) => setSummaryFilters((previous) => ({ ...previous, employee: value }))}
+                  suggestions={summaryEmployeeSuggestions}
+                  placeholder="All Employees"
+                />
+              </label>
+              <label className="mte-summary-filter-field">
+                <span>Department</span>
+                <ValueHelpSelect
+                  value={summaryFilters.department}
+                  onChange={(value) => setSummaryFilters((previous) => ({ ...previous, department: value }))}
+                  options={[
+                    { value: 'all', label: 'All Departments' },
+                    ...summaryDepartmentOptions.map((department) => ({ value: department, label: department })),
+                  ]}
+                  placeholder="All Departments"
+                  searchPlaceholder="Search departments"
+                />
+              </label>
+            </>
+          ) : null}
+          <label className="mte-summary-filter-field">
+            <span>Client Code</span>
+            <ValueHelpSelect
+              value={summaryFilters.clientCode}
+              onChange={(value) => setSummaryFilters((previous) => ({ ...previous, clientCode: value }))}
+              options={[
+                { value: 'all', label: 'All Client Codes' },
+                ...summaryClientCodeOptions.map((clientCode) => ({ value: clientCode, label: clientCode })),
+              ]}
+              placeholder="All Client Codes"
+              searchPlaceholder="Search client codes"
+            />
+          </label>
+          <label className="mte-summary-filter-field">
+            <span>Metric</span>
+            <ValueHelpSelect
+              value={summaryFilters.metric}
+              onChange={(value) => setSummaryFilters((previous) => ({ ...previous, metric: value }))}
+              options={[
+                { value: 'all', label: 'All Records' },
+                { value: 'hours', label: 'With Hours' },
+                { value: 'expenses', label: 'With Expenses' },
+                ...(isAdmin ? [{ value: 'documents', label: 'With Documents' }] : []),
+              ]}
+              placeholder="All Records"
+              searchPlaceholder="Search metrics"
+            />
+          </label>
+          <label className="mte-summary-filter-field">
+            <span>Month Wise</span>
+            <input
+              type="month"
+              value={summaryFilters.month}
+              onChange={(event) => updateSummaryMonth(event.target.value)}
+            />
+          </label>
+          <label className="mte-summary-filter-field">
+            <span>Period From</span>
+            <input
+              type="date"
+              value={summaryFilters.periodFrom}
+              onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodFrom: event.target.value }))}
+            />
+          </label>
+          <label className="mte-summary-filter-field">
+            <span>Period To</span>
+            <input
+              type="date"
+              value={summaryFilters.periodTo}
+              onChange={(event) => setSummaryFilters((previous) => ({ ...previous, month: '', periodTo: event.target.value }))}
+            />
+          </label>
+          <div className="mte-summary-filter-submit-row">
+            <button type="button" className="is-primary" onClick={applySummaryFilters}>
+              <CheckCircle2 size={14} />
+              <span>Submit</span>
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
     </section>
   );
 

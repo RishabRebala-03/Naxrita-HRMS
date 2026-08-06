@@ -14,6 +14,7 @@ import LeaveStatusDot from "./LeaveStatusDot";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
 import { buildRequesterHeaders } from "../utils/requester";
+import { exportToCSV } from "../utils/csvExport";
 
 const initialFilters = {
   search: "",
@@ -215,56 +216,29 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
   };
 
   const downloadCSV = () => {
-    const csvHeaders = [
-      "Employee ID",
-      "Name",
-      "Email",
-      "Designation",
-      "Department",
-      "Role",
-      "Projects",
-      "Date of Joining",
-      "Reports To",
-      "Leave Period Start",
-      "Leave Period End",
-      "Leave Period Days",
-      "Leave Period Records",
-      "Status",
+    if (!employees.length) {
+      alert("No employee records available to export.");
+      return;
+    }
+
+    const headers = [
+      { label: "Employee ID", key: (e) => e.employeeId || e._id || "" },
+      { label: "Name", key: (e) => e.name || "" },
+      { label: "Email", key: (e) => e.email || "" },
+      { label: "Designation", key: (e) => e.designation || "" },
+      { label: "Department", key: (e) => e.department || "" },
+      { label: "Role", key: (e) => e.role || "Employee" },
+      { label: "Projects", key: (e) => formatProjectNames(e.projectNames) },
+      { label: "Date of Joining", key: (e) => formatDate(e.dateOfJoining) },
+      { label: "Reports To", key: (e) => e.reportsToEmail || "" },
+      { label: "Leave Period Start", key: (e) => e.leaveSummary?.periodStart || "" },
+      { label: "Leave Period End", key: (e) => e.leaveSummary?.periodEnd || "" },
+      { label: "Leave Period Days", key: (e) => e.leaveSummary?.days ?? 0 },
+      { label: "Leave Period Records", key: (e) => e.leaveSummary?.records ?? 0 },
+      { label: "Status", key: (e) => (e.is_active !== false ? "Active" : "Inactive") },
     ];
 
-    const csvRows = employees.map((employee) => [
-      employee.employeeId || employee._id,
-      employee.name || "",
-      employee.email || "",
-      employee.designation || "",
-      employee.department || "",
-      employee.role || "Employee",
-      formatProjectNames(employee.projectNames),
-      formatDate(employee.dateOfJoining),
-      employee.reportsToEmail || "",
-      employee.leaveSummary?.periodStart || "",
-      employee.leaveSummary?.periodEnd || "",
-      employee.leaveSummary?.days ?? 0,
-      employee.leaveSummary?.records ?? 0,
-      employee.is_active !== false ? "Active" : "Inactive",
-    ]);
-
-    const csvContent = [
-      csvHeaders.join(","),
-      ...csvRows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-    ].join("\n");
-
-    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-    const link = document.createElement("a");
-    const url = URL.createObjectURL(blob);
-
-    link.setAttribute("href", url);
-    link.setAttribute("download", `employees_${new Date().toISOString().split("T")[0]}.csv`);
-    link.style.visibility = "hidden";
-
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    exportToCSV(`employees_${new Date().toISOString().split("T")[0]}.csv`, headers, employees);
   };
 
   const stats = useMemo(
@@ -521,6 +495,32 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
               ]}
             />
           </label>
+
+          <div className="employee-filter-field" style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+            <span style={{ opacity: 0, userSelect: "none" }}>Actions</span>
+            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+              <button
+                type="button"
+                className="fiori-button secondary"
+                onClick={() => setFilters(initialFilters)}
+                disabled={!activeFilterCount}
+                style={{ height: "38px", whiteSpace: "nowrap" }}
+                title="Clear all active filters"
+              >
+                <RotateCcw size={15} /> Clear filters
+              </button>
+              <button
+                type="button"
+                className="fiori-button secondary"
+                onClick={downloadCSV}
+                disabled={!employees.length}
+                style={{ height: "38px", whiteSpace: "nowrap" }}
+                title="Export currently filtered view to CSV"
+              >
+                <Download size={15} /> Export
+              </button>
+            </div>
+          </div>
         </div>
       </section>
 

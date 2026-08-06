@@ -3,14 +3,18 @@ import axios from "axios";
 import {
   CalendarCheck2,
   Clock3,
+  Download,
+  RotateCcw,
   ShieldCheck,
   TriangleAlert,
   Users,
 } from "lucide-react";
 import ValueHelpSelect from "./ValueHelpSelect";
 import ValueHelpSearch from "./ValueHelpSearch";
+import LeaveDetailModal from "./LeaveDetailModal";
 import { buildRequesterHeaders } from "../utils/requester";
 import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
+import { exportToCSV } from "../utils/csvExport";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -199,7 +203,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   const [historyDateRange, setHistoryDateRange] = useState({ start: "", end: "" });
   const [historySortBy, setHistorySortBy] = useState("newest");
   const [historyPage, setHistoryPage] = useState(1);
-  const [activeTab, setActiveTab] = useState("my-leaves");
+  const [activeTab, setActiveTab] = useState(navigationState?.initialTab || "my-leaves");
+  const [selectedLeaveDetails, setSelectedLeaveDetails] = useState(null);
   const [calendarFocusDate, setCalendarFocusDate] = useState("");
 
   const [teamHistorySearch, setTeamHistorySearch] = useState("");
@@ -822,6 +827,47 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   );
 
   const displayHistory = useMemo(() => getFilteredAndSortedHistory(history), [getFilteredAndSortedHistory, history]);
+
+  const hasHistoryActiveFilters = useMemo(() => {
+    return Boolean(
+      historySearchTerm.trim() !== "" ||
+      historyFilterStatus !== "all" ||
+      historyFilterType !== "all" ||
+      historySortBy !== "newest" ||
+      historyDateRange.start !== "" ||
+      historyDateRange.end !== "" ||
+      calendarFocusDate !== ""
+    );
+  }, [calendarFocusDate, historyDateRange, historyFilterStatus, historyFilterType, historySearchTerm, historySortBy]);
+
+  const handleClearHistoryFilters = () => {
+    setHistorySearchTerm("");
+    setHistoryFilterStatus("all");
+    setHistoryFilterType("all");
+    setHistorySortBy("newest");
+    setHistoryDateRange({ start: "", end: "" });
+    setCalendarFocusDate("");
+  };
+
+  const handleExportEmployeeHistory = () => {
+    if (!displayHistory.length) {
+      alert("No leave records available to export for the current filters.");
+      return;
+    }
+
+    const headers = [
+      { label: "Leave Type", key: (l) => getLeaveTypeDisplayLabel(l.leave_type) },
+      { label: "Start Date", key: (l) => formatDate(l.approved_start_date || l.start_date) },
+      { label: "End Date", key: (l) => formatDate(l.approved_end_date || l.end_date) },
+      { label: "Days", key: (l) => l.approved_days || l.days || 0 },
+      { label: "Status", key: (l) => l.status || "Pending" },
+      { label: "Applied On", key: (l) => formatDateTime(l.applied_on) },
+      { label: "Reason", key: (l) => l.reason || "" },
+      { label: "Rejection Reason", key: (l) => l.rejection_reason || "" },
+    ];
+
+    exportToCSV(`My_Leave_History_${new Date().toISOString().slice(0, 10)}.csv`, headers, displayHistory);
+  };
   useEffect(() => {
     setHistoryPage(1);
   }, [calendarFocusDate, historyDateRange, historyFilterStatus, historyFilterType, historySearchTerm, historySortBy]);
@@ -1186,84 +1232,104 @@ const EmployeeLeaves = ({ user, navigationState }) => {
               </span>
             </div>
 
-            <div className="leave-filter-grid leave-history-filter-grid">
-              <div className="fiori-form-field employee-history-search">
-                <label className="leave-field-label">Search</label>
-                <ValueHelpSearch
-                  value={historySearchTerm}
-                  onChange={setHistorySearchTerm}
-                  suggestions={historySearchSuggestions}
-                  placeholder="Search by type, reason, or status"
-                />
+            <div className="lhf-bar-container">
+              {/* Row 1: Search, Status, Type, Sort */}
+              <div className="lhf-row-top">
+                <div className="lhf-field lhf-field-search">
+                  <label className="lhf-label">Search</label>
+                  <ValueHelpSearch
+                    value={historySearchTerm}
+                    onChange={setHistorySearchTerm}
+                    suggestions={historySearchSuggestions}
+                    placeholder="Search by type, reason, or status"
+                  />
+                </div>
+
+                <div className="lhf-field">
+                  <label className="lhf-label">Status</label>
+                  <ValueHelpSelect
+                    value={historyFilterStatus}
+                    onChange={setHistoryFilterStatus}
+                    searchPlaceholder="Search statuses"
+                    options={[
+                      { value: "all", label: "All status" },
+                      { value: "pending", label: "Pending" },
+                      { value: "approved", label: "Approved" },
+                      { value: "rejected", label: "Rejected" },
+                      { value: "cancelled", label: "Cancelled" },
+                    ]}
+                  />
+                </div>
+
+                <div className="lhf-field">
+                  <label className="lhf-label">Type</label>
+                  <ValueHelpSelect
+                    value={historyFilterType}
+                    onChange={setHistoryFilterType}
+                    searchPlaceholder="Search leave types"
+                    options={[
+                      { value: "all", label: "All types" },
+                      { value: "sick", label: "Sick" },
+                      ...(isIntern ? [] : [{ value: "planned", label: "Planned" }, { value: "optional", label: "Optional" }]),
+                      { value: "lop", label: "LOP" },
+                      { value: "compensatory off", label: "Comp Off" },
+                      { value: "early logout", label: "Early Logout" },
+                    ]}
+                  />
+                </div>
+
+                <div className="lhf-field">
+                  <label className="lhf-label">Sort by</label>
+                  <ValueHelpSelect
+                    value={historySortBy}
+                    onChange={setHistorySortBy}
+                    searchPlaceholder="Search sort options"
+                    options={[
+                      { value: "newest", label: "Newest first" },
+                      { value: "oldest", label: "Oldest first" },
+                      { value: "start_date", label: "Start date" },
+                      { value: "status", label: "Status" },
+                      { value: "type", label: "Leave type" },
+                    ]}
+                  />
+                </div>
               </div>
 
-              <div className="fiori-form-field">
-                <label className="leave-field-label">Status</label>
-                <ValueHelpSelect
-                  value={historyFilterStatus}
-                  onChange={setHistoryFilterStatus}
-                  searchPlaceholder="Search statuses"
-                  options={[
-                    { value: "all", label: "All status" },
-                    { value: "pending", label: "Pending" },
-                    { value: "approved", label: "Approved" },
-                    { value: "rejected", label: "Rejected" },
-                    { value: "cancelled", label: "Cancelled" },
-                  ]}
-                />
-              </div>
+              {/* Row 2: Date Range (Left) & Actions (Right) */}
+              <div className="lhf-row-bottom">
+                <div className="lhf-date-group">
+                  <div className="lhf-field lhf-field-date">
+                    <label className="lhf-label">From</label>
+                    <input
+                      className="lhf-date-input"
+                      type="date"
+                      value={historyDateRange.start}
+                      onChange={(event) => setHistoryDateRange((previous) => ({ ...previous, start: event.target.value }))}
+                    />
+                  </div>
 
-              <div className="fiori-form-field">
-                <label className="leave-field-label">Type</label>
-                <ValueHelpSelect
-                  value={historyFilterType}
-                  onChange={setHistoryFilterType}
-                  searchPlaceholder="Search leave types"
-                  options={[
-                    { value: "all", label: "All types" },
-                    { value: "sick", label: "Sick" },
-                    ...(isIntern ? [] : [{ value: "planned", label: "Planned" }, { value: "optional", label: "Optional" }]),
-                    { value: "lop", label: "LOP" },
-                    { value: "compensatory off", label: "Compensatory Off" },
-                    { value: "early logout", label: "Early Logout" },
-                  ]}
-                />
-              </div>
+                  <div className="lhf-field lhf-field-date">
+                    <label className="lhf-label">To</label>
+                    <input
+                      className="lhf-date-input"
+                      type="date"
+                      value={historyDateRange.end}
+                      onChange={(event) => setHistoryDateRange((previous) => ({ ...previous, end: event.target.value }))}
+                    />
+                  </div>
+                </div>
 
-              <div className="fiori-form-field">
-                <label className="leave-field-label">Sort by</label>
-                <ValueHelpSelect
-                  value={historySortBy}
-                  onChange={setHistorySortBy}
-                  searchPlaceholder="Search sort options"
-                  options={[
-                    { value: "newest", label: "Newest first" },
-                    { value: "oldest", label: "Oldest first" },
-                    { value: "start_date", label: "Start date" },
-                    { value: "status", label: "Status" },
-                    { value: "type", label: "Leave type" },
-                  ]}
-                />
-              </div>
-
-              <div className="fiori-form-field">
-                <label className="leave-field-label">From</label>
-                <input
-                  className="input"
-                  type="date"
-                  value={historyDateRange.start}
-                  onChange={(event) => setHistoryDateRange((previous) => ({ ...previous, start: event.target.value }))}
-                />
-              </div>
-
-              <div className="fiori-form-field">
-                <label className="leave-field-label">To</label>
-                <input
-                  className="input"
-                  type="date"
-                  value={historyDateRange.end}
-                  onChange={(event) => setHistoryDateRange((previous) => ({ ...previous, end: event.target.value }))}
-                />
+                <div className="lhf-actions-group">
+                  <button
+                    type="button"
+                    className="lhf-btn lhf-btn-clear"
+                    onClick={handleClearHistoryFilters}
+                    disabled={!hasHistoryActiveFilters}
+                    title="Clear all active filters"
+                  >
+                    <RotateCcw size={15} /> Clear filters
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1276,15 +1342,6 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                     : "Request history and edit actions stay available here."}
                 </span>
               </div>
-              {calendarFocusDate ? (
-                <button
-                  type="button"
-                  className="fiori-button secondary"
-                  onClick={() => setCalendarFocusDate("")}
-                >
-                  Clear day filter
-                </button>
-              ) : null}
             </div>
 
             {loading ? (
@@ -1322,6 +1379,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                       <tr
                         key={item._id}
                         id={`employee-leave-${item._id}`}
+                        onClick={() => setSelectedLeaveDetails(item)}
+                        style={{ cursor: "pointer" }}
                         className={
                           navigationState?.leaveId === item._id
                             ? "employee-history-row-highlight"
@@ -1926,6 +1985,13 @@ const EmployeeLeaves = ({ user, navigationState }) => {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {selectedLeaveDetails ? (
+        <LeaveDetailModal
+          leave={selectedLeaveDetails}
+          onClose={() => setSelectedLeaveDetails(null)}
+        />
       ) : null}
     </div>
   );
