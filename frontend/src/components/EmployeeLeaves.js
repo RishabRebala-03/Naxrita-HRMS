@@ -214,7 +214,8 @@ const EmployeeLeaves = ({ user, navigationState }) => {
   const [teamHistoryPage, setTeamHistoryPage] = useState(1);
   const [teamHistoryPageSize, setTeamHistoryPageSize] = useState(6);
 
-  const isIntern = user?.employment_type === "Intern";
+  const isIntern =
+    String(user?.employmentType || user?.employment_type || "").toLowerCase() === "intern";
   const requestedLeaveDays = useMemo(() => {
     if (!leave.start_date || !leave.end_date || leave.leave_type === "Early Logout") return null;
     if (leave.is_half_day) return 0.5;
