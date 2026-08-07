@@ -13,7 +13,6 @@ import ValueHelpSearch from "./ValueHelpSearch";
 import LeaveDetailModal from "./LeaveDetailModal";
 import { buildRequesterHeaders } from "../utils/requester";
 import { formatDateIST, formatDateTimeIST, toDateKeyIST } from "../utils/dateTime";
-import { exportToCSV } from "../utils/csvExport";
 
 const statusToneMap = {
   Approved: "is-approved",
@@ -848,25 +847,6 @@ const EmployeeLeaves = ({ user, navigationState }) => {
     setCalendarFocusDate("");
   };
 
-  const handleExportEmployeeHistory = () => {
-    if (!displayHistory.length) {
-      alert("No leave records available to export for the current filters.");
-      return;
-    }
-
-    const headers = [
-      { label: "Leave Type", key: (l) => getLeaveTypeDisplayLabel(l.leave_type) },
-      { label: "Start Date", key: (l) => formatDate(l.approved_start_date || l.start_date) },
-      { label: "End Date", key: (l) => formatDate(l.approved_end_date || l.end_date) },
-      { label: "Days", key: (l) => l.approved_days || l.days || 0 },
-      { label: "Status", key: (l) => l.status || "Pending" },
-      { label: "Applied On", key: (l) => formatDateTime(l.applied_on) },
-      { label: "Reason", key: (l) => l.reason || "" },
-      { label: "Rejection Reason", key: (l) => l.rejection_reason || "" },
-    ];
-
-    exportToCSV(`My_Leave_History_${new Date().toISOString().slice(0, 10)}.csv`, headers, displayHistory);
-  };
   useEffect(() => {
     setHistoryPage(1);
   }, [calendarFocusDate, historyDateRange, historyFilterStatus, historyFilterType, historySearchTerm, historySortBy]);
@@ -1789,15 +1769,14 @@ const EmployeeLeaves = ({ user, navigationState }) => {
               </div>
 
               {filteredTeamHistory.length > 0 ? (
-                <div className="leave-history-pagination" style={{ marginTop: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div className="leave-history-pagination">
+                  <div className="pagination-info-group">
                     <span className="fiori-stat-note">
                       Showing {Math.min((teamHistoryPage - 1) * teamHistoryPageSize + 1, filteredTeamHistory.length)}–
                       {Math.min(teamHistoryPage * teamHistoryPageSize, filteredTeamHistory.length)} of {filteredTeamHistory.length} decisions
                     </span>
                     <select
-                      className="fiori-input"
-                      style={{ width: 'auto', padding: '4px 8px', fontSize: '13px' }}
+                      className="pagination-per-page-select"
                       value={teamHistoryPageSize}
                       onChange={(e) => setTeamHistoryPageSize(Number(e.target.value))}
                     >
@@ -1808,7 +1787,7 @@ const EmployeeLeaves = ({ user, navigationState }) => {
                     </select>
                   </div>
 
-                  <div className="leave-history-page-controls" style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                  <div className="leave-history-page-controls">
                     <button
                       type="button"
                       className="fiori-button secondary"

@@ -12,6 +12,7 @@ import {
   Search,
   ShieldAlert,
   Users,
+  Download,
 } from "lucide-react";
 import {
   Area,
@@ -193,6 +194,8 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
   const [typeFilter, setTypeFilter] = useState("all");
   const [dateRange, setDateRange] = useState({ start: "", end: "" });
   const [sortBy, setSortBy] = useState("newest");
+  const [adminPage, setAdminPage] = useState(1);
+  const [adminPageSize, setAdminPageSize] = useState(10);
   const [selectedFortnightMonth, setSelectedFortnightMonth] = useState("");
   const [escalationSearch, setEscalationSearch] = useState("");
   const [selectedEscalationOwner, setSelectedEscalationOwner] = useState(null);
@@ -353,6 +356,16 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
         }
       });
   }, [activeTab, allLeaves, dateRange, departmentFilter, pendingLeaves, searchTerm, sortBy, statusFilter, typeFilter]);
+
+  useEffect(() => {
+    setAdminPage(1);
+  }, [activeTab, dateRange, departmentFilter, searchTerm, sortBy, statusFilter, typeFilter]);
+
+  const adminPageCount = Math.max(1, Math.ceil(filteredLeaves.length / adminPageSize));
+  const visibleLeaves = useMemo(() => {
+    const start = (adminPage - 1) * adminPageSize;
+    return filteredLeaves.slice(start, start + adminPageSize);
+  }, [filteredLeaves, adminPage, adminPageSize]);
 
   const hasActiveFilters = useMemo(() => {
     return Boolean(
@@ -1002,7 +1015,7 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
 
             <div className="lhf-bar-container">
               {/* Row 1: Search, Status, Department, Leave type, Sort */}
-              <div className="lhf-row-top" style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr" }}>
+              <div className="lhf-row-top lhf-row-top-5col">
                 <div className="lhf-field">
                   <span className="lhf-label">Search</span>
                   <ValueHelpSearch
@@ -1106,6 +1119,15 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                   >
                     <RotateCcw size={15} /> Clear filters
                   </button>
+                  <button
+                    type="button"
+                    className="lhf-btn lhf-btn-export"
+                    onClick={handleExportLeaves}
+                    disabled={!filteredLeaves.length}
+                    title="Export filtered leave records to CSV"
+                  >
+                    <Download size={15} /> Export CSV
+                  </button>
                 </div>
               </div>
             </div>
@@ -1118,6 +1140,15 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                 </span>
               </div>
               <div className="leave-results-actions" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  type="button"
+                  className="fiori-button secondary"
+                  onClick={handleExportLeaves}
+                  disabled={!filteredLeaves.length}
+                  title="Export filtered leave records to CSV"
+                >
+                  <Download size={14} /> Export CSV
+                </button>
                 <button type="button" className="fiori-button secondary" onClick={fetchLeaveWorkspace}>
                   Refresh
                 </button>
@@ -1135,123 +1166,185 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                 </div>
               </div>
             ) : (
-              <div className="fiori-table-shell leave-history-table-shell">
-                <table className="fiori-table leave-history-table">
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>Leave</th>
-                      <th>Period</th>
-                      <th>Status</th>
-                      <th>Approver</th>
-                      <th>Notes</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredLeaves.map((leave) => {
-                      const isPending = leave.status === "Pending";
-                      const toneClass = statusToneMap[leave.status] || "is-neutral";
-                      const escalationCount = Array.isArray(leave.escalation_history)
-                        ? leave.escalation_history.length
-                        : 0;
+              <>
+                <div className="fiori-table-shell leave-history-table-shell">
+                  <table className="fiori-table leave-history-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Leave</th>
+                        <th>Period</th>
+                        <th>Status</th>
+                        <th>Approver</th>
+                        <th>Notes</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleLeaves.map((leave) => {
+                        const isPending = leave.status === "Pending";
+                        const toneClass = statusToneMap[leave.status] || "is-neutral";
+                        const escalationCount = Array.isArray(leave.escalation_history)
+                          ? leave.escalation_history.length
+                          : 0;
 
-                      return (
-                        <tr
-                          key={leave._id}
-                          id={`admin-leave-${leave._id}`}
-                          onClick={() => setSelectedLeaveDetails(leave)}
-                          style={{ cursor: "pointer" }}
-                          className={navigationState?.leaveId === leave._id ? "employee-history-row-highlight" : ""}
-                        >
-                          <td>
-                            <button
-                              type="button"
-                              className="fiori-primary-cell"
-                              onClick={() => openEmployeeProfile(leave)}
-                              style={{
-                                width: "100%",
-                                textAlign: "left",
-                                background: "transparent",
-                                border: "none",
-                                padding: 0,
-                                cursor: leave.employee_id ? "pointer" : "default",
-                              }}
-                              disabled={!leave.employee_id}
-                              title={leave.employee_id ? "Open employee profile and project details" : undefined}
-                            >
-                              <strong>{leave.employee_name || "Unknown employee"}</strong>
-                              <span>
-                                {leave.employee_designation || "Designation unavailable"} •{" "}
-                                {leave.employee_department || "Department unavailable"}
-                              </span>
-                              <span>{leave.employee_email || "No email on record"}</span>
-                            </button>
-                          </td>
-                          <td>
-                            <button
-                              type="button"
-                              className="fiori-primary-cell"
-                              onClick={() => openEmployeeProfile(leave)}
-                              style={{
-                                width: "100%",
-                                textAlign: "left",
-                                background: "transparent",
-                                border: "none",
-                                padding: 0,
-                                cursor: leave.employee_id ? "pointer" : "default",
-                              }}
-                              disabled={!leave.employee_id}
-                              title={leave.employee_id ? "Open employee profile and project details" : undefined}
-                            >
-                              <strong>{getLeaveTypeDisplayLabel(leave.leave_type)}</strong>
-                              <span>{getDaysLabel(leave)}</span>
-                              {escalationCount > 0 ? <span>{escalationCount} escalation event(s)</span> : null}
-                            </button>
-                          </td>
-                          <td>
-                            <div className="fiori-primary-cell">
-                              <span>{getLeaveWindow(leave)}</span>
-                              <span>Applied {formatDateTime(leave.applied_on)}</span>
-                            </div>
-                          </td>
-                          <td>
-                            <span className={`fiori-status-pill ${toneClass}`}>{leave.status || "Pending"}</span>
-                          </td>
-                          <td>
-                            <div className="fiori-primary-cell">
-                              <span>{userMap[leave.current_approver_id]?.name || "Administration queue"}</span>
-                              <span>{leave.approved_by || "Not resolved yet"}</span>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="fiori-primary-cell">
-                              <span>{leave.reason || "No employee reason"}</span>
-                              <span>{leave.rejection_reason || "No rejection reason"}</span>
-                            </div>
-                          </td>
-                          <td>
-                            <div className="employee-table-actions">
-                              {isPending ? (
-                                <>
-                                  <button className="fiori-button secondary danger" onClick={() => setRejectModal({ show: true, leaveId: leave._id, reason: "" })}>
-                                    Reject
-                                  </button>
-                                  <button className="fiori-button primary" onClick={() => openApproveModal(leave)}>
-                                    Approve
-                                  </button>
-                                </>
-                              ) : (
-                                <span>{formatDateTime(leave.approved_on || leave.rejected_on)}</span>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                        return (
+                          <tr
+                            key={leave._id}
+                            id={`admin-leave-${leave._id}`}
+                            onClick={() => setSelectedLeaveDetails(leave)}
+                            style={{ cursor: "pointer" }}
+                            className={navigationState?.leaveId === leave._id ? "employee-history-row-highlight" : ""}
+                          >
+                            <td>
+                              <button
+                                type="button"
+                                className="fiori-primary-cell"
+                                onClick={() => openEmployeeProfile(leave)}
+                                style={{
+                                  width: "100%",
+                                  textAlign: "left",
+                                  background: "transparent",
+                                  border: "none",
+                                  padding: 0,
+                                  cursor: leave.employee_id ? "pointer" : "default",
+                                }}
+                                disabled={!leave.employee_id}
+                                title={leave.employee_id ? "Open employee profile and project details" : undefined}
+                              >
+                                <strong>{leave.employee_name || "Unknown employee"}</strong>
+                                <span>
+                                  {leave.employee_designation || "Designation unavailable"} •{" "}
+                                  {leave.employee_department || "Department unavailable"}
+                                </span>
+                                <span>{leave.employee_email || "No email on record"}</span>
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="fiori-primary-cell"
+                                onClick={() => openEmployeeProfile(leave)}
+                                style={{
+                                  width: "100%",
+                                  textAlign: "left",
+                                  background: "transparent",
+                                  border: "none",
+                                  padding: 0,
+                                  cursor: leave.employee_id ? "pointer" : "default",
+                                }}
+                                disabled={!leave.employee_id}
+                                title={leave.employee_id ? "Open employee profile and project details" : undefined}
+                              >
+                                <strong>{getLeaveTypeDisplayLabel(leave.leave_type)}</strong>
+                                <span>{getDaysLabel(leave)}</span>
+                                {escalationCount > 0 ? <span>{escalationCount} escalation event(s)</span> : null}
+                              </button>
+                            </td>
+                            <td>
+                              <div className="fiori-primary-cell">
+                                <span>{getLeaveWindow(leave)}</span>
+                                <span>Applied {formatDateTime(leave.applied_on)}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <span className={`fiori-status-pill ${toneClass}`}>{leave.status || "Pending"}</span>
+                            </td>
+                            <td>
+                              <div className="fiori-primary-cell">
+                                <span>{userMap[leave.current_approver_id]?.name || "Administration queue"}</span>
+                                <span>{leave.approved_by || "Not resolved yet"}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="fiori-primary-cell">
+                                <span>{leave.reason || "No employee reason"}</span>
+                                <span>{leave.rejection_reason || "No rejection reason"}</span>
+                              </div>
+                            </td>
+                            <td>
+                              <div className="employee-table-actions">
+                                {isPending ? (
+                                  <>
+                                    <button className="fiori-button secondary danger" onClick={() => setRejectModal({ show: true, leaveId: leave._id, reason: "" })}>
+                                      Reject
+                                    </button>
+                                    <button className="fiori-button primary" onClick={() => openApproveModal(leave)}>
+                                      Approve
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span>{formatDateTime(leave.approved_on || leave.rejected_on)}</span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="leave-history-pagination">
+                  <div className="pagination-info-group">
+                    <span className="fiori-stat-note">
+                      Showing {Math.min((adminPage - 1) * adminPageSize + 1, filteredLeaves.length)}–
+                      {Math.min(adminPage * adminPageSize, filteredLeaves.length)} of {filteredLeaves.length} decisions
+                    </span>
+                    <select
+                      className="pagination-per-page-select"
+                      value={adminPageSize}
+                      onChange={(e) => {
+                        setAdminPageSize(Number(e.target.value));
+                        setAdminPage(1);
+                      }}
+                    >
+                      <option value={6}>6 per page</option>
+                      <option value={10}>10 per page</option>
+                      <option value={25}>25 per page</option>
+                      <option value={50}>50 per page</option>
+                    </select>
+                  </div>
+
+                  {adminPageCount > 1 && (
+                    <div className="leave-history-page-controls">
+                      <button
+                        type="button"
+                        className="fiori-button secondary"
+                        onClick={() => setAdminPage((p) => Math.max(1, p - 1))}
+                        disabled={adminPage === 1}
+                      >
+                        Prev
+                      </button>
+                      {Array.from({ length: adminPageCount }, (_, i) => i + 1)
+                        .filter((p) => p === 1 || p === adminPageCount || Math.abs(p - adminPage) <= 2)
+                        .map((page, index, array) => {
+                          const prev = array[index - 1];
+                          return (
+                            <React.Fragment key={page}>
+                              {prev && page - prev > 1 ? <span className="leave-history-page-gap">...</span> : null}
+                              <button
+                                type="button"
+                                className={`leave-history-page-number ${adminPage === page ? "is-active" : ""}`}
+                                onClick={() => setAdminPage(page)}
+                              >
+                                {page}
+                              </button>
+                            </React.Fragment>
+                          );
+                        })}
+                      <button
+                        type="button"
+                        className="fiori-button secondary"
+                        onClick={() => setAdminPage((p) => Math.min(adminPageCount, p + 1))}
+                        disabled={adminPage === adminPageCount}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </section>
         </>
