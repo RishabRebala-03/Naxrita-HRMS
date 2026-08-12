@@ -1140,15 +1140,6 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                 </span>
               </div>
               <div className="leave-results-actions" style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                <button
-                  type="button"
-                  className="fiori-button secondary"
-                  onClick={handleExportLeaves}
-                  disabled={!filteredLeaves.length}
-                  title="Export filtered leave records to CSV"
-                >
-                  <Download size={14} /> Export CSV
-                </button>
                 <button type="button" className="fiori-button secondary" onClick={fetchLeaveWorkspace}>
                   Refresh
                 </button>
@@ -1200,7 +1191,10 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                               <button
                                 type="button"
                                 className="fiori-primary-cell"
-                                onClick={() => openEmployeeProfile(leave)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openEmployeeProfile(leave);
+                                }}
                                 style={{
                                   width: "100%",
                                   textAlign: "left",
@@ -1224,7 +1218,10 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                               <button
                                 type="button"
                                 className="fiori-primary-cell"
-                                onClick={() => openEmployeeProfile(leave)}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openEmployeeProfile(leave);
+                                }}
                                 style={{
                                   width: "100%",
                                   textAlign: "left",
@@ -1266,10 +1263,22 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
                               <div className="employee-table-actions">
                                 {isPending ? (
                                   <>
-                                    <button className="fiori-button secondary danger" onClick={() => setRejectModal({ show: true, leaveId: leave._id, reason: "" })}>
+                                    <button
+                                      className="fiori-button secondary danger"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setRejectModal({ show: true, leaveId: leave._id, reason: "" });
+                                      }}
+                                    >
                                       Reject
                                     </button>
-                                    <button className="fiori-button primary" onClick={() => openApproveModal(leave)}>
+                                    <button
+                                      className="fiori-button primary"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        openApproveModal(leave);
+                                      }}
+                                    >
                                       Approve
                                     </button>
                                   </>

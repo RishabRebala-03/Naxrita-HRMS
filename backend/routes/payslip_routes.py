@@ -25,6 +25,57 @@ UPLOAD_HISTORY_COLLECTION = "payslip_upload_history"
 PAYSLIP_COLLECTION = "payslips"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "company_logo.png")
 
+
+def _create_notification(user_id, notification_type, message, target=None, related_payslip_id=None):
+    try:
+        if not user_id:
+            return None
+        if isinstance(user_id, str):
+            user_id = ObjectId(user_id)
+
+        notification = {
+            "user_id": user_id,
+            "type": notification_type,
+            "message": message,
+            "read": False,
+            "createdAt": datetime.utcnow(),
+            "notification_origin": "event",
+        }
+        if related_payslip_id:
+            notification["related_payslip_id"] = ObjectId(str(related_payslip_id))
+        if target:
+            notification["target"] = target
+
+        result = mongo.db.notifications.insert_one(notification)
+        return str(result.inserted_id)
+    except Exception as exc:
+        print(f"❌ Error creating payslip notification: {str(exc)}")
+        return None
+
+
+def _build_payslip_notification_target(payslip):
+    return {
+        "section": "payslips",
+        "payslipId": str(payslip.get("_id", "")),
+        "periodKey": payslip.get("period_key", ""),
+    }
+
+
+def _notify_payslip_published(payslip):
+    user_id = payslip.get("user_id")
+    if not user_id:
+        return None
+
+    period = f"{payslip.get('month', '')} {payslip.get('year', '')}".strip()
+    message = f"Your payslip for {period or 'the selected period'} has been published and is ready to download"
+    return _create_notification(
+        user_id=user_id,
+        notification_type="payslip_published",
+        message=message,
+        related_payslip_id=payslip.get("_id"),
+        target=_build_payslip_notification_target(payslip),
+    )
+
 METADATA_COLUMNS = {
     "employee id", "employeeid", "name", "month", "year", "bank", "bank a/c no",
     "bankaccountno", "doj", "lop days", "lopdays", "std days", "stddays",
@@ -1070,6 +1121,8 @@ def publish_payslips():
         if not object_ids:
             return jsonify({"error": "No valid payslip ids were provided"}), 400
         query["_id"] = {"$in": object_ids}
+
+    publish_candidates = list(_collection().find(query))
     published_at = datetime.utcnow()
     result = _collection().update_many(query, {"$set": {
         "published": True,
@@ -1077,10 +1130,17 @@ def publish_payslips():
         "published_by": requester["_id"],
     }})
 
+    notifications_sent = 0
+    if result.modified_count:
+        for payslip in publish_candidates:
+            if _notify_payslip_published(payslip):
+                notifications_sent += 1
+
     response = {
         "success": True,
         "message": f"Published {result.modified_count} payslip(s).",
         "published_count": result.modified_count,
+        "notifications_sent": notifications_sent,
     }
     if not publish_all:
         response["invalid_ids"] = invalid_ids

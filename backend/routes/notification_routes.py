@@ -11,28 +11,19 @@ def serialize_notification(notification):
     """Helper function to properly serialize notification data"""
     if not notification:
         return None
-    
-    # Convert ObjectIds to strings
-    notification["_id"] = str(notification["_id"])
-    notification["user_id"] = str(notification["user_id"])
-    
-    if "related_leave_id" in notification:
-        notification["related_leave_id"] = str(notification["related_leave_id"])
-    if "related_timesheet_id" in notification:
-        notification["related_timesheet_id"] = str(notification["related_timesheet_id"])
-    if "target" in notification and isinstance(notification["target"], dict):
-        notification["target"] = serialize_notification(notification["target"])
-    if "meta" in notification and isinstance(notification["meta"], dict):
-        notification["meta"] = serialize_notification(notification["meta"])
-    
-    # Convert datetime objects to ISO strings
-    if "createdAt" in notification and isinstance(notification["createdAt"], datetime):
-        notification["createdAt"] = notification["createdAt"].isoformat()
-    
-    if "readAt" in notification and isinstance(notification["readAt"], datetime):
-        notification["readAt"] = notification["readAt"].isoformat()
-    
-    return notification
+
+    def serialize_value(value):
+        if isinstance(value, ObjectId):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [serialize_value(item) for item in value]
+        if isinstance(value, dict):
+            return {key: serialize_value(item) for key, item in value.items()}
+        return value
+
+    return serialize_value(notification)
 
 
 # -------------------------------
@@ -85,7 +76,7 @@ def get_user_notifications(user_id):
     try:
         notifications = list(mongo.db.notifications.find({
             "user_id": ObjectId(user_id)
-        }).sort("createdAt", -1).limit(50))  # Last 50 notifications
+        }).sort("createdAt", -1))
         
         # Serialize all notifications
         serialized_notifications = []

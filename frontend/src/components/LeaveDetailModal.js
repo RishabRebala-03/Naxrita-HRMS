@@ -34,7 +34,6 @@ export default function LeaveDetailModal({ leave, onClose, onApprove, onReject, 
   const days = leave.days || leave.number_of_days || leave.duration || 1;
   const reason = leave.reason || leave.comments || leave.description || "No reason provided";
   const employeeName = leave.employee_name || leave.employeeName || leave.userName || leave.name || "Employee";
-  const employeeId = leave.employee_id || leave.employeeId || leave.empId || "";
   const department = leave.department || leave.dept || "";
   const appliedOn = leave.applied_on || leave.appliedOn || leave.created_at;
   const approvedBy = leave.approved_by || leave.approvedBy || leave.manager_name;
@@ -57,7 +56,7 @@ export default function LeaveDetailModal({ leave, onClose, onApprove, onReject, 
         </div>
 
         <div className="leave-detail-body">
-          {(employeeName || employeeId || department) && (
+          {(employeeName || department) && (
             <div className="leave-detail-section">
               <span className="leave-detail-label">Employee Details</span>
               <div className="leave-detail-user-card">
@@ -66,9 +65,7 @@ export default function LeaveDetailModal({ leave, onClose, onApprove, onReject, 
                 </div>
                 <div className="leave-detail-user-info">
                   <strong>{employeeName}</strong>
-                  <span>
-                    {employeeId ? `ID: ${employeeId}` : ""} {department ? `• ${department}` : ""}
-                  </span>
+                  {department ? <span>{department}</span> : null}
                 </div>
               </div>
             </div>

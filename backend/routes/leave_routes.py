@@ -125,6 +125,29 @@ def build_leave_notification_target(leave_id, active_tab="pending"):
     }
 
 
+def resolve_user_reference(value):
+    if not value:
+        return None
+    if isinstance(value, ObjectId):
+        return mongo.db.users.find_one({"_id": value})
+
+    value_str = str(value).strip()
+    if not value_str:
+        return None
+
+    if ObjectId.is_valid(value_str):
+        user = mongo.db.users.find_one({"_id": ObjectId(value_str)})
+        if user:
+            return user
+
+    return mongo.db.users.find_one({
+        "$or": [
+            {"email": value_str},
+            {"employeeId": value_str},
+        ]
+    })
+
+
 def clear_leave_reminder_state(leave_id):
     mongo.db.leaves.update_one(
         {"_id": ObjectId(leave_id)},
@@ -1187,9 +1210,10 @@ def apply_leave():
                 }), 400
 
         # Get immediate manager for initial approval
-        immediate_manager_id = employee.get("reportsTo")
-        if not immediate_manager_id:
+        immediate_manager = resolve_user_reference(employee.get("reportsTo")) or resolve_user_reference(employee.get("reportsToEmail"))
+        if not immediate_manager:
             return jsonify({"error": "No reporting manager found for employee"}), 404
+        immediate_manager_id = immediate_manager["_id"]
 
         # Create leave request with escalation tracking
         leave_request = {
@@ -1227,8 +1251,7 @@ def apply_leave():
         # ✅ CREATE NOTIFICATION FOR MANAGER
         if immediate_manager_id:
             try:
-                manager = mongo.db.users.find_one({"_id": ObjectId(immediate_manager_id)})
-                if manager:
+                if immediate_manager:
                     leave_desc = f"{leave_type}"
                     if is_half_day:
                         leave_desc += f" (Half-day - {half_day_period.capitalize()})"

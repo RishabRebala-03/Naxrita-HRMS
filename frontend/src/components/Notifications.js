@@ -8,6 +8,7 @@ import {
   BellOff,
   Ban,
   FileText,
+  MailCheck,
   Trash2,
   X,
 } from "lucide-react";
@@ -15,6 +16,8 @@ import {
 const cleanNotificationMessage = (message = "") =>
   message
     .replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "")
+    .replace(/\b(?:id|ID)\s*[:#-]?\s*[a-f0-9]{24}\b/g, "")
+    .replace(/\bObjectId\(["']?[a-f0-9]{24}["']?\)/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 
@@ -25,6 +28,13 @@ const getNotificationTarget = (notification = {}) => {
 
   const type = String(notification.type || "").toLowerCase();
   const msg = String(notification.message || "").toLowerCase();
+
+  if (notification.related_payslip_id || type.includes("payslip") || msg.includes("payslip")) {
+    return {
+      section: "payslips",
+      payslipId: notification.related_payslip_id,
+    };
+  }
 
   if (notification.related_timesheet_id || type.includes("timesheet") || msg.includes("timesheet")) {
     return {
@@ -45,6 +55,55 @@ const getNotificationTarget = (notification = {}) => {
   };
 };
 
+const getLeaveTabForNotification = (notification = {}, currentUser = {}) => {
+  const type = String(notification.type || "").toLowerCase();
+  const msg = String(notification.message || "").toLowerCase();
+  const role = String(currentUser.role || "").toLowerCase();
+  const needsApproval =
+    type.includes("request") ||
+    type.includes("escalated") ||
+    type.includes("pending") ||
+    type.includes("submit") ||
+    msg.includes("submitted") ||
+    msg.includes("request") ||
+    msg.includes("approval") ||
+    msg.includes("escalat");
+
+  if (!needsApproval) return role === "manager" ? "myLeaves" : "my-leaves";
+  if (role === "admin") return "pending";
+  if (role === "manager") return "pending";
+  return "team-leaves";
+};
+
+const normalizeLeaveTargetForRole = (target = {}, notification = {}, currentUser = {}) => {
+  if (target.section !== "leaves") return target;
+
+  const role = String(currentUser.role || "").toLowerCase();
+  const nextTarget = { ...target };
+
+  if (!nextTarget.activeTab) {
+    nextTarget.activeTab = getLeaveTabForNotification(notification, currentUser);
+    return nextTarget;
+  }
+
+  if (role === "manager") {
+    if (nextTarget.activeTab === "my-leaves") nextTarget.activeTab = "myLeaves";
+    if (nextTarget.activeTab === "team-leaves") nextTarget.activeTab = "teamLeaves";
+  }
+
+  if (role === "admin" && ["my-leaves", "myLeaves", "team-leaves", "teamLeaves"].includes(nextTarget.activeTab)) {
+    nextTarget.activeTab = "records";
+  }
+
+  if (!["admin", "manager"].includes(role)) {
+    if (nextTarget.activeTab === "pending") nextTarget.activeTab = "team-leaves";
+    if (nextTarget.activeTab === "myLeaves") nextTarget.activeTab = "my-leaves";
+    if (nextTarget.activeTab === "teamLeaves") nextTarget.activeTab = "team-leaves";
+  }
+
+  return nextTarget;
+};
+
 const Notifications = ({ currentUser, onNavigate }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -54,6 +113,7 @@ const Notifications = ({ currentUser, onNavigate }) => {
 
   const containerRef = useRef(null);
   const isMobile = typeof window !== "undefined" && window.innerWidth <= 480;
+  const totalCount = notifications.length;
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -121,6 +181,14 @@ const Notifications = ({ currentUser, onNavigate }) => {
 
   const markAsRead = async (notificationId) => {
     try {
+      setNotifications((previous) =>
+        previous.map((notification) =>
+          notification._id === notificationId
+            ? { ...notification, read: true, readAt: new Date().toISOString() }
+            : notification
+        )
+      );
+      setUnreadCount((previous) => Math.max(previous - 1, 0));
       const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.put(
         `${backendUrl}/api/notifications/mark_read/${notificationId}`
@@ -134,6 +202,14 @@ const Notifications = ({ currentUser, onNavigate }) => {
   const markAllAsRead = async () => {
     try {
       setLoading(true);
+      setNotifications((previous) =>
+        previous.map((notification) => ({
+          ...notification,
+          read: true,
+          readAt: notification.readAt || new Date().toISOString(),
+        }))
+      );
+      setUnreadCount(0);
       const userId = currentUser?.id || currentUser?._id;
       const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5000";
       await axios.put(
@@ -227,6 +303,11 @@ const Notifications = ({ currentUser, onNavigate }) => {
           icon: BadgeX,
           colors: { bg: "#fff1f1", border: "#efc2c2", icon: "#bb0000" },
         };
+      case "payslip_published":
+        return {
+          icon: FileText,
+          colors: { bg: "#f0f7ff", border: "#c7def5", icon: "#0a6ed1" },
+        };
       default:
         return {
           icon: Bell,
@@ -295,7 +376,11 @@ const Notifications = ({ currentUser, onNavigate }) => {
       markAsRead(notification._id);
     }
 
-    const target = getNotificationTarget(notification);
+    const target = normalizeLeaveTargetForRole(
+      getNotificationTarget(notification),
+      notification,
+      currentUser
+    );
     if (target?.section && onNavigate) {
       onNavigate(target.section, target);
       setShowDropdown(false);
@@ -449,57 +534,70 @@ const Notifications = ({ currentUser, onNavigate }) => {
                 }}
               >
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Notifications</h3>
-                  {unreadCount > 0 && (
-                    <p style={{ margin: 0, fontSize: 12, color: "#5b738b", marginTop: 2 }}>
-                      {unreadCount} unread
-                    </p>
-                  )}
+                  <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+                    Notifications ({totalCount})
+                  </h3>
+                  <p style={{ margin: 0, fontSize: 12, color: "#5b738b", marginTop: 2 }}>
+                    {unreadCount} unread
+                  </p>
                 </div>
-                {unreadCount > 0 && (
-                  <button
-                    onClick={markAllAsRead}
-                    disabled={loading}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: "#0a6ed1",
-                      fontSize: 13,
-                      fontWeight: 600,
-                      cursor: "pointer",
-                      padding: "4px 8px",
-                    }}
-                  >
-                    {loading ? "..." : "Mark all read"}
-                  </button>
-                )}
               </div>
 
               {notifications.length > 0 && (
-                <button
-                  onClick={() => setShowClearConfirm(true)}
-                  disabled={loading}
+                <div
                   style={{
-                    width: "100%",
                     marginTop: 8,
-                    padding: "8px 12px",
-                    background: "white",
-                    border: "1px solid #d9dfe6",
-                    borderRadius: 8,
-                    color: "#bb0000",
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    transition: "all 0.2s ease",
                     display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
                     gap: 8,
                   }}
                 >
-                  <Trash2 size={14} />
-                  <span>Clear all notifications</span>
-                </button>
+                  <button
+                    onClick={markAllAsRead}
+                    disabled={loading || unreadCount === 0}
+                    style={{
+                      flex: 1,
+                      padding: "8px 12px",
+                      background: "white",
+                      border: "1px solid #d9dfe6",
+                      borderRadius: 8,
+                      color: unreadCount === 0 ? "#8b95a5" : "#0a6ed1",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: loading || unreadCount === 0 ? "not-allowed" : "pointer",
+                      transition: "all 0.2s ease",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <MailCheck size={14} />
+                    <span>{loading ? "..." : "Mark all read"}</span>
+                  </button>
+                  <button
+                    onClick={() => setShowClearConfirm(true)}
+                    disabled={loading}
+                    style={{
+                      flex: 1,
+                      padding: "8px 12px",
+                      background: "white",
+                      border: "1px solid #d9dfe6",
+                      borderRadius: 8,
+                      color: "#bb0000",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: loading ? "not-allowed" : "pointer",
+                      transition: "all 0.2s ease",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <Trash2 size={14} />
+                    <span>Clear notifications</span>
+                  </button>
+                </div>
               )}
             </div>
 
