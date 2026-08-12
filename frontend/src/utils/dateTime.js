@@ -35,7 +35,14 @@ const DATE_KEY_FORMATTER = new Intl.DateTimeFormat("en-CA", {
 export function parseDateValue(value) {
   if (!value) return null;
   const rawValue = typeof value === "object" && value.$date ? value.$date : value;
-  const date = rawValue instanceof Date ? rawValue : new Date(rawValue);
+  let normalizedValue = rawValue;
+  if (typeof rawValue === "string") {
+    const trimmed = rawValue.trim();
+    const hasTime = /T\d{2}:\d{2}/.test(trimmed);
+    const hasTimezone = /(Z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+    normalizedValue = hasTime && !hasTimezone ? `${trimmed}Z` : trimmed;
+  }
+  const date = normalizedValue instanceof Date ? normalizedValue : new Date(normalizedValue);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
