@@ -756,8 +756,8 @@ const LEAVE_TYPE_DISPLAY_CODE_MAP = {
   'sick and wellness': 'SL',
   'sick & wellness': 'SL',
   'sick & wellness leave': 'SL',
-  optional: 'OL',
-  'optional holiday': 'OL',
+  optional: 'OH',
+  'optional holiday': 'OH',
   lwp: 'LWP',
   lop: 'LWP',
   'leave without pay': 'LWP',
@@ -1064,7 +1064,7 @@ const getTimesheetEntryChargeCodeMeta = (entry = {}, ccLookup = {}) => {
   if (entry.entry_type === 'leave') {
     const reference = getAbsenceChargeCode(entry.leave_type || entry.charge_code_name || entry.description);
     const storedCode = entry.charge_code || entry.leave_code || '';
-    const legacyCode = ['PL', 'SL', 'OL', 'LWP', 'EL'].includes(storedCode);
+    const legacyCode = ['PL', 'SL', 'OL', 'OH', 'LWP', 'EL'].includes(storedCode);
     return {
       code: storedCode && !legacyCode ? storedCode : reference.code,
       name: entry.charge_code_name && !legacyCode ? entry.charge_code_name : reference.name,
