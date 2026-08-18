@@ -10129,6 +10129,111 @@ button:hover:not(:disabled) {
   font-weight: 700;
 }
 
+.access-management-block-panel {
+  border-radius: 18px;
+  border: 1px solid #d8e4ee;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  box-shadow: 0 18px 44px rgba(33, 52, 74, 0.08);
+}
+
+.access-management-block-panel .fiori-panel-header {
+  align-items: flex-start;
+  gap: 18px;
+  padding-bottom: 16px;
+}
+
+.access-management-block-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(220px, 280px) minmax(170px, 1fr) minmax(190px, 1fr) auto;
+  align-items: end;
+  gap: 16px 20px;
+}
+
+.access-management-block-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.access-management-block-field > span {
+  color: #53677a;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.access-management-block-field > strong {
+  color: #1f3548;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.access-management-block-field .input {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid #ccdce8;
+  background: #fff;
+  color: #10243a;
+  font-size: 16px;
+  font-weight: 650;
+  padding: 0 44px 0 16px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 1px 2px rgba(25, 45, 64, 0.04);
+}
+
+.access-management-block-field .input:focus {
+  outline: none;
+  border-color: #7fa0bd;
+  box-shadow: 0 0 0 4px rgba(69, 111, 150, 0.14);
+}
+
+.access-management-block-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: 1px solid #dde8f1;
+  background: #f7fafc;
+  color: #42596e;
+  white-space: nowrap;
+}
+
+.access-management-block-chip strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 30px;
+  border-radius: 8px;
+  background: #eef4f8;
+  color: #1f3548;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.access-management-block-chip span {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.access-management-block-actions {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+}
+
+.access-management-block-actions .fiori-button {
+  min-height: 48px;
+  padding-inline: 20px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
 .access-management-table-shell .fiori-table {
   min-width: 1080px;
 }
@@ -10195,6 +10300,14 @@ button:hover:not(:disabled) {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .access-management-block-grid {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+
+  .access-management-block-actions {
+    justify-content: flex-start;
+  }
+
   .access-management-hero-meta {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -10213,6 +10326,15 @@ button:hover:not(:disabled) {
 
   .access-management-hero-meta {
     grid-template-columns: 1fr;
+  }
+
+  .access-management-block-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .access-management-block-chip,
+  .access-management-block-actions .fiori-button {
+    width: 100%;
   }
 }
 

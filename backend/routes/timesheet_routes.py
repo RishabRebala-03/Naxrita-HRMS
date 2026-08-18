@@ -10,13 +10,18 @@ from openpyxl.utils import get_column_letter
 from config.db import mongo
 from services.queue_service import enqueue_mail
 from services.smtp_service import resolve_tenant_id
-from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester
+from utils.access_control import has_admin_menu_access, require_admin_menu_access, resolve_requester, require_admin
 from utils.timezone import now_ist
 
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
 TIMESHEET_NOTIFICATION_REMINDER_HOURS = 24
 TIMESHEET_RESTRICTION_EXEMPT_MONTHS = {(2026, 8)}
+TIMESHEET_BLOCK_SETTINGS_KEY = "global_timesheet_block_settings"
+DEFAULT_TIMESHEET_BLOCK_SETTINGS = {
+    "first_fortnight_block_day": 14,
+    "second_fortnight_block_day": 28,
+}
 
 ABSENCE_CHARGE_CODES = {
     "adoption_leave": {"code": "955X06", "name": "Adoption Leave"},
@@ -829,15 +834,55 @@ def get_period_bounds(period_start, period_end):
         return None, None
 
 
+def clamp_day_for_month(source_date, day):
+    try:
+        day = int(day)
+        next_month = (source_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+        month_end = next_month - timedelta(days=1)
+        return source_date.replace(day=max(1, min(day, month_end.day)))
+    except Exception:
+        return None
+
+
+def normalize_timesheet_block_settings(settings=None):
+    settings = settings or {}
+    normalized = dict(DEFAULT_TIMESHEET_BLOCK_SETTINGS)
+    for key, min_day, max_day in (
+        ("first_fortnight_block_day", 1, 15),
+        ("second_fortnight_block_day", 16, 31),
+    ):
+        try:
+            value = int(settings.get(key, normalized[key]))
+        except Exception:
+            value = normalized[key]
+        normalized[key] = max(min_day, min(value, max_day))
+    return normalized
+
+
+def format_ordinal(day):
+    day = int(day)
+    if 10 <= day % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def get_timesheet_block_settings():
+    settings = mongo.db.system_settings.find_one({"key": TIMESHEET_BLOCK_SETTINGS_KEY}) or {}
+    return normalize_timesheet_block_settings(settings.get("value") or settings)
+
+
 def get_fortnight_deadline_date(period_start, period_end):
     start_date, end_date = get_period_bounds(period_start, period_end)
     if not start_date or not end_date:
         return None
 
+    settings = get_timesheet_block_settings()
     if start_date.day == 1 and end_date.day == 15:
-        return start_date.replace(day=14)
+        return clamp_day_for_month(start_date, settings["first_fortnight_block_day"])
     if start_date.day == 16:
-        return start_date.replace(day=28)
+        return clamp_day_for_month(start_date, settings["second_fortnight_block_day"])
     return None
 
 
@@ -860,9 +905,9 @@ def get_fortnight_deadline_label(period_start, period_end):
         return ""
 
     if start_date.day == 1 and end_date.day == 15:
-        return "This first-fortnight timesheet is blocked from the 14th onward unless an admin unblocks it."
+        return f"This first-fortnight timesheet is blocked from the {format_ordinal(deadline.day)} onward unless an admin unblocks it."
     if start_date.day == 16:
-        return "This second-fortnight timesheet is blocked from the 28th onward unless an admin unblocks it."
+        return f"This second-fortnight timesheet is blocked from the {format_ordinal(deadline.day)} onward unless an admin unblocks it."
     return ""
 
 
@@ -2832,6 +2877,50 @@ def get_timesheet_period_access():
         return jsonify(payload), 200
     except Exception as e:
         print(f"❌ Error fetching period access: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/block-settings", methods=["GET"])
+def get_timesheet_block_settings_route():
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        return jsonify(get_timesheet_block_settings()), 200
+    except Exception as e:
+        print(f"❌ Error fetching timesheet block settings: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/block-settings", methods=["PUT"])
+def update_timesheet_block_settings_route():
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        settings = normalize_timesheet_block_settings(data)
+        now = datetime.utcnow()
+        mongo.db.system_settings.update_one(
+            {"key": TIMESHEET_BLOCK_SETTINGS_KEY},
+            {
+                "$set": {
+                    "key": TIMESHEET_BLOCK_SETTINGS_KEY,
+                    "value": settings,
+                    "updated_at": now,
+                    "updated_by": requester.get("_id"),
+                    "updated_by_name": requester.get("name", ""),
+                    "updated_by_email": requester.get("email", ""),
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+        return jsonify(settings), 200
+    except Exception as e:
+        print(f"❌ Error updating timesheet block settings: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

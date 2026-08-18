@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { ChevronDown, ChevronUp, Filter, RefreshCw } from "lucide-react";
+import { CalendarRange, ChevronDown, ChevronUp, Filter, RefreshCw, Save } from "lucide-react";
 
 import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
@@ -69,6 +69,11 @@ const AccessManagement = ({ user }) => {
   const [reportingLeadFilter, setReportingLeadFilter] = useState("all");
   const [sortBy, setSortBy] = useState("name_asc");
   const [savingUserId, setSavingUserId] = useState("");
+  const [blockSettings, setBlockSettings] = useState({
+    first_fortnight_block_day: 14,
+    second_fortnight_block_day: 28,
+  });
+  const [savingBlockSettings, setSavingBlockSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const requesterHeaders = useMemo(() => buildRequesterHeaders(user), [user]);
@@ -81,8 +86,15 @@ const AccessManagement = ({ user }) => {
       const response = await axios.get(`${API_BASE}/api/users/access-management`, {
         headers: requesterHeaders,
       });
+      const blockSettingsResponse = await axios.get(`${API_BASE}/api/timesheets/block-settings`, {
+        headers: requesterHeaders,
+      });
       setOptions(Array.isArray(response.data?.options) ? response.data.options : []);
       setUsers(Array.isArray(response.data?.users) ? response.data.users : []);
+      setBlockSettings({
+        first_fortnight_block_day: Number(blockSettingsResponse.data?.first_fortnight_block_day || 14),
+        second_fortnight_block_day: Number(blockSettingsResponse.data?.second_fortnight_block_day || 28),
+      });
     } catch (error) {
       console.error("Failed to load access management data", error);
       setMessage(error.response?.data?.error || "Failed to load access management data");
@@ -411,6 +423,37 @@ const AccessManagement = ({ user }) => {
     }
   };
 
+  const updateBlockSetting = (key, value) => {
+    const numericValue = Number(value);
+    setBlockSettings((current) => ({
+      ...current,
+      [key]: numericValue,
+    }));
+  };
+
+  const saveBlockSettings = async () => {
+    try {
+      setSavingBlockSettings(true);
+      setMessage("");
+      const response = await axios.put(
+        `${API_BASE}/api/timesheets/block-settings`,
+        blockSettings,
+        { headers: requesterHeaders }
+      );
+      setBlockSettings({
+        first_fortnight_block_day: Number(response.data?.first_fortnight_block_day || 14),
+        second_fortnight_block_day: Number(response.data?.second_fortnight_block_day || 28),
+      });
+      setMessage("Updated timesheet block dates for all employees");
+    } catch (error) {
+      console.error("Failed to update timesheet block dates", error);
+      setMessage(error.response?.data?.error || "Failed to update timesheet block dates");
+    } finally {
+      setSavingBlockSettings(false);
+      window.setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
   if (loading) {
     return (
       <section className="access-management-workspace">
@@ -607,6 +650,75 @@ const AccessManagement = ({ user }) => {
             </div>
           </div>
         ) : null}
+      </section>
+
+      <section className="fiori-panel access-management-block-panel">
+        <div className="fiori-panel-header">
+          <div>
+            <h3>Timesheet Block Dates</h3>
+            <p>Set the global cutoff day for both fortnights. These dates apply to every employee timesheet period.</p>
+          </div>
+          <div className="access-management-matrix-meta">
+            <CalendarRange size={18} />
+            <span>Global rule</span>
+          </div>
+        </div>
+
+        <div className="access-management-block-grid">
+          <label className="access-management-block-field">
+            <span>First Fortnight</span>
+            <strong>Block day</strong>
+            <select
+              className="input"
+              value={blockSettings.first_fortnight_block_day}
+              onChange={(event) => updateBlockSetting("first_fortnight_block_day", event.target.value)}
+            >
+              {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="access-management-block-field">
+            <span>Second Fortnight</span>
+            <strong>Block day</strong>
+            <select
+              className="input"
+              value={blockSettings.second_fortnight_block_day}
+              onChange={(event) => updateBlockSetting("second_fortnight_block_day", event.target.value)}
+            >
+              {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => (
+                <option key={day} value={day}>
+                  {day}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="access-management-block-chip">
+            <strong>{blockSettings.first_fortnight_block_day}</strong>
+            <span>blocks 1-15 periods</span>
+          </div>
+
+          <div className="access-management-block-chip">
+            <strong>{blockSettings.second_fortnight_block_day}</strong>
+            <span>blocks 16-end periods</span>
+          </div>
+
+          <div className="access-management-block-actions">
+            <button
+              type="button"
+              className="fiori-button primary"
+              onClick={saveBlockSettings}
+              disabled={savingBlockSettings}
+            >
+              <Save size={16} />
+              <span>{savingBlockSettings ? "Saving" : "Save Block Dates"}</span>
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="fiori-panel access-management-matrix-panel">

@@ -124,6 +124,7 @@ def run():
         mongo.db.charge_code_assignments.delete_many({"testTag": RUN_TAG})
         mongo.db.charge_codes.delete_many({"testTag": RUN_TAG})
         mongo.db.users.delete_many({"testTag": RUN_TAG})
+        mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
 
         admin, manager, employee = seed_users()
         charge_code_id = seed_charge_code(employee)
@@ -160,6 +161,29 @@ def run():
             access_payload = access_state.get_json()
             assert_true(access_payload.get("entry_blocked") is True, "Period access should report blocked fortnight")
             results.append("PASS: period-access exposes blocked fortnight state to the UI")
+
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 7, 13)):
+            settings_response = client.put(
+                "/api/timesheets/block-settings",
+                json={"first_fortnight_block_day": 13, "second_fortnight_block_day": 27},
+                headers=header(admin["_id"]),
+            )
+            assert_status(settings_response, 200, "Admin updates global timesheet block settings")
+            settings_payload = settings_response.get_json() or {}
+            assert_true(settings_payload.get("first_fortnight_block_day") == 13, "First-half block day should be saved")
+            assert_true(settings_payload.get("second_fortnight_block_day") == 27, "Second-half block day should be saved")
+
+            configured_access = client.get(
+                f"/api/timesheets/period-access?employee_id={employee['_id']}&period_start=2026-07-01&period_end=2026-07-15",
+                headers=header(employee["_id"]),
+            )
+            assert_status(configured_access, 200, "Period access after global block setting update")
+            configured_payload = configured_access.get_json() or {}
+            assert_true(configured_payload.get("entry_deadline_date") == "2026-07-13", "Configured first-half block date should map to the selected period")
+            assert_true(configured_payload.get("entry_blocked") is True, "Configured block date should apply to all employees")
+            results.append("PASS: admin-configured first-half block date applies globally")
+
+        mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
 
         with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 8, 18)):
             august_save = client.post(
@@ -251,6 +275,7 @@ def run():
             print(line)
 
     with app.app_context():
+        mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
         mongo.db.timesheet_period_unlocks.delete_many({"employee_email": "unlock-employee@naxrita.local"})
         mongo.db.notifications.delete_many({"message": {"$regex": RUN_TAG}})
         mongo.db.timesheets.delete_many({"testTag": RUN_TAG})
