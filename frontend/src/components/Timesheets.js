@@ -1841,6 +1841,7 @@ function TimesheetPage({
   });
   const [approvedEditWindowOpen, setApprovedEditWindowOpen] = useState(false);
   const [approvedEditWindowLabel, setApprovedEditWindowLabel] = useState('');
+  const [wasApprovedTimesheet, setWasApprovedTimesheet] = useState(false);
   const [isEmployeeEditable, setIsEmployeeEditable] = useState(true);
   const [periodEntryBlocked, setPeriodEntryBlocked] = useState(false);
   const [periodEntryDeadlineLabel, setPeriodEntryDeadlineLabel] = useState('');
@@ -1864,6 +1865,7 @@ function TimesheetPage({
     setTimesheetLocationMaps({ workLocationsByDate: {}, assignedLocationsByDate: {} });
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
+    setWasApprovedTimesheet(false);
     setIsEmployeeEditable(true);
     setPeriodEntryBlocked(false);
     setPeriodEntryDeadlineLabel('');
@@ -1888,6 +1890,7 @@ function TimesheetPage({
     setTimesheetStatus('draft');
     setApprovedEditWindowOpen(false);
     setApprovedEditWindowLabel('');
+    setWasApprovedTimesheet(false);
     setIsEmployeeEditable(true);
     setPeriodEntryBlocked(false);
     setPeriodEntryDeadlineLabel('');
@@ -2095,6 +2098,12 @@ function TimesheetPage({
           setTimesheetStatus(match.status || 'draft');
           setApprovedEditWindowOpen(Boolean(match.approved_edit_window_open));
           setApprovedEditWindowLabel(match.approved_edit_window_label || '');
+          setWasApprovedTimesheet(
+            match.status === 'approved'
+            || Boolean(match.reopened_from_approved)
+            || Boolean(match.requires_reapproval)
+            || (Array.isArray(match.approval_history) && match.approval_history.some((item) => item.action === 'approved'))
+          );
           setIsEmployeeEditable(match.is_employee_editable !== false);
           setPeriodEntryBlocked(Boolean(match.period_entry_blocked));
           setPeriodEntryDeadlineLabel(match.period_entry_deadline_label || access?.entry_deadline_label || '');
@@ -2171,6 +2180,7 @@ function TimesheetPage({
           setTimesheetStatus('draft');
           setApprovedEditWindowOpen(false);
           setApprovedEditWindowLabel('');
+          setWasApprovedTimesheet(false);
           setIsEmployeeEditable(access?.entry_blocked !== true);
           setDailyOvertime({});
           setHolidayPayout({});
@@ -2183,6 +2193,7 @@ function TimesheetPage({
       .catch(() => {
         setApprovedEditWindowOpen(false);
         setApprovedEditWindowLabel('');
+        setWasApprovedTimesheet(false);
         setIsEmployeeEditable(true);
         setPeriodEntryBlocked(false);
         setPeriodEntryDeadlineLabel('');
@@ -2271,9 +2282,11 @@ function TimesheetPage({
 
   const isAugust2026TimesheetPeriod = dates[0]?.startsWith('2026-08-') && dates[dates.length - 1]?.startsWith('2026-08-');
   const effectiveIsEmployeeEditable = isEmployeeEditable || isAugust2026TimesheetPeriod;
-  const canEditApprovedTimesheet = timesheetStatus === 'approved' && (approvedEditWindowOpen || isAugust2026TimesheetPeriod);
+  const shouldDisplayApprovedState = timesheetStatus === 'approved' || (isAugust2026TimesheetPeriod && wasApprovedTimesheet);
+  const canEditApprovedTimesheet = shouldDisplayApprovedState && (approvedEditWindowOpen || isAugust2026TimesheetPeriod);
   const isReadOnly   = !effectiveIsEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
   const canSubmit    = effectiveIsEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
+  const primarySubmitLabel = canEditApprovedTimesheet || (isAugust2026TimesheetPeriod && wasApprovedTimesheet) ? 'Resubmit' : 'Submit';
   const errors       = validationErrors;
   const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
   const rowHasPositiveHours = useCallback((row) =>
@@ -2545,6 +2558,9 @@ function TimesheetPage({
         }),
       });
       setTimesheetStatus('draft');
+      if (canEditApprovedTimesheet) {
+        setWasApprovedTimesheet(true);
+      }
       setHasSavedCurrentDraft(true);
       if (hasSelectedRowsWithoutHours()) {
         hasLocalTimesheetEditsRef.current = true;
@@ -2552,7 +2568,7 @@ function TimesheetPage({
         hasLocalTimesheetEditsRef.current = false;
         setReloadTrigger((t) => t + 1);
       }
-      if (canEditApprovedTimesheet) {
+      if (canEditApprovedTimesheet && !isAugust2026TimesheetPeriod) {
         setApprovedEditWindowOpen(false);
       }
       notify('Draft saved successfully.', 'success');
@@ -2628,7 +2644,7 @@ function TimesheetPage({
 
   const statusMessage = () => {
     const isPending  = timesheetStatus === 'pending_lead';
-    const isApproved = timesheetStatus === 'approved';
+    const isApproved = shouldDisplayApprovedState;
     const isRejected = timesheetStatus.startsWith('rejected');
     const isEscalatedPending = timesheetStatus === 'pending_manager';
     if (!isPending && !isApproved && !isRejected && !isEscalatedPending) return null;
@@ -2684,6 +2700,12 @@ function TimesheetPage({
             <Plus size={18} />
             <span>New</span>
           </button>
+          {isAugust2026TimesheetPeriod && shouldDisplayApprovedState ? (
+            <button type="button" className="mte-tool-button" onClick={() => setSelectedRowId(rows[0]?.id || '')} disabled={loading}>
+              <FileText size={18} />
+              <span>Edit All</span>
+            </button>
+          ) : null}
           <button type="button" className="mte-tool-button">
             <CircleHelp size={18} />
             <span>Help</span>
@@ -2746,11 +2768,11 @@ function TimesheetPage({
                 disabled={submitDisabled}
                 title={!hasSavedCurrentDraft && !canEditApprovedTimesheet ? 'Save the timesheet before submitting.' : undefined}
               >
-                {loading ? 'Submitting' : canEditApprovedTimesheet ? 'Resubmit' : 'Submit'}
+                {loading ? 'Submitting' : primarySubmitLabel}
               </button>
             ) : (
               <div className="mte-status-inline">
-                <StatusBadge status={timesheetStatus} />
+                <StatusBadge status={shouldDisplayApprovedState ? 'approved' : timesheetStatus} />
               </div>
             )}
           </div>
@@ -2768,7 +2790,11 @@ function TimesheetPage({
 
       {canEditApprovedTimesheet ? (
         <div className="mte-inline-banner">
-          <span>{approvedEditWindowLabel || (isAugust2026TimesheetPeriod ? 'August 2026 timesheets are editable. Make changes and resubmit it for approval.' : 'This approved timesheet is editable during the correction window.')}</span>
+          <span>
+            <StatusBadge status="approved" />
+            {' '}
+            {approvedEditWindowLabel || (isAugust2026TimesheetPeriod ? 'August 2026 timesheets are editable. Make changes and resubmit it for approval.' : 'This approved timesheet is editable during the correction window.')}
+          </span>
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
           </button>
