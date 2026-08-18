@@ -16,6 +16,7 @@ from utils.timezone import now_ist
 timesheet_bp = Blueprint("timesheet_bp", __name__)
 WORKDAY_HOURS = 9.0
 TIMESHEET_NOTIFICATION_REMINDER_HOURS = 24
+TIMESHEET_RESTRICTION_EXEMPT_MONTHS = {(2026, 8)}
 
 ABSENCE_CHARGE_CODES = {
     "adoption_leave": {"code": "955X06", "name": "Adoption Leave"},
@@ -840,6 +841,18 @@ def get_fortnight_deadline_date(period_start, period_end):
     return None
 
 
+def is_timesheet_restriction_exempt(period_start, period_end):
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not start_date or not end_date:
+        return False
+
+    return (
+        start_date.year == end_date.year
+        and start_date.month == end_date.month
+        and (start_date.year, start_date.month) in TIMESHEET_RESTRICTION_EXEMPT_MONTHS
+    )
+
+
 def get_fortnight_deadline_label(period_start, period_end):
     deadline = get_fortnight_deadline_date(period_start, period_end)
     start_date, end_date = get_period_bounds(period_start, period_end)
@@ -869,6 +882,9 @@ def is_timesheet_period_unlocked(employee_id, period_start, period_end):
 
 
 def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=None):
+    if is_timesheet_restriction_exempt(period_start, period_end):
+        return False
+
     deadline = get_fortnight_deadline_date(period_start, period_end)
     if not deadline:
         return False
@@ -913,6 +929,9 @@ def is_correction_window_open_for_timesheet(timesheet, reference=None):
     if not period_start or not period_end:
         return False
 
+    if is_timesheet_restriction_exempt(period_start, period_end):
+        return True
+
     current_date = (reference or now_ist()).date()
     if current_date.year != period_start.year or current_date.month != period_start.month:
         return False
@@ -929,6 +948,8 @@ def get_approved_edit_window_label(timesheet):
     period_start, period_end = get_timesheet_period_bounds(timesheet)
     if not period_start or not period_end:
         return ""
+    if is_timesheet_restriction_exempt(period_start, period_end):
+        return "August 2026 timesheets are editable every day after approval."
     if period_start.day == 1 and period_end.day == 15:
         return "Editable on the 13th and 14th of the same month after approval."
     if period_start.day == 16:

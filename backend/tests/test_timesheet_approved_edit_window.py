@@ -154,6 +154,8 @@ def run():
         charge_code_id = seed_charge_code(employee)
         first_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-07-01", "2026-07-15")
         second_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-07-16", "2026-07-31")
+        august_first_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-08-01", "2026-08-15")
+        august_second_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-08-16", "2026-08-31")
 
         client = app.test_client()
         results = []
@@ -246,13 +248,13 @@ def run():
             results.append("PASS: second-half approved timesheet can be edited on July 27")
 
         with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 28)):
-            update_response = client.put(
+            blocked = client.put(
                 f"/api/timesheets/update/{second_half['_id']}",
                 json={"entries": [{"date": "2026-07-16", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 6.5}]},
                 headers=header(employee["_id"]),
             )
-            assert_status(update_response, 200, "Approved second-half edit on July 28")
-            results.append("PASS: second-half approved timesheet can still be edited on July 28")
+            assert_status(blocked, 400, "Approved second-half edit should be blocked after July 27 window")
+            results.append("PASS: second-half approved timesheet stays locked again on July 28")
 
         with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 7, 29)):
             blocked = client.put(
@@ -262,6 +264,36 @@ def run():
             )
             assert_status(blocked, 400, "Approved second-half edit should be blocked outside 27-28 window")
             results.append("PASS: second-half approved timesheet stays locked outside the 27-28 window")
+
+        with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 8, 18)):
+            employee_timesheets = client.get(
+                f"/api/timesheets/employee/{employee['_id']}",
+                headers=header(employee["_id"]),
+            )
+            assert_status(employee_timesheets, 200, "Employee timesheet list during August exemption")
+            items = employee_timesheets.get_json()
+            august_item = next(item for item in items if item["_id"] == str(august_first_half["_id"]))
+            assert_true(august_item.get("approved_edit_window_open") is True, "August approved timesheet should advertise editability")
+            assert_true(august_item.get("is_employee_editable") is True, "August approved timesheet should be employee editable")
+
+            august_update = client.put(
+                f"/api/timesheets/update/{august_first_half['_id']}",
+                json={"entries": [{"date": "2026-08-01", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 8}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(august_update, 200, "Approved August first-half edit after normal window")
+            august_updated_doc = mongo.db.timesheets.find_one({"_id": august_first_half["_id"]})
+            assert_true(august_updated_doc.get("status") == "draft", "Editing approved August timesheet should reopen it as draft")
+            results.append("PASS: August approved first-half timesheet can be edited on August 18")
+
+        with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 9, 5)):
+            august_later_update = client.put(
+                f"/api/timesheets/update/{august_second_half['_id']}",
+                json={"entries": [{"date": "2026-08-16", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 8}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(august_later_update, 200, "Approved August second-half edit after August should remain exempt")
+            results.append("PASS: August approved second-half timesheet remains editable after August")
 
         print("Approved timesheet edit window test results")
         for line in results:

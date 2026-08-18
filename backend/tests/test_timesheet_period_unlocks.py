@@ -101,13 +101,13 @@ def current_datetime(year, month, day):
     return datetime(year, month, day, 10, 0, 0)
 
 
-def save_draft_payload(employee, charge_code_id):
+def save_draft_payload(employee, charge_code_id, period_start="2026-07-01", period_end="2026-07-15"):
     return {
         "employee_id": str(employee["_id"]),
-        "period_start": "2026-07-01",
-        "period_end": "2026-07-15",
+        "period_start": period_start,
+        "period_end": period_end,
         "entries": [{
-            "date": "2026-07-01",
+            "date": period_start,
             "entry_type": "work",
             "charge_code_id": str(charge_code_id),
             "hours": 9,
@@ -161,6 +161,37 @@ def run():
             assert_true(access_payload.get("entry_blocked") is True, "Period access should report blocked fortnight")
             results.append("PASS: period-access exposes blocked fortnight state to the UI")
 
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 8, 18)):
+            august_save = client.post(
+                "/api/timesheets/save_draft",
+                json=save_draft_payload(employee, charge_code_id, "2026-08-01", "2026-08-15"),
+                headers=header(employee["_id"]),
+            )
+            assert_status(august_save, 200, "August 2026 first-half draft save after cutoff should remain editable")
+
+            august_access = client.get(
+                f"/api/timesheets/period-access?employee_id={employee['_id']}&period_start=2026-08-01&period_end=2026-08-15",
+                headers=header(employee["_id"]),
+            )
+            assert_status(august_access, 200, "August 2026 period-access response")
+            august_payload = august_access.get_json() or {}
+            assert_true(august_payload.get("entry_blocked") is False, "August 2026 should not be blocked by the cutoff")
+            results.append("PASS: August 2026 first-half timesheet stays editable after the cutoff")
+
+        mongo.db.timesheets.delete_many({"employee_email": employee["email"]})
+
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 8, 28)):
+            august_second_half_save = client.post(
+                "/api/timesheets/save_draft",
+                json=save_draft_payload(employee, charge_code_id, "2026-08-16", "2026-08-31"),
+                headers=header(employee["_id"]),
+            )
+            assert_status(august_second_half_save, 200, "August 2026 second-half draft save on cutoff should remain editable")
+            results.append("PASS: August 2026 second-half timesheet stays editable on and after the cutoff")
+
+        mongo.db.timesheets.delete_many({"employee_email": employee["email"]})
+
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 7, 14)):
             forbidden_unlock = client.put(
                 "/api/timesheets/period-unlocks",
                 json={

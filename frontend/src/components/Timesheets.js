@@ -2269,9 +2269,11 @@ function TimesheetPage({
     }
   }, [rows, selectedRowId]);
 
-  const canEditApprovedTimesheet = timesheetStatus === 'approved' && approvedEditWindowOpen;
-  const isReadOnly   = !isEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
-  const canSubmit    = isEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
+  const isAugust2026TimesheetPeriod = dates[0]?.startsWith('2026-08-') && dates[dates.length - 1]?.startsWith('2026-08-');
+  const effectiveIsEmployeeEditable = isEmployeeEditable || isAugust2026TimesheetPeriod;
+  const canEditApprovedTimesheet = timesheetStatus === 'approved' && (approvedEditWindowOpen || isAugust2026TimesheetPeriod);
+  const isReadOnly   = !effectiveIsEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
+  const canSubmit    = effectiveIsEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
   const errors       = validationErrors;
   const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
   const rowHasPositiveHours = useCallback((row) =>
@@ -2643,11 +2645,11 @@ function TimesheetPage({
       ? canEditApprovedTimesheet
         ? (
           <>
-            <strong>Approved:</strong> This timesheet is in the correction window.
+            <strong>Approved:</strong> This timesheet is editable.
             {' '}Make changes and resubmit it for lead approval again.
           </>
         )
-        : (<><strong>Approved:</strong> This timesheet is permanently locked. Contact your lead for corrections.</>)
+        : (<><strong>Approved:</strong> This timesheet is approved.</>)
       : (<><strong>Rejected:</strong> Review the feedback, make corrections, and resubmit.</>);
 
     return (
@@ -2766,7 +2768,7 @@ function TimesheetPage({
 
       {canEditApprovedTimesheet ? (
         <div className="mte-inline-banner">
-          <span>{approvedEditWindowLabel || 'This approved timesheet is temporarily editable during the correction window.'}</span>
+          <span>{approvedEditWindowLabel || (isAugust2026TimesheetPeriod ? 'August 2026 timesheets are editable. Make changes and resubmit it for approval.' : 'This approved timesheet is editable during the correction window.')}</span>
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
           </button>
