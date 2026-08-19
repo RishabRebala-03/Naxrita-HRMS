@@ -913,6 +913,47 @@ def serialize_timesheet_block_override(override):
     }
 
 
+def serialize_timesheet_block_history(item):
+    if not item:
+        return None
+    return {
+        "_id": str(item.get("_id")),
+        "action": item.get("action", ""),
+        "scope": item.get("scope", ""),
+        "employee_id": str(item.get("employee_id")) if item.get("employee_id") else "",
+        "employee_name": item.get("employee_name", ""),
+        "employee_email": item.get("employee_email", ""),
+        "first_fortnight_block_day": item.get("first_fortnight_block_day", 14),
+        "second_fortnight_block_day": item.get("second_fortnight_block_day", 28),
+        "effective_start": item.get("effective_start", ""),
+        "effective_end": item.get("effective_end", ""),
+        "notes": item.get("notes", ""),
+        "changed_by_name": item.get("changed_by_name", ""),
+        "changed_by_email": item.get("changed_by_email", ""),
+        "changed_at": item.get("changed_at").isoformat() if isinstance(item.get("changed_at"), datetime) else item.get("changed_at"),
+    }
+
+
+def record_timesheet_block_history(action, scope, settings, requester, employee=None, notes=""):
+    history_doc = {
+        "action": action,
+        "scope": scope,
+        **normalize_timesheet_block_settings(settings),
+        "notes": notes or "",
+        "changed_at": datetime.utcnow(),
+        "changed_by": requester.get("_id") if requester else None,
+        "changed_by_name": (requester or {}).get("name", ""),
+        "changed_by_email": (requester or {}).get("email", ""),
+    }
+    if employee:
+        history_doc.update({
+            "employee_id": employee.get("_id"),
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+        })
+    mongo.db.timesheet_block_history.insert_one(history_doc)
+
+
 def get_matching_employee_block_override(employee_id, period_start_date, period_end_date):
     if not employee_id:
         return None
@@ -2969,10 +3010,12 @@ def get_timesheet_block_settings_route():
 
         global_settings = get_timesheet_block_settings()
         overrides = list(mongo.db.timesheet_block_overrides.find({"is_active": True}).sort("updated_at", -1))
+        history = list(mongo.db.timesheet_block_history.find().sort("changed_at", -1).limit(50))
         return jsonify({
             **global_settings,
             "global": global_settings,
             "employee_overrides": [serialize_timesheet_block_override(item) for item in overrides],
+            "history": [serialize_timesheet_block_history(item) for item in history],
         }), 200
     except Exception as e:
         print(f"❌ Error fetching timesheet block settings: {str(e)}")
@@ -3004,11 +3047,14 @@ def update_timesheet_block_settings_route():
             },
             upsert=True,
         )
+        record_timesheet_block_history("updated", "global", settings, requester)
         overrides = list(mongo.db.timesheet_block_overrides.find({"is_active": True}).sort("updated_at", -1))
+        history = list(mongo.db.timesheet_block_history.find().sort("changed_at", -1).limit(50))
         return jsonify({
             **settings,
             "global": settings,
             "employee_overrides": [serialize_timesheet_block_override(item) for item in overrides],
+            "history": [serialize_timesheet_block_history(item) for item in history],
         }), 200
     except Exception as e:
         print(f"❌ Error updating timesheet block settings: {str(e)}")
@@ -3054,12 +3100,19 @@ def save_timesheet_employee_block_override():
                 {"$set": override_doc},
             )
             saved = mongo.db.timesheet_block_overrides.find_one({"_id": ObjectId(override_id)})
+            action = "updated"
         else:
             override_doc["created_at"] = now
             result = mongo.db.timesheet_block_overrides.insert_one(override_doc)
             saved = mongo.db.timesheet_block_overrides.find_one({"_id": result.inserted_id})
+            action = "created"
 
-        return jsonify({"override": serialize_timesheet_block_override(saved)}), 200
+        record_timesheet_block_history(action, "employee", settings, requester, employee=employee, notes=notes)
+        history = list(mongo.db.timesheet_block_history.find().sort("changed_at", -1).limit(50))
+        return jsonify({
+            "override": serialize_timesheet_block_override(saved),
+            "history": [serialize_timesheet_block_history(item) for item in history],
+        }), 200
     except Exception as e:
         print(f"❌ Error saving employee timesheet block override: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -3072,6 +3125,7 @@ def delete_timesheet_employee_block_override(override_id):
         if error_response:
             return error_response
 
+        existing = mongo.db.timesheet_block_overrides.find_one({"_id": ObjectId(override_id)})
         mongo.db.timesheet_block_overrides.update_one(
             {"_id": ObjectId(override_id)},
             {
@@ -3082,7 +3136,24 @@ def delete_timesheet_employee_block_override(override_id):
                 }
             },
         )
-        return jsonify({"message": "Employee-specific block rule removed"}), 200
+        if existing:
+            record_timesheet_block_history(
+                "removed",
+                "employee",
+                existing,
+                requester,
+                employee={
+                    "_id": existing.get("employee_id"),
+                    "name": existing.get("employee_name", ""),
+                    "email": existing.get("employee_email", ""),
+                },
+                notes=existing.get("notes", ""),
+            )
+        history = list(mongo.db.timesheet_block_history.find().sort("changed_at", -1).limit(50))
+        return jsonify({
+            "message": "Employee-specific block rule removed",
+            "history": [serialize_timesheet_block_history(item) for item in history],
+        }), 200
     except Exception as e:
         print(f"❌ Error deleting employee timesheet block override: {str(e)}")
         return jsonify({"error": str(e)}), 500

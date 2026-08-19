@@ -320,6 +320,73 @@ def _serialize_access_user(user):
         "adminMenuAccess": normalize_admin_menu_access(user.get("adminMenuAccess")),
     }
 
+
+def _menu_label_map():
+    return {item["key"]: item["label"] for item in get_admin_menu_options()}
+
+
+def _serialize_admin_access_history(item):
+    labels = _menu_label_map()
+    granted = item.get("granted_menus") or []
+    removed = item.get("removed_menus") or []
+    resulting = item.get("resulting_access") or []
+    return {
+        "_id": str(item.get("_id")),
+        "module": "admin-access",
+        "action": item.get("action", ""),
+        "scope": "admin-access",
+        "employee_id": str(item.get("employee_id")) if item.get("employee_id") else "",
+        "employee_name": item.get("employee_name", ""),
+        "employee_email": item.get("employee_email", ""),
+        "employee_code": item.get("employee_code", ""),
+        "role": item.get("role", ""),
+        "department": item.get("department", ""),
+        "designation": item.get("designation", ""),
+        "granted_menus": granted,
+        "granted_menu_labels": [labels.get(key, key) for key in granted],
+        "removed_menus": removed,
+        "removed_menu_labels": [labels.get(key, key) for key in removed],
+        "resulting_access": resulting,
+        "resulting_access_labels": [labels.get(key, key) for key in resulting],
+        "changed_by_name": item.get("changed_by_name", ""),
+        "changed_by_email": item.get("changed_by_email", ""),
+        "changed_at": item.get("changed_at").isoformat() if isinstance(item.get("changed_at"), datetime) else item.get("changed_at"),
+    }
+
+
+def _record_admin_access_history(target_user, previous_access, next_access, requester):
+    previous_set = set(previous_access or [])
+    next_set = set(next_access or [])
+    granted = sorted(next_set - previous_set)
+    removed = sorted(previous_set - next_set)
+    if not granted and not removed:
+        return
+
+    if granted and removed:
+        action = "updated"
+    elif granted:
+        action = "granted"
+    else:
+        action = "removed"
+
+    mongo.db.admin_access_history.insert_one({
+        "action": action,
+        "employee_id": target_user.get("_id"),
+        "employee_name": target_user.get("name", ""),
+        "employee_email": target_user.get("email", ""),
+        "employee_code": target_user.get("employeeId", ""),
+        "role": target_user.get("role", "Employee"),
+        "department": target_user.get("department", ""),
+        "designation": target_user.get("designation", ""),
+        "granted_menus": granted,
+        "removed_menus": removed,
+        "resulting_access": next_access,
+        "changed_by": requester.get("_id") if requester else None,
+        "changed_by_name": (requester or {}).get("name", ""),
+        "changed_by_email": (requester or {}).get("email", ""),
+        "changed_at": datetime.utcnow(),
+    })
+
 @user_bp.route("/add_user", methods=["POST"])
 def add_user():
     try:
@@ -588,10 +655,12 @@ def get_access_management_data():
             "is_active": 1,
             "adminMenuAccess": 1,
         }).sort("name", 1))
+        history = list(mongo.db.admin_access_history.find().sort("changed_at", -1).limit(100))
 
         return jsonify({
             "options": get_admin_menu_options(),
             "users": [_serialize_access_user(user) for user in users],
+            "history": [_serialize_admin_access_history(item) for item in history],
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -614,6 +683,8 @@ def update_access_management(user_id):
         if is_full_admin(user):
             return jsonify({"error": "Full admin accounts already have complete access"}), 400
 
+        previous_access = normalize_admin_menu_access(user.get("adminMenuAccess"))
+
         mongo.db.users.update_one(
             {"_id": ObjectId(user_id)},
             {
@@ -624,11 +695,14 @@ def update_access_management(user_id):
                 }
             },
         )
+        _record_admin_access_history(user, previous_access, next_access, requester)
 
         updated_user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        history = list(mongo.db.admin_access_history.find().sort("changed_at", -1).limit(100))
         return jsonify({
             "message": "Access updated successfully",
             "user": _serialize_access_user(updated_user),
+            "history": [_serialize_admin_access_history(item) for item in history],
         }), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
