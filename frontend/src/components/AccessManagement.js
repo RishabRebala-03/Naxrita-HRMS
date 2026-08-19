@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarRange, ChevronDown, ChevronUp, Filter, RefreshCw, Save, Trash2 } from "lucide-react";
+import { CalendarRange, ChevronDown, ChevronUp, Clock3, Filter, History, RefreshCw, Save, ShieldCheck, Trash2, UserCog } from "lucide-react";
 
 import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
@@ -53,7 +53,31 @@ const sortUsers = (items, sortBy) => {
   return ranked;
 };
 
+const formatHistoryTime = (value) => {
+  if (!value) return "Not recorded";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const getHistoryActionLabel = (item) => {
+  if (item.module === "admin-access") {
+    const action = item.action || "updated";
+    return `Admin access ${action}`;
+  }
+  const scope = item.scope === "global" ? "Global rule" : "Employee rule";
+  const action = item.action || "updated";
+  return `${scope} ${action}`;
+};
+
 const AccessManagement = ({ user }) => {
+  const [activeTab, setActiveTab] = useState("admin-access");
   const [options, setOptions] = useState([]);
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState("");
@@ -76,6 +100,8 @@ const AccessManagement = ({ user }) => {
     effective_end: "",
   });
   const [employeeBlockOverrides, setEmployeeBlockOverrides] = useState([]);
+  const [adminAccessHistory, setAdminAccessHistory] = useState([]);
+  const [blockHistory, setBlockHistory] = useState([]);
   const [overrideDraft, setOverrideDraft] = useState({
     _id: "",
     employee_id: "",
@@ -87,6 +113,17 @@ const AccessManagement = ({ user }) => {
   });
   const [overrideSearch, setOverrideSearch] = useState("");
   const [overrideDateFilter, setOverrideDateFilter] = useState("");
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyModuleFilter, setHistoryModuleFilter] = useState("all");
+  const [historyScopeFilter, setHistoryScopeFilter] = useState("all");
+  const [historyActionFilter, setHistoryActionFilter] = useState("all");
+  const [historyChangedByFilter, setHistoryChangedByFilter] = useState("all");
+  const [historyDepartmentFilter, setHistoryDepartmentFilter] = useState("all");
+  const [historyFromDate, setHistoryFromDate] = useState("");
+  const [historyToDate, setHistoryToDate] = useState("");
+  const [historyFirstDayFilter, setHistoryFirstDayFilter] = useState("all");
+  const [historySecondDayFilter, setHistorySecondDayFilter] = useState("all");
+  const [historySortBy, setHistorySortBy] = useState("newest");
   const [savingBlockSettings, setSavingBlockSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -105,6 +142,7 @@ const AccessManagement = ({ user }) => {
       });
       setOptions(Array.isArray(response.data?.options) ? response.data.options : []);
       setUsers(Array.isArray(response.data?.users) ? response.data.users : []);
+      setAdminAccessHistory(Array.isArray(response.data?.history) ? response.data.history : []);
       const globalSettings = blockSettingsResponse.data?.global || blockSettingsResponse.data || {};
       setBlockSettings({
         first_fortnight_block_day: Number(globalSettings.first_fortnight_block_day || 14),
@@ -113,6 +151,7 @@ const AccessManagement = ({ user }) => {
         effective_end: globalSettings.effective_end || "",
       });
       setEmployeeBlockOverrides(Array.isArray(blockSettingsResponse.data?.employee_overrides) ? blockSettingsResponse.data.employee_overrides : []);
+      setBlockHistory(Array.isArray(blockSettingsResponse.data?.history) ? blockSettingsResponse.data.history : []);
     } catch (error) {
       console.error("Failed to load access management data", error);
       setMessage(error.response?.data?.error || "Failed to load access management data");
@@ -394,6 +433,252 @@ const AccessManagement = ({ user }) => {
     });
   }, [employeeBlockOverrides, overrideDateFilter, overrideSearch]);
 
+  const combinedHistory = useMemo(
+    () => [
+      ...adminAccessHistory.map((item) => ({
+        ...item,
+        module: item.module || "admin-access",
+        scope: item.scope || "admin-access",
+      })),
+      ...blockHistory.map((item) => ({
+        ...item,
+        module: "timesheet-access",
+      })),
+    ],
+    [adminAccessHistory, blockHistory]
+  );
+
+  const historyActionOptions = useMemo(() => {
+    const actions = Array.from(new Set(combinedHistory.map((item) => item.action).filter(Boolean)));
+    return [
+      { value: "all", label: "All actions" },
+      ...actions.sort((a, b) => a.localeCompare(b)).map((action) => ({
+        value: action,
+        label: action.charAt(0).toUpperCase() + action.slice(1),
+      })),
+    ];
+  }, [combinedHistory]);
+
+  const historyFirstDayOptions = useMemo(
+    () => [
+      { value: "all", label: "Any first day" },
+      ...Array.from({ length: 15 }, (_, index) => index + 1).map((day) => ({
+        value: String(day),
+        label: `Day ${day}`,
+      })),
+    ],
+    []
+  );
+
+  const historySecondDayOptions = useMemo(
+    () => [
+      { value: "all", label: "Any second day" },
+      ...Array.from({ length: 16 }, (_, index) => index + 16).map((day) => ({
+        value: String(day),
+        label: `Day ${day}`,
+      })),
+    ],
+    []
+  );
+
+  const historyScopeOptions = useMemo(
+    () => [
+      { value: "all", label: "All scopes" },
+      { value: "admin-access", label: "Admin access changes" },
+      { value: "global", label: "Global rules" },
+      { value: "employee", label: "Employee rules" },
+    ],
+    []
+  );
+
+  const historyModuleOptions = useMemo(
+    () => [
+      { value: "all", label: "All history" },
+      { value: "admin-access", label: "Admin Access" },
+      { value: "timesheet-access", label: "Timesheet Access" },
+    ],
+    []
+  );
+
+  const historySortOptions = useMemo(
+    () => [
+      { value: "newest", label: "Newest first" },
+      { value: "oldest", label: "Oldest first" },
+      { value: "scope", label: "Scope" },
+      { value: "module", label: "Module" },
+      { value: "action", label: "Action" },
+      { value: "employee", label: "Employee" },
+    ],
+    []
+  );
+
+  const historySearchSuggestions = useMemo(() => {
+    const seen = new Set();
+    return combinedHistory.flatMap((item) => {
+      const values = [
+        item.employee_name,
+        item.employee_email,
+        item.changed_by_name,
+        item.changed_by_email,
+        item.notes,
+        item.employee_code,
+        item.role,
+        item.department,
+        item.designation,
+        ...(item.granted_menu_labels || []),
+        ...(item.removed_menu_labels || []),
+        ...(item.resulting_access_labels || []),
+        item.action,
+        item.scope,
+        item.module,
+      ].flat().filter(Boolean);
+
+      return values.map((value) => String(value)).filter((value) => {
+        const key = value.trim().toLowerCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).map((value) => ({
+        value,
+        label: value,
+        description: "History",
+      }));
+    });
+  }, [combinedHistory]);
+
+  const historyChangedByOptions = useMemo(() => {
+    const admins = Array.from(new Set(combinedHistory.map((item) => item.changed_by_email || item.changed_by_name).filter(Boolean)));
+    return [
+      { value: "all", label: "All admins" },
+      ...admins.sort((a, b) => a.localeCompare(b)).map((admin) => ({ value: admin, label: admin })),
+    ];
+  }, [combinedHistory]);
+
+  const historyDepartmentOptions = useMemo(() => {
+    const departments = Array.from(new Set(combinedHistory.map((item) => item.department).filter(Boolean)));
+    return [
+      { value: "all", label: "All departments" },
+      ...departments.sort((a, b) => a.localeCompare(b)).map((department) => ({ value: department, label: department })),
+    ];
+  }, [combinedHistory]);
+
+  const filteredBlockHistory = useMemo(() => {
+    const query = historySearch.trim().toLowerCase();
+    const startTime = historyFromDate ? new Date(`${historyFromDate}T00:00:00`).getTime() : null;
+    const endTime = historyToDate ? new Date(`${historyToDate}T23:59:59`).getTime() : null;
+
+    const filtered = combinedHistory.filter((item) => {
+      const changedTime = item.changed_at ? new Date(item.changed_at).getTime() : null;
+      const matchesSearch = !query || [
+        item.employee_name,
+        item.employee_email,
+        item.employee_code,
+        item.role,
+        item.department,
+        item.designation,
+        item.changed_by_name,
+        item.changed_by_email,
+        item.notes,
+        ...(item.granted_menu_labels || []),
+        ...(item.removed_menu_labels || []),
+        ...(item.resulting_access_labels || []),
+        item.action,
+        item.scope,
+        item.module,
+        getHistoryActionLabel(item),
+      ].flat().filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+      const matchesModule = historyModuleFilter === "all" || item.module === historyModuleFilter;
+      const matchesScope = historyScopeFilter === "all" || item.scope === historyScopeFilter;
+      const matchesAction = historyActionFilter === "all" || item.action === historyActionFilter;
+      const changedBy = item.changed_by_email || item.changed_by_name || "";
+      const matchesChangedBy = historyChangedByFilter === "all" || changedBy === historyChangedByFilter;
+      const matchesDepartment = historyDepartmentFilter === "all" || item.department === historyDepartmentFilter;
+      const matchesFirstDay = historyFirstDayFilter === "all"
+        || item.module === "admin-access"
+        || String(item.first_fortnight_block_day || "") === historyFirstDayFilter;
+      const matchesSecondDay = historySecondDayFilter === "all"
+        || item.module === "admin-access"
+        || String(item.second_fortnight_block_day || "") === historySecondDayFilter;
+      const matchesStart = !startTime || (changedTime && changedTime >= startTime);
+      const matchesEnd = !endTime || (changedTime && changedTime <= endTime);
+
+      return matchesSearch
+        && matchesModule
+        && matchesScope
+        && matchesAction
+        && matchesChangedBy
+        && matchesDepartment
+        && matchesFirstDay
+        && matchesSecondDay
+        && matchesStart
+        && matchesEnd;
+    });
+
+    filtered.sort((first, second) => {
+      const firstTime = first.changed_at ? new Date(first.changed_at).getTime() : 0;
+      const secondTime = second.changed_at ? new Date(second.changed_at).getTime() : 0;
+      switch (historySortBy) {
+        case "oldest":
+          return firstTime - secondTime;
+        case "scope":
+          return normalizeValue(first.scope).localeCompare(normalizeValue(second.scope)) || secondTime - firstTime;
+        case "action":
+          return normalizeValue(first.action).localeCompare(normalizeValue(second.action)) || secondTime - firstTime;
+        case "employee":
+          return normalizeValue(first.employee_name || first.employee_email).localeCompare(normalizeValue(second.employee_name || second.employee_email)) || secondTime - firstTime;
+        case "module":
+          return normalizeValue(first.module).localeCompare(normalizeValue(second.module)) || secondTime - firstTime;
+        case "newest":
+        default:
+          return secondTime - firstTime;
+      }
+    });
+
+    return filtered;
+  }, [
+    combinedHistory,
+    historyActionFilter,
+    historyChangedByFilter,
+    historyDepartmentFilter,
+    historyFirstDayFilter,
+    historyFromDate,
+    historyModuleFilter,
+    historyScopeFilter,
+    historySearch,
+    historySecondDayFilter,
+    historySortBy,
+    historyToDate,
+  ]);
+
+  const historyActiveFilterCount = useMemo(
+    () => [
+      historySearch.trim(),
+      historyModuleFilter !== "all",
+      historyScopeFilter !== "all",
+      historyActionFilter !== "all",
+      historyChangedByFilter !== "all",
+      historyDepartmentFilter !== "all",
+      historyFromDate,
+      historyToDate,
+      historyFirstDayFilter !== "all",
+      historySecondDayFilter !== "all",
+      historySortBy !== "newest",
+    ].filter(Boolean).length,
+    [
+      historyActionFilter,
+      historyChangedByFilter,
+      historyDepartmentFilter,
+      historyFirstDayFilter,
+      historyFromDate,
+      historyScopeFilter,
+      historySearch,
+      historyModuleFilter,
+      historySecondDayFilter,
+      historySortBy,
+      historyToDate,
+    ]
+  );
+
   const activeFilterCount = useMemo(
     () => [
       search.trim(),
@@ -437,6 +722,20 @@ const AccessManagement = ({ user }) => {
     setSortBy("name_asc");
   };
 
+  const resetHistoryFilters = () => {
+    setHistorySearch("");
+    setHistoryModuleFilter("all");
+    setHistoryScopeFilter("all");
+    setHistoryActionFilter("all");
+    setHistoryChangedByFilter("all");
+    setHistoryDepartmentFilter("all");
+    setHistoryFromDate("");
+    setHistoryToDate("");
+    setHistoryFirstDayFilter("all");
+    setHistorySecondDayFilter("all");
+    setHistorySortBy("newest");
+  };
+
   const togglePermission = async (targetUser, menuKey) => {
     if (targetUser.hasFullAdminAccess) return;
 
@@ -458,6 +757,7 @@ const AccessManagement = ({ user }) => {
       setUsers((current) =>
         current.map((item) => (item._id === targetUser._id ? response.data.user : item))
       );
+      setAdminAccessHistory(Array.isArray(response.data?.history) ? response.data.history : adminAccessHistory);
       setMessage(`Updated access for ${targetUser.name}`);
     } catch (error) {
       console.error("Failed to update delegated access", error);
@@ -511,6 +811,7 @@ const AccessManagement = ({ user }) => {
         effective_end: globalSettings.effective_end || "",
       });
       setEmployeeBlockOverrides(Array.isArray(response.data?.employee_overrides) ? response.data.employee_overrides : employeeBlockOverrides);
+      setBlockHistory(Array.isArray(response.data?.history) ? response.data.history : blockHistory);
       setMessage("Updated timesheet block dates for all employees");
     } catch (error) {
       console.error("Failed to update timesheet block dates", error);
@@ -543,6 +844,7 @@ const AccessManagement = ({ user }) => {
           ...current.filter((item) => item._id !== savedOverride._id),
         ]);
       }
+      setBlockHistory(Array.isArray(response.data?.history) ? response.data.history : blockHistory);
       resetOverrideDraft();
       setMessage("Saved employee-specific timesheet block rule");
     } catch (error) {
@@ -571,10 +873,11 @@ const AccessManagement = ({ user }) => {
     try {
       setSavingBlockSettings(true);
       setMessage("");
-      await axios.delete(`${API_BASE}/api/timesheets/block-settings/employee-overrides/${item._id}`, {
+      const response = await axios.delete(`${API_BASE}/api/timesheets/block-settings/employee-overrides/${item._id}`, {
         headers: requesterHeaders,
       });
       setEmployeeBlockOverrides((current) => current.filter((entry) => entry._id !== item._id));
+      setBlockHistory(Array.isArray(response.data?.history) ? response.data.history : blockHistory);
       if (overrideDraft._id === item._id) resetOverrideDraft();
       setMessage("Removed employee-specific timesheet block rule");
     } catch (error) {
@@ -625,41 +928,73 @@ const AccessManagement = ({ user }) => {
         </div>
       </header>
 
-      <section className="fiori-panel employee-filter-panel access-management-filter-panel">
-        <div className="fiori-panel-header employee-filter-panel-header">
-          <div>
-            <h3>Access Assignment</h3>
-            <p>Filter people deeply, then enable only the admin workspaces they should see and use.</p>
-          </div>
-          <div className="employee-filter-actions">
-            <button
-              type="button"
-              className="fiori-button secondary"
-              onClick={() => setShowFilters((current) => !current)}
-            >
-              <Filter size={16} />
-              <span>{showFilters ? "Hide Filters" : "Show Filters"}</span>
-              {showFilters ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            <button type="button" className="fiori-button secondary" onClick={loadWorkspace}>
-              <RefreshCw size={16} />
-              <span>Refresh</span>
-            </button>
-          </div>
-        </div>
+      <nav className="page-subtab-strip access-management-tab-strip" role="tablist" aria-label="Access management sections">
+        <button
+          type="button"
+          className={`page-subtab-button ${activeTab === "admin-access" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("admin-access")}
+          role="tab"
+          aria-selected={activeTab === "admin-access"}
+        >
+          Admin Access
+        </button>
+        <button
+          type="button"
+          className={`page-subtab-button ${activeTab === "timesheet-access" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("timesheet-access")}
+          role="tab"
+          aria-selected={activeTab === "timesheet-access"}
+        >
+          Timesheet Access
+        </button>
+        <button
+          type="button"
+          className={`page-subtab-button ${activeTab === "history" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("history")}
+          role="tab"
+          aria-selected={activeTab === "history"}
+        >
+          History
+        </button>
+      </nav>
 
-        {showFilters ? (
-          <div className="employee-directory-filters employee-directory-filters-extended">
-            <label className="employee-filter-field employee-filter-search">
-              <span>Search people</span>
-              <ValueHelpSearch
-                value={search}
-                onChange={setSearch}
-                suggestions={searchSuggestions}
-                placeholder="Search by name, email, employee ID, role, department, designation, or reporting lead"
-                className="access-management-search-help"
-              />
-            </label>
+      {activeTab === "admin-access" ? (
+        <>
+          <section className="fiori-panel employee-filter-panel access-management-filter-panel">
+            <div className="fiori-panel-header employee-filter-panel-header">
+              <div>
+                <h3>Access Assignment</h3>
+                <p>Filter people deeply, then enable only the admin workspaces they should see and use.</p>
+              </div>
+              <div className="employee-filter-actions">
+                <button
+                  type="button"
+                  className="fiori-button secondary"
+                  onClick={() => setShowFilters((current) => !current)}
+                >
+                  <Filter size={16} />
+                  <span>{showFilters ? "Hide Filters" : "Show Filters"}</span>
+                  {showFilters ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
+                <button type="button" className="fiori-button secondary" onClick={loadWorkspace}>
+                  <RefreshCw size={16} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            {showFilters ? (
+              <div className="employee-directory-filters employee-directory-filters-extended">
+                <label className="employee-filter-field employee-filter-search">
+                  <span>Search people</span>
+                  <ValueHelpSearch
+                    value={search}
+                    onChange={setSearch}
+                    suggestions={searchSuggestions}
+                    placeholder="Search by name, email, employee ID, role, department, designation, or reporting lead"
+                    className="access-management-search-help"
+                  />
+                </label>
 
             <label className="employee-filter-field">
               <span>Role</span>
@@ -780,26 +1115,151 @@ const AccessManagement = ({ user }) => {
                 <span>active filter{activeFilterCount === 1 ? "" : "s"}</span>
               </div>
             </div>
-          </div>
-        ) : null}
-      </section>
+              </div>
+            ) : null}
+          </section>
 
-      <section className="fiori-panel access-management-block-panel">
-        <div className="fiori-panel-header">
-          <div>
-            <h3>Timesheet Block Dates</h3>
-            <p>Set global cutoff dates, then add employee-specific ranges when one employee needs a different rule.</p>
-          </div>
-          <div className="access-management-matrix-meta">
-            <CalendarRange size={18} />
-            <span>Global and employee rules</span>
-          </div>
-        </div>
+          <section className="fiori-panel access-management-matrix-panel">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Delegated Access Matrix</h3>
+                <p>{filteredUsers.length} visible user{filteredUsers.length === 1 ? "" : "s"} in the current view.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <span>{options.length} admin menu{options.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
 
-        <div className="access-management-block-section">
-          <div className="access-management-block-section-head">
-            <strong>Global Rule</strong>
+            <div className="fiori-table-shell access-management-table-shell">
+              <table className="fiori-table access-management-table">
+                <thead>
+                  <tr>
+                    <th>Person</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    {options.map((option) => (
+                      <th key={option.key}>{option.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredUsers.map((item) => {
+                    const isSaving = savingUserId === item._id;
+
+                    return (
+                      <tr
+                        key={item._id}
+                        className={item.hasFullAdminAccess ? "is-full-admin-row" : ""}
+                      >
+                        <td className="access-management-person-cell">
+                          <div className="fiori-primary-cell access-management-primary-cell">
+                            <strong>{item.name || "Unnamed user"}</strong>
+                            <span>{item.email || "No email"}</span>
+                            <span>{item.employeeId || item._id}</span>
+                          </div>
+                        </td>
+                        <td className="access-management-role-cell">
+                          <div className="fiori-primary-cell access-management-primary-cell">
+                            <strong>{item.role || "Employee"}</strong>
+                            <span>{item.designation || "No designation"}</span>
+                            <span>{item.department || "No department"}</span>
+                          </div>
+                        </td>
+                        <td className="access-management-status-cell">
+                          <span
+                            className={`fiori-status-pill ${
+                              item.hasFullAdminAccess
+                                ? "is-neutral"
+                                : item.is_active === false
+                                  ? "is-rejected"
+                                  : "is-approved"
+                            }`}
+                          >
+                            {item.hasFullAdminAccess
+                              ? "Full Admin"
+                              : item.is_active === false
+                                ? "Inactive"
+                                : "Active"}
+                          </span>
+                        </td>
+                        {options.map((option) => {
+                          const checked = (item.adminMenuAccess || []).includes(option.key);
+
+                          return (
+                            <td key={option.key} className="access-management-permission-cell">
+                              <label
+                                className="access-management-toggle"
+                                title={option.description || option.label}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  disabled={item.hasFullAdminAccess || isSaving}
+                                  onChange={() => togglePermission(item, option.key)}
+                                />
+                                <span>{item.hasFullAdminAccess ? "Included" : checked ? "Granted" : "Off"}</span>
+                              </label>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                  {!filteredUsers.length ? (
+                    <tr>
+                      <td colSpan={3 + options.length} className="access-management-empty-state">
+                        No users match the current search.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {activeTab === "timesheet-access" ? (
+        <section className="timesheet-access-workspace">
+          <div className="timesheet-access-summary">
+            <div className="timesheet-access-stat">
+              <CalendarRange size={18} />
+              <div>
+                <span>First fortnight</span>
+                <strong>Day {blockSettings.first_fortnight_block_day}</strong>
+              </div>
+            </div>
+            <div className="timesheet-access-stat">
+              <ShieldCheck size={18} />
+              <div>
+                <span>Second fortnight</span>
+                <strong>Day {blockSettings.second_fortnight_block_day}</strong>
+              </div>
+            </div>
+            <div className="timesheet-access-stat">
+              <UserCog size={18} />
+              <div>
+                <span>Employee exceptions</span>
+                <strong>{employeeBlockOverrides.length}</strong>
+              </div>
+            </div>
+            <button type="button" className="timesheet-access-refresh" onClick={loadWorkspace}>
+              <RefreshCw size={16} />
+              <span>Refresh</span>
+            </button>
           </div>
+
+          <section className="fiori-panel access-management-block-panel timesheet-access-card">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Global Rule</h3>
+                <p>These dates apply to everyone unless an employee-specific rule is active for the period.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <CalendarRange size={18} />
+                <span>Default cutoff</span>
+              </div>
+            </div>
 
           <div className="access-management-block-grid is-global">
             <label className="access-management-block-field">
@@ -874,12 +1334,19 @@ const AccessManagement = ({ user }) => {
               </button>
             </div>
           </div>
-        </div>
+          </section>
 
-        <div className="access-management-block-section">
-          <div className="access-management-block-section-head">
-            <strong>Employee-Specific Rule</strong>
-          </div>
+          <section className="fiori-panel access-management-block-panel timesheet-access-card">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Employee-Specific Rule</h3>
+                <p>Add a temporary or permanent override for one employee without changing the global rule.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <UserCog size={18} />
+                <span>{filteredEmployeeBlockOverrides.length} visible rule{filteredEmployeeBlockOverrides.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
 
           <div className="access-management-block-grid is-employee">
             <label className="access-management-block-field is-wide">
@@ -980,106 +1447,215 @@ const AccessManagement = ({ user }) => {
               <div className="access-management-block-empty">No employee-specific rules match the current filters.</div>
             ) : null}
           </div>
-        </div>
-      </section>
+          </section>
 
-      <section className="fiori-panel access-management-matrix-panel">
-        <div className="fiori-panel-header">
-          <div>
-            <h3>Delegated Access Matrix</h3>
-            <p>{filteredUsers.length} visible user{filteredUsers.length === 1 ? "" : "s"} in the current view.</p>
-          </div>
-          <div className="access-management-matrix-meta">
-            <span>{options.length} admin menu{options.length === 1 ? "" : "s"}</span>
-          </div>
-        </div>
+        </section>
+      ) : null}
 
-        <div className="fiori-table-shell access-management-table-shell">
-          <table className="fiori-table access-management-table">
-            <thead>
-              <tr>
-                <th>Person</th>
-                <th>Role</th>
-                <th>Status</th>
-                {options.map((option) => (
-                  <th key={option.key}>{option.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredUsers.map((item) => {
-                const isSaving = savingUserId === item._id;
+      {activeTab === "history" ? (
+        <section className="timesheet-access-workspace">
+          <section className="fiori-panel access-management-block-panel timesheet-access-card">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>History</h3>
+                <p>Recent admin access grants and timesheet access rule changes made by admins.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <Clock3 size={18} />
+                <span>{filteredBlockHistory.length} of {combinedHistory.length} change{combinedHistory.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
 
-                return (
-                  <tr
-                    key={item._id}
-                    className={item.hasFullAdminAccess ? "is-full-admin-row" : ""}
-                  >
-                    <td className="access-management-person-cell">
-                      <div className="fiori-primary-cell access-management-primary-cell">
-                        <strong>{item.name || "Unnamed user"}</strong>
-                        <span>{item.email || "No email"}</span>
-                        <span>{item.employeeId || item._id}</span>
-                      </div>
-                    </td>
-                    <td className="access-management-role-cell">
-                      <div className="fiori-primary-cell access-management-primary-cell">
-                        <strong>{item.role || "Employee"}</strong>
-                        <span>{item.designation || "No designation"}</span>
-                        <span>{item.department || "No department"}</span>
-                      </div>
-                    </td>
-                    <td className="access-management-status-cell">
-                      <span
-                        className={`fiori-status-pill ${
-                          item.hasFullAdminAccess
-                            ? "is-neutral"
-                            : item.is_active === false
-                              ? "is-rejected"
-                              : "is-approved"
-                        }`}
-                      >
-                        {item.hasFullAdminAccess
-                          ? "Full Admin"
-                          : item.is_active === false
-                            ? "Inactive"
-                            : "Active"}
-                      </span>
-                    </td>
-                    {options.map((option) => {
-                      const checked = (item.adminMenuAccess || []).includes(option.key);
+            <div className="timesheet-access-history-filters">
+              <label className="access-management-block-field is-history-search">
+                <span>Search History</span>
+                <strong>Employee, admin, action, or note</strong>
+                <ValueHelpSearch
+                  value={historySearch}
+                  onChange={setHistorySearch}
+                  suggestions={historySearchSuggestions}
+                  placeholder="Search history records"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Module</span>
+                <strong>History type</strong>
+                <ValueHelpSelect
+                  value={historyModuleFilter}
+                  onChange={setHistoryModuleFilter}
+                  options={historyModuleOptions}
+                  placeholder="All history"
+                  searchPlaceholder="Search history types"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Scope</span>
+                <strong>Rule type</strong>
+                <ValueHelpSelect
+                  value={historyScopeFilter}
+                  onChange={setHistoryScopeFilter}
+                  options={historyScopeOptions}
+                  placeholder="All scopes"
+                  searchPlaceholder="Search scopes"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Action</span>
+                <strong>Change type</strong>
+                <ValueHelpSelect
+                  value={historyActionFilter}
+                  onChange={setHistoryActionFilter}
+                  options={historyActionOptions}
+                  placeholder="All actions"
+                  searchPlaceholder="Search actions"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Changed By</span>
+                <strong>Admin user</strong>
+                <ValueHelpSelect
+                  value={historyChangedByFilter}
+                  onChange={setHistoryChangedByFilter}
+                  options={historyChangedByOptions}
+                  placeholder="All admins"
+                  searchPlaceholder="Search admins"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Department</span>
+                <strong>Target user</strong>
+                <ValueHelpSelect
+                  value={historyDepartmentFilter}
+                  onChange={setHistoryDepartmentFilter}
+                  options={historyDepartmentOptions}
+                  placeholder="All departments"
+                  searchPlaceholder="Search departments"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>From Date</span>
+                <strong>Changed after</strong>
+                <input
+                  className="input"
+                  type="date"
+                  value={historyFromDate}
+                  onChange={(event) => setHistoryFromDate(event.target.value)}
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>To Date</span>
+                <strong>Changed before</strong>
+                <input
+                  className="input"
+                  type="date"
+                  value={historyToDate}
+                  onChange={(event) => setHistoryToDate(event.target.value)}
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>First Day</span>
+                <strong>Fortnight cutoff</strong>
+                <ValueHelpSelect
+                  value={historyFirstDayFilter}
+                  onChange={setHistoryFirstDayFilter}
+                  options={historyFirstDayOptions}
+                  placeholder="Any first day"
+                  searchPlaceholder="Search first days"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Second Day</span>
+                <strong>Fortnight cutoff</strong>
+                <ValueHelpSelect
+                  value={historySecondDayFilter}
+                  onChange={setHistorySecondDayFilter}
+                  options={historySecondDayOptions}
+                  placeholder="Any second day"
+                  searchPlaceholder="Search second days"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Sort By</span>
+                <strong>Order results</strong>
+                <ValueHelpSelect
+                  value={historySortBy}
+                  onChange={setHistorySortBy}
+                  options={historySortOptions}
+                  placeholder="Sort history"
+                  searchPlaceholder="Search sort options"
+                />
+              </label>
+              <div className="timesheet-access-history-filter-actions">
+                <button
+                  type="button"
+                  className="fiori-button secondary"
+                  onClick={resetHistoryFilters}
+                  disabled={historyActiveFilterCount === 0}
+                >
+                  Reset Filters
+                </button>
+                <div className="employee-directory-filter-meta">
+                  <strong>{historyActiveFilterCount}</strong>
+                  <span>active filter{historyActiveFilterCount === 1 ? "" : "s"}</span>
+                </div>
+              </div>
+            </div>
 
-                      return (
-                        <td key={option.key} className="access-management-permission-cell">
-                          <label
-                            className="access-management-toggle"
-                            title={option.description || option.label}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              disabled={item.hasFullAdminAccess || isSaving}
-                              onChange={() => togglePermission(item, option.key)}
-                            />
-                            <span>{item.hasFullAdminAccess ? "Included" : checked ? "Granted" : "Off"}</span>
-                          </label>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-              {!filteredUsers.length ? (
-                <tr>
-                  <td colSpan={3 + options.length} className="access-management-empty-state">
-                    No users match the current search.
-                  </td>
-                </tr>
+            <div className="timesheet-access-history-list">
+              {filteredBlockHistory.map((item) => (
+                <article key={item._id} className="timesheet-access-history-item">
+                  <div className="timesheet-access-history-main">
+                    <History size={16} />
+                    <div>
+                      <strong>{getHistoryActionLabel(item)}</strong>
+                      <span>{formatHistoryTime(item.changed_at)}</span>
+                    </div>
+                  </div>
+                  <div className="timesheet-access-history-person">
+                    <strong>{item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee"}</strong>
+                    <span>
+                      {item.module === "admin-access"
+                        ? [item.employee_email, item.department].filter(Boolean).join(" • ") || "Delegated admin access"
+                        : item.scope === "global" ? "Default rule" : item.employee_email || "Employee override"}
+                    </span>
+                  </div>
+                  <div className="timesheet-access-history-days">
+                    {item.module === "admin-access" ? (
+                      <>
+                        <span>Granted: {(item.granted_menu_labels || []).length}</span>
+                        <span>Removed: {(item.removed_menu_labels || []).length}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>First: Day {item.first_fortnight_block_day}</span>
+                        <span>Second: Day {item.second_fortnight_block_day}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="timesheet-access-history-range">
+                    <span>
+                      {item.module === "admin-access"
+                        ? [
+                            ...(item.granted_menu_labels || []).map((label) => `+ ${label}`),
+                            ...(item.removed_menu_labels || []).map((label) => `- ${label}`),
+                          ].join(", ") || "No menu changes"
+                        : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`}
+                    </span>
+                    <small>{item.notes || item.changed_by_name || item.changed_by_email || "No note"}</small>
+                  </div>
+                </article>
+              ))}
+              {!filteredBlockHistory.length ? (
+                <div className="access-management-block-empty">
+                  {combinedHistory.length === 0
+                    ? "No access management history is available yet."
+                    : "No history records match the current filters."}
+                </div>
               ) : null}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </div>
+          </section>
+        </section>
+      ) : null}
 
       {message ? (
         <div
