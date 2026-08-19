@@ -125,6 +125,7 @@ def run():
         mongo.db.charge_codes.delete_many({"testTag": RUN_TAG})
         mongo.db.users.delete_many({"testTag": RUN_TAG})
         mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
+        mongo.db.timesheet_block_overrides.delete_many({"notes": {"$regex": RUN_TAG}})
 
         admin, manager, employee = seed_users()
         charge_code_id = seed_charge_code(employee)
@@ -183,7 +184,34 @@ def run():
             assert_true(configured_payload.get("entry_blocked") is True, "Configured block date should apply to all employees")
             results.append("PASS: admin-configured first-half block date applies globally")
 
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 7, 14)):
+            override_response = client.post(
+                "/api/timesheets/block-settings/employee-overrides",
+                json={
+                    "employee_id": str(employee["_id"]),
+                    "first_fortnight_block_day": 15,
+                    "second_fortnight_block_day": 29,
+                    "effective_start": "2026-07-01",
+                    "effective_end": "2026-07-31",
+                    "notes": f"{RUN_TAG} employee override",
+                },
+                headers=header(admin["_id"]),
+            )
+            assert_status(override_response, 200, "Admin saves employee-specific block override")
+
+            override_access = client.get(
+                f"/api/timesheets/period-access?employee_id={employee['_id']}&period_start=2026-07-01&period_end=2026-07-15",
+                headers=header(employee["_id"]),
+            )
+            assert_status(override_access, 200, "Period access after employee-specific block override")
+            override_payload = override_access.get_json() or {}
+            assert_true(override_payload.get("block_rule_scope") == "employee", "Employee override should take precedence over global rule")
+            assert_true(override_payload.get("entry_deadline_date") == "2026-07-15", "Employee override should map first-half block date")
+            assert_true(override_payload.get("entry_blocked") is False, "Employee override should keep July 14 editable for this employee")
+            results.append("PASS: employee-specific block date range overrides the global rule")
+
         mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
+        mongo.db.timesheet_block_overrides.delete_many({"notes": {"$regex": RUN_TAG}})
 
         with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 8, 18)):
             august_save = client.post(
@@ -276,6 +304,7 @@ def run():
 
     with app.app_context():
         mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
+        mongo.db.timesheet_block_overrides.delete_many({"notes": {"$regex": RUN_TAG}})
         mongo.db.timesheet_period_unlocks.delete_many({"employee_email": "unlock-employee@naxrita.local"})
         mongo.db.notifications.delete_many({"message": {"$regex": RUN_TAG}})
         mongo.db.timesheets.delete_many({"testTag": RUN_TAG})

@@ -21,6 +21,8 @@ TIMESHEET_BLOCK_SETTINGS_KEY = "global_timesheet_block_settings"
 DEFAULT_TIMESHEET_BLOCK_SETTINGS = {
     "first_fortnight_block_day": 14,
     "second_fortnight_block_day": 28,
+    "effective_start": "",
+    "effective_end": "",
 }
 
 ABSENCE_CHARGE_CODES = {
@@ -856,6 +858,10 @@ def normalize_timesheet_block_settings(settings=None):
         except Exception:
             value = normalized[key]
         normalized[key] = max(min_day, min(value, max_day))
+    for key in ("effective_start", "effective_end"):
+        normalized[key] = normalize_date_key(settings.get(key)) or ""
+    if normalized["effective_start"] and normalized["effective_end"] and normalized["effective_start"] > normalized["effective_end"]:
+        normalized["effective_start"], normalized["effective_end"] = normalized["effective_end"], normalized["effective_start"]
     return normalized
 
 
@@ -873,12 +879,82 @@ def get_timesheet_block_settings():
     return normalize_timesheet_block_settings(settings.get("value") or settings)
 
 
-def get_fortnight_deadline_date(period_start, period_end):
+def rule_matches_period(settings, period_start_date, period_end_date):
+    if not period_start_date or not period_end_date:
+        return False
+
+    effective_start = settings.get("effective_start")
+    effective_end = settings.get("effective_end")
+    start_bound = datetime.strptime(effective_start, "%Y-%m-%d").date() if effective_start else None
+    end_bound = datetime.strptime(effective_end, "%Y-%m-%d").date() if effective_end else None
+
+    if start_bound and period_end_date < start_bound:
+        return False
+    if end_bound and period_start_date > end_bound:
+        return False
+    return True
+
+
+def serialize_timesheet_block_override(override):
+    if not override:
+        return None
+    return {
+        "_id": str(override.get("_id")),
+        "employee_id": str(override.get("employee_id")),
+        "employee_name": override.get("employee_name", ""),
+        "employee_email": override.get("employee_email", ""),
+        "first_fortnight_block_day": override.get("first_fortnight_block_day", 14),
+        "second_fortnight_block_day": override.get("second_fortnight_block_day", 28),
+        "effective_start": override.get("effective_start", ""),
+        "effective_end": override.get("effective_end", ""),
+        "is_active": override.get("is_active", True),
+        "notes": override.get("notes", ""),
+        "updated_at": override.get("updated_at").isoformat() if isinstance(override.get("updated_at"), datetime) else override.get("updated_at"),
+    }
+
+
+def get_matching_employee_block_override(employee_id, period_start_date, period_end_date):
+    if not employee_id:
+        return None
+    try:
+        employee_obj_id = employee_id if isinstance(employee_id, ObjectId) else ObjectId(employee_id)
+    except Exception:
+        return None
+
+    overrides = list(mongo.db.timesheet_block_overrides.find({
+        "employee_id": employee_obj_id,
+        "is_active": True,
+    }).sort("updated_at", -1))
+    for override in overrides:
+        settings = normalize_timesheet_block_settings(override)
+        if rule_matches_period(settings, period_start_date, period_end_date):
+            return settings, override
+    return None
+
+
+def resolve_timesheet_block_settings(employee_id, period_start, period_end):
+    start_date, end_date = get_period_bounds(period_start, period_end)
+    if not start_date or not end_date:
+        return None, None
+
+    employee_match = get_matching_employee_block_override(employee_id, start_date, end_date)
+    if employee_match:
+        return employee_match
+
+    global_settings = get_timesheet_block_settings()
+    if not rule_matches_period(global_settings, start_date, end_date):
+        return None, None
+    return global_settings, None
+
+
+def get_fortnight_deadline_date(period_start, period_end, employee_id=None):
     start_date, end_date = get_period_bounds(period_start, period_end)
     if not start_date or not end_date:
         return None
 
-    settings = get_timesheet_block_settings()
+    settings, _ = resolve_timesheet_block_settings(employee_id, period_start, period_end)
+    if not settings:
+        return None
     if start_date.day == 1 and end_date.day == 15:
         return clamp_day_for_month(start_date, settings["first_fortnight_block_day"])
     if start_date.day == 16:
@@ -898,8 +974,8 @@ def is_timesheet_restriction_exempt(period_start, period_end):
     )
 
 
-def get_fortnight_deadline_label(period_start, period_end):
-    deadline = get_fortnight_deadline_date(period_start, period_end)
+def get_fortnight_deadline_label(period_start, period_end, employee_id=None):
+    deadline = get_fortnight_deadline_date(period_start, period_end, employee_id=employee_id)
     start_date, end_date = get_period_bounds(period_start, period_end)
     if not deadline or not start_date or not end_date:
         return ""
@@ -930,7 +1006,7 @@ def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=
     if is_timesheet_restriction_exempt(period_start, period_end):
         return False
 
-    deadline = get_fortnight_deadline_date(period_start, period_end)
+    deadline = get_fortnight_deadline_date(period_start, period_end, employee_id=employee_id)
     if not deadline:
         return False
 
@@ -943,17 +1019,21 @@ def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=
 
 def get_period_access_state(employee_id, period_start, period_end, reference=None):
     unlock = get_timesheet_period_unlock(employee_id, period_start, period_end)
-    deadline = get_fortnight_deadline_date(period_start, period_end)
+    deadline = get_fortnight_deadline_date(period_start, period_end, employee_id=employee_id)
+    settings, override_record = resolve_timesheet_block_settings(employee_id, period_start, period_end)
     blocked = is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=reference)
     return {
         "employee_id": employee_id,
         "period_start": period_start,
         "period_end": period_end,
         "entry_deadline_date": deadline.strftime("%Y-%m-%d") if deadline else "",
-        "entry_deadline_label": get_fortnight_deadline_label(period_start, period_end),
+        "entry_deadline_label": get_fortnight_deadline_label(period_start, period_end, employee_id=employee_id),
         "entry_blocked": blocked,
         "unlock_active": bool(unlock),
         "unlock_record": unlock,
+        "block_rule_scope": "employee" if override_record else ("global" if settings else "none"),
+        "block_rule": settings or {},
+        "block_rule_override": serialize_timesheet_block_override(override_record) if override_record else None,
     }
 
 
@@ -1882,7 +1962,7 @@ def create_timesheet():
         })
         if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
             return jsonify({
-                "error": get_fortnight_deadline_label(period_start, period_end)
+                "error": get_fortnight_deadline_label(period_start, period_end, employee_id=emp_obj_id)
             }), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
             return jsonify({
@@ -2138,7 +2218,7 @@ def save_timesheet_draft():
             "period_end": period_end,
         })
         if is_fortnight_entry_blocked(emp_obj_id, period_start, period_end):
-            return jsonify({"error": get_fortnight_deadline_label(period_start, period_end)}), 400
+            return jsonify({"error": get_fortnight_deadline_label(period_start, period_end, employee_id=emp_obj_id)}), 400
         if existing and existing.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be saved as drafts"}), 400
         if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
@@ -2233,7 +2313,7 @@ def submit_timesheet(timesheet_id):
         if not ts:
             return jsonify({"error": "Timesheet not found"}), 404
         if is_fortnight_entry_blocked(ts.get("employee_id"), ts.get("period_start"), ts.get("period_end")):
-            return jsonify({"error": get_fortnight_deadline_label(ts.get("period_start"), ts.get("period_end"))}), 400
+            return jsonify({"error": get_fortnight_deadline_label(ts.get("period_start"), ts.get("period_end"), employee_id=ts.get("employee_id"))}), 400
         if ts.get("status") == "approved" and not is_approved_edit_window_open(ts):
             return jsonify({"error": "Timesheet is already approved"}), 400
         if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(ts):
@@ -2887,7 +2967,13 @@ def get_timesheet_block_settings_route():
         if error_response:
             return error_response
 
-        return jsonify(get_timesheet_block_settings()), 200
+        global_settings = get_timesheet_block_settings()
+        overrides = list(mongo.db.timesheet_block_overrides.find({"is_active": True}).sort("updated_at", -1))
+        return jsonify({
+            **global_settings,
+            "global": global_settings,
+            "employee_overrides": [serialize_timesheet_block_override(item) for item in overrides],
+        }), 200
     except Exception as e:
         print(f"❌ Error fetching timesheet block settings: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -2918,9 +3004,87 @@ def update_timesheet_block_settings_route():
             },
             upsert=True,
         )
-        return jsonify(settings), 200
+        overrides = list(mongo.db.timesheet_block_overrides.find({"is_active": True}).sort("updated_at", -1))
+        return jsonify({
+            **settings,
+            "global": settings,
+            "employee_overrides": [serialize_timesheet_block_override(item) for item in overrides],
+        }), 200
     except Exception as e:
         print(f"❌ Error updating timesheet block settings: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/block-settings/employee-overrides", methods=["POST"])
+def save_timesheet_employee_block_override():
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        employee_id = str(data.get("employee_id", "")).strip()
+        if not employee_id:
+            return jsonify({"error": "employee_id is required"}), 400
+
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
+        if not employee:
+            return jsonify({"error": "Employee not found"}), 404
+
+        settings = normalize_timesheet_block_settings(data)
+        notes = str(data.get("notes", "")).strip()
+        now = datetime.utcnow()
+        override_doc = {
+            "employee_id": employee["_id"],
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+            **settings,
+            "notes": notes,
+            "is_active": True,
+            "updated_at": now,
+            "updated_by": requester.get("_id"),
+            "updated_by_name": requester.get("name", ""),
+            "updated_by_email": requester.get("email", ""),
+        }
+
+        override_id = str(data.get("_id") or "").strip()
+        if override_id:
+            mongo.db.timesheet_block_overrides.update_one(
+                {"_id": ObjectId(override_id)},
+                {"$set": override_doc},
+            )
+            saved = mongo.db.timesheet_block_overrides.find_one({"_id": ObjectId(override_id)})
+        else:
+            override_doc["created_at"] = now
+            result = mongo.db.timesheet_block_overrides.insert_one(override_doc)
+            saved = mongo.db.timesheet_block_overrides.find_one({"_id": result.inserted_id})
+
+        return jsonify({"override": serialize_timesheet_block_override(saved)}), 200
+    except Exception as e:
+        print(f"❌ Error saving employee timesheet block override: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@timesheet_bp.route("/block-settings/employee-overrides/<override_id>", methods=["DELETE"])
+def delete_timesheet_employee_block_override(override_id):
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        mongo.db.timesheet_block_overrides.update_one(
+            {"_id": ObjectId(override_id)},
+            {
+                "$set": {
+                    "is_active": False,
+                    "deleted_at": datetime.utcnow(),
+                    "deleted_by": requester.get("_id"),
+                }
+            },
+        )
+        return jsonify({"message": "Employee-specific block rule removed"}), 200
+    except Exception as e:
+        print(f"❌ Error deleting employee timesheet block override: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

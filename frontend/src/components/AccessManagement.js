@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarRange, ChevronDown, ChevronUp, Filter, RefreshCw, Save } from "lucide-react";
+import { CalendarRange, ChevronDown, ChevronUp, Filter, RefreshCw, Save, Trash2 } from "lucide-react";
 
 import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
@@ -72,7 +72,21 @@ const AccessManagement = ({ user }) => {
   const [blockSettings, setBlockSettings] = useState({
     first_fortnight_block_day: 14,
     second_fortnight_block_day: 28,
+    effective_start: "",
+    effective_end: "",
   });
+  const [employeeBlockOverrides, setEmployeeBlockOverrides] = useState([]);
+  const [overrideDraft, setOverrideDraft] = useState({
+    _id: "",
+    employee_id: "",
+    first_fortnight_block_day: 14,
+    second_fortnight_block_day: 28,
+    effective_start: "",
+    effective_end: "",
+    notes: "",
+  });
+  const [overrideSearch, setOverrideSearch] = useState("");
+  const [overrideDateFilter, setOverrideDateFilter] = useState("");
   const [savingBlockSettings, setSavingBlockSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -91,10 +105,14 @@ const AccessManagement = ({ user }) => {
       });
       setOptions(Array.isArray(response.data?.options) ? response.data.options : []);
       setUsers(Array.isArray(response.data?.users) ? response.data.users : []);
+      const globalSettings = blockSettingsResponse.data?.global || blockSettingsResponse.data || {};
       setBlockSettings({
-        first_fortnight_block_day: Number(blockSettingsResponse.data?.first_fortnight_block_day || 14),
-        second_fortnight_block_day: Number(blockSettingsResponse.data?.second_fortnight_block_day || 28),
+        first_fortnight_block_day: Number(globalSettings.first_fortnight_block_day || 14),
+        second_fortnight_block_day: Number(globalSettings.second_fortnight_block_day || 28),
+        effective_start: globalSettings.effective_start || "",
+        effective_end: globalSettings.effective_end || "",
       });
+      setEmployeeBlockOverrides(Array.isArray(blockSettingsResponse.data?.employee_overrides) ? blockSettingsResponse.data.employee_overrides : []);
     } catch (error) {
       console.error("Failed to load access management data", error);
       setMessage(error.response?.data?.error || "Failed to load access management data");
@@ -348,6 +366,33 @@ const AccessManagement = ({ user }) => {
     ],
     []
   );
+  const employeeBlockOptions = useMemo(
+    () => users
+      .filter((item) => !item.hasFullAdminAccess)
+      .map((item) => ({
+        value: item._id,
+        label: item.name || item.email || item.employeeId || item._id,
+        description: [item.employeeId, item.email, item.department].filter(Boolean).join(" • "),
+      })),
+    [users]
+  );
+  const filteredEmployeeBlockOverrides = useMemo(() => {
+    const query = overrideSearch.trim().toLowerCase();
+    return employeeBlockOverrides.filter((item) => {
+      const matchesSearch = !query || [
+        item.employee_name,
+        item.employee_email,
+        item.employee_id,
+        item.notes,
+      ].filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+      const matchesDate = !overrideDateFilter
+        || (
+          (!item.effective_start || item.effective_start <= overrideDateFilter)
+          && (!item.effective_end || item.effective_end >= overrideDateFilter)
+        );
+      return matchesSearch && matchesDate;
+    });
+  }, [employeeBlockOverrides, overrideDateFilter, overrideSearch]);
 
   const activeFilterCount = useMemo(
     () => [
@@ -424,11 +469,29 @@ const AccessManagement = ({ user }) => {
   };
 
   const updateBlockSetting = (key, value) => {
-    const numericValue = Number(value);
     setBlockSettings((current) => ({
       ...current,
-      [key]: numericValue,
+      [key]: key.includes("_day") ? Number(value) : value,
     }));
+  };
+
+  const updateOverrideDraft = (key, value) => {
+    setOverrideDraft((current) => ({
+      ...current,
+      [key]: key.includes("_day") ? Number(value) : value,
+    }));
+  };
+
+  const resetOverrideDraft = () => {
+    setOverrideDraft({
+      _id: "",
+      employee_id: "",
+      first_fortnight_block_day: 14,
+      second_fortnight_block_day: 28,
+      effective_start: "",
+      effective_end: "",
+      notes: "",
+    });
   };
 
   const saveBlockSettings = async () => {
@@ -440,14 +503,83 @@ const AccessManagement = ({ user }) => {
         blockSettings,
         { headers: requesterHeaders }
       );
+      const globalSettings = response.data?.global || response.data || {};
       setBlockSettings({
-        first_fortnight_block_day: Number(response.data?.first_fortnight_block_day || 14),
-        second_fortnight_block_day: Number(response.data?.second_fortnight_block_day || 28),
+        first_fortnight_block_day: Number(globalSettings.first_fortnight_block_day || 14),
+        second_fortnight_block_day: Number(globalSettings.second_fortnight_block_day || 28),
+        effective_start: globalSettings.effective_start || "",
+        effective_end: globalSettings.effective_end || "",
       });
+      setEmployeeBlockOverrides(Array.isArray(response.data?.employee_overrides) ? response.data.employee_overrides : employeeBlockOverrides);
       setMessage("Updated timesheet block dates for all employees");
     } catch (error) {
       console.error("Failed to update timesheet block dates", error);
       setMessage(error.response?.data?.error || "Failed to update timesheet block dates");
+    } finally {
+      setSavingBlockSettings(false);
+      window.setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
+  const saveEmployeeBlockOverride = async () => {
+    if (!overrideDraft.employee_id) {
+      setMessage("Select an employee for the specific block rule");
+      window.setTimeout(() => setMessage(""), 3000);
+      return;
+    }
+
+    try {
+      setSavingBlockSettings(true);
+      setMessage("");
+      const response = await axios.post(
+        `${API_BASE}/api/timesheets/block-settings/employee-overrides`,
+        overrideDraft,
+        { headers: requesterHeaders }
+      );
+      const savedOverride = response.data?.override;
+      if (savedOverride) {
+        setEmployeeBlockOverrides((current) => [
+          savedOverride,
+          ...current.filter((item) => item._id !== savedOverride._id),
+        ]);
+      }
+      resetOverrideDraft();
+      setMessage("Saved employee-specific timesheet block rule");
+    } catch (error) {
+      console.error("Failed to save employee-specific block rule", error);
+      setMessage(error.response?.data?.error || "Failed to save employee-specific block rule");
+    } finally {
+      setSavingBlockSettings(false);
+      window.setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
+  const editEmployeeBlockOverride = (item) => {
+    setOverrideDraft({
+      _id: item._id || "",
+      employee_id: item.employee_id || "",
+      first_fortnight_block_day: Number(item.first_fortnight_block_day || 14),
+      second_fortnight_block_day: Number(item.second_fortnight_block_day || 28),
+      effective_start: item.effective_start || "",
+      effective_end: item.effective_end || "",
+      notes: item.notes || "",
+    });
+  };
+
+  const deleteEmployeeBlockOverride = async (item) => {
+    if (!item?._id) return;
+    try {
+      setSavingBlockSettings(true);
+      setMessage("");
+      await axios.delete(`${API_BASE}/api/timesheets/block-settings/employee-overrides/${item._id}`, {
+        headers: requesterHeaders,
+      });
+      setEmployeeBlockOverrides((current) => current.filter((entry) => entry._id !== item._id));
+      if (overrideDraft._id === item._id) resetOverrideDraft();
+      setMessage("Removed employee-specific timesheet block rule");
+    } catch (error) {
+      console.error("Failed to remove employee-specific block rule", error);
+      setMessage(error.response?.data?.error || "Failed to remove employee-specific block rule");
     } finally {
       setSavingBlockSettings(false);
       window.setTimeout(() => setMessage(""), 3000);
@@ -656,67 +788,197 @@ const AccessManagement = ({ user }) => {
         <div className="fiori-panel-header">
           <div>
             <h3>Timesheet Block Dates</h3>
-            <p>Set the global cutoff day for both fortnights. These dates apply to every employee timesheet period.</p>
+            <p>Set global cutoff dates, then add employee-specific ranges when one employee needs a different rule.</p>
           </div>
           <div className="access-management-matrix-meta">
             <CalendarRange size={18} />
-            <span>Global rule</span>
+            <span>Global and employee rules</span>
           </div>
         </div>
 
-        <div className="access-management-block-grid">
-          <label className="access-management-block-field">
-            <span>First Fortnight</span>
-            <strong>Block day</strong>
-            <select
-              className="input"
-              value={blockSettings.first_fortnight_block_day}
-              onChange={(event) => updateBlockSetting("first_fortnight_block_day", event.target.value)}
-            >
-              {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => (
-                <option key={day} value={day}>
-                  {day}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="access-management-block-field">
-            <span>Second Fortnight</span>
-            <strong>Block day</strong>
-            <select
-              className="input"
-              value={blockSettings.second_fortnight_block_day}
-              onChange={(event) => updateBlockSetting("second_fortnight_block_day", event.target.value)}
-            >
-              {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => (
-                <option key={day} value={day}>
-                  {day}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <div className="access-management-block-chip">
-            <strong>{blockSettings.first_fortnight_block_day}</strong>
-            <span>blocks 1-15 periods</span>
+        <div className="access-management-block-section">
+          <div className="access-management-block-section-head">
+            <strong>Global Rule</strong>
           </div>
+
+          <div className="access-management-block-grid is-global">
+            <label className="access-management-block-field">
+              <span>First Fortnight</span>
+              <strong>Block day</strong>
+              <select
+                className="input"
+                value={blockSettings.first_fortnight_block_day}
+                onChange={(event) => updateBlockSetting("first_fortnight_block_day", event.target.value)}
+              >
+                {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => (
+                  <option key={day} value={day}>{day}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="access-management-block-field">
+              <span>Second Fortnight</span>
+              <strong>Block day</strong>
+              <select
+                className="input"
+                value={blockSettings.second_fortnight_block_day}
+                onChange={(event) => updateBlockSetting("second_fortnight_block_day", event.target.value)}
+              >
+                {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => (
+                  <option key={day} value={day}>{day}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="access-management-block-field">
+              <span>Effective From</span>
+              <strong>Date range start</strong>
+              <input
+                className="input"
+                type="date"
+                value={blockSettings.effective_start}
+                onChange={(event) => updateBlockSetting("effective_start", event.target.value)}
+              />
+            </label>
+
+            <label className="access-management-block-field">
+              <span>Effective To</span>
+              <strong>Date range end</strong>
+              <input
+                className="input"
+                type="date"
+                value={blockSettings.effective_end}
+                onChange={(event) => updateBlockSetting("effective_end", event.target.value)}
+              />
+            </label>
+
+            <div className="access-management-block-chip">
+              <strong>{blockSettings.first_fortnight_block_day}</strong>
+              <span>blocks 1-15 periods</span>
+            </div>
 
           <div className="access-management-block-chip">
             <strong>{blockSettings.second_fortnight_block_day}</strong>
-            <span>blocks 16-end periods</span>
+            <span>blocks 16-31 periods</span>
           </div>
 
-          <div className="access-management-block-actions">
-            <button
-              type="button"
-              className="fiori-button primary"
-              onClick={saveBlockSettings}
-              disabled={savingBlockSettings}
-            >
-              <Save size={16} />
-              <span>{savingBlockSettings ? "Saving" : "Save Block Dates"}</span>
-            </button>
+            <div className="access-management-block-actions">
+              <button
+                type="button"
+                className="fiori-button primary"
+                onClick={saveBlockSettings}
+                disabled={savingBlockSettings}
+              >
+                <Save size={16} />
+                <span>{savingBlockSettings ? "Saving" : "Save Global Rule"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="access-management-block-section">
+          <div className="access-management-block-section-head">
+            <strong>Employee-Specific Rule</strong>
+          </div>
+
+          <div className="access-management-block-grid is-employee">
+            <label className="access-management-block-field is-wide">
+              <span>Employee</span>
+              <strong>Specific override</strong>
+              <ValueHelpSelect
+                value={overrideDraft.employee_id}
+                onChange={(value) => updateOverrideDraft("employee_id", value)}
+                options={employeeBlockOptions}
+                placeholder="Select employee"
+                searchPlaceholder="Search employees"
+              />
+            </label>
+
+            <label className="access-management-block-field">
+              <span>First Fortnight</span>
+              <strong>Block day</strong>
+              <select className="input" value={overrideDraft.first_fortnight_block_day} onChange={(event) => updateOverrideDraft("first_fortnight_block_day", event.target.value)}>
+                {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{day}</option>)}
+              </select>
+            </label>
+
+            <label className="access-management-block-field">
+              <span>Second Fortnight</span>
+              <strong>Block day</strong>
+              <select className="input" value={overrideDraft.second_fortnight_block_day} onChange={(event) => updateOverrideDraft("second_fortnight_block_day", event.target.value)}>
+                {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => <option key={day} value={day}>{day}</option>)}
+              </select>
+            </label>
+
+            <label className="access-management-block-field">
+              <span>From</span>
+              <strong>Date range start</strong>
+              <input className="input" type="date" value={overrideDraft.effective_start} onChange={(event) => updateOverrideDraft("effective_start", event.target.value)} />
+            </label>
+
+            <label className="access-management-block-field">
+              <span>To</span>
+              <strong>Date range end</strong>
+              <input className="input" type="date" value={overrideDraft.effective_end} onChange={(event) => updateOverrideDraft("effective_end", event.target.value)} />
+            </label>
+
+            <label className="access-management-block-field is-wide">
+              <span>Notes</span>
+              <strong>Reason or reference</strong>
+              <input className="input" value={overrideDraft.notes} onChange={(event) => updateOverrideDraft("notes", event.target.value)} placeholder="Optional note" />
+            </label>
+
+            <div className="access-management-block-actions">
+              <button type="button" className="fiori-button secondary" onClick={resetOverrideDraft} disabled={savingBlockSettings}>
+                Clear
+              </button>
+              <button type="button" className="fiori-button primary" onClick={saveEmployeeBlockOverride} disabled={savingBlockSettings || !overrideDraft.employee_id}>
+                <Save size={16} />
+                <span>{overrideDraft._id ? "Update Rule" : "Add Rule"}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="access-management-block-filter-row">
+            <label className="access-management-block-field">
+              <span>Filter Rules</span>
+              <strong>Employee or note</strong>
+              <input className="input" value={overrideSearch} onChange={(event) => setOverrideSearch(event.target.value)} placeholder="Search override rules" />
+            </label>
+            <label className="access-management-block-field">
+              <span>Active On</span>
+              <strong>Date filter</strong>
+              <input className="input" type="date" value={overrideDateFilter} onChange={(event) => setOverrideDateFilter(event.target.value)} />
+            </label>
+          </div>
+
+          <div className="access-management-block-rule-list">
+            {filteredEmployeeBlockOverrides.map((item) => (
+              <article key={item._id} className="access-management-block-rule">
+                <div>
+                  <strong>{item.employee_name || item.employee_email}</strong>
+                  <span>{item.employee_email}</span>
+                </div>
+                <div className="access-management-block-rule-days">
+                  <span>First: Day {item.first_fortnight_block_day}</span>
+                  <span>Second: Day {item.second_fortnight_block_day}</span>
+                </div>
+                <div className="access-management-block-rule-range">
+                  <span>{item.effective_start || "Any start"} to {item.effective_end || "Any end"}</span>
+                  {item.notes ? <small>{item.notes}</small> : null}
+                </div>
+                <div className="access-management-block-rule-actions">
+                  <button type="button" className="fiori-button secondary" onClick={() => editEmployeeBlockOverride(item)}>Edit</button>
+                  <button type="button" className="fiori-button secondary danger" onClick={() => deleteEmployeeBlockOverride(item)} disabled={savingBlockSettings}>
+                    <Trash2 size={15} />
+                    <span>Remove</span>
+                  </button>
+                </div>
+              </article>
+            ))}
+            {!filteredEmployeeBlockOverrides.length ? (
+              <div className="access-management-block-empty">No employee-specific rules match the current filters.</div>
+            ) : null}
           </div>
         </div>
       </section>
