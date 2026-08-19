@@ -9990,6 +9990,18 @@ button:hover:not(:disabled) {
   box-shadow: 0 10px 28px rgba(33, 52, 74, 0.06);
 }
 
+.access-management-tab-strip .page-subtab-button {
+  font-family: "72", "Segoe UI", Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+/* Employee unblocking events are audited in History, not duplicated here. */
+.employee-unblocking-card .employee-unblocking-record-filter,
+.employee-unblocking-card .employee-unblocking-record-list {
+  display: none;
+}
+
 .access-management-summary {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: stretch;
@@ -10275,6 +10287,20 @@ button:hover:not(:disabled) {
   background: #fff;
 }
 
+.history-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.history-export-button {
+  min-height: 38px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
 .timesheet-access-card > .access-management-block-grid,
 .timesheet-access-card > .access-management-block-filter-row,
 .timesheet-access-card > .access-management-block-rule-list,
@@ -10513,11 +10539,15 @@ button:hover:not(:disabled) {
 
 .timesheet-access-history-filters {
   display: grid;
-  grid-template-columns: minmax(280px, 1.4fr) repeat(3, minmax(160px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px 14px;
   align-items: end;
-  padding-bottom: 16px;
+  padding: 2px 0 18px;
   border-bottom: 1px solid #e3edf4;
+}
+
+.timesheet-access-history-filters .is-history-search {
+  grid-column: span 2;
 }
 
 .timesheet-access-history-filters .access-management-block-field .value-help-search-field,
@@ -10526,12 +10556,19 @@ button:hover:not(:disabled) {
   min-height: 38px;
 }
 
+.timesheet-access-history-filters .value-help-search-field > .input {
+  min-height: 36px;
+  border: 0;
+  box-shadow: none;
+}
+
 .timesheet-access-history-filter-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+  grid-column: 1 / -1;
 }
 
 .timesheet-access-history-filter-actions .fiori-button {
@@ -10541,8 +10578,35 @@ button:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.timesheet-access-history-filter-actions .fiori-button.primary {
+  min-width: 78px;
+}
+
 .timesheet-access-history-filter-actions .employee-directory-filter-meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid #d8e4ed;
+  border-radius: 10px;
+  background: #f5f8fb;
+  color: #536b80;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.timesheet-access-history-filter-actions .employee-directory-filter-meta strong {
+  color: #1f3548;
+  font-size: 14px;
+}
+
+@media (min-width: 1201px) {
+  .timesheet-access-history-filter-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
 }
 
 .access-management-block-rule-list {
@@ -10553,6 +10617,108 @@ button:hover:not(:disabled) {
 .timesheet-access-history-list {
   display: grid;
   gap: 10px;
+}
+
+.timesheet-access-history-table-shell {
+  overflow-x: auto;
+  border: 1px solid #dbe7f0;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.timesheet-access-history-table {
+  width: 100%;
+  min-width: 1240px;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.timesheet-access-history-table th,
+.timesheet-access-history-table td {
+  padding: 15px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e7eef4;
+  border-right: 1px solid #e7eef4;
+}
+
+.timesheet-access-history-table th:last-child,
+.timesheet-access-history-table td:last-child {
+  border-right: 0;
+}
+
+.timesheet-access-history-table th {
+  background: #f5f8fb;
+  color: #536b80;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.timesheet-access-history-table th:nth-child(1) { width: 210px; }
+.timesheet-access-history-table th:nth-child(2) { width: 185px; }
+.timesheet-access-history-table th:nth-child(3) { width: 210px; }
+.timesheet-access-history-table th:nth-child(4) { width: 220px; }
+.timesheet-access-history-table th:nth-child(5) { width: 180px; }
+.timesheet-access-history-table th:nth-child(6) { width: 230px; }
+
+.timesheet-access-history-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.timesheet-access-history-table tbody tr:hover {
+  background: #fbfdff;
+}
+
+.timesheet-access-history-table td {
+  color: #607284;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.timesheet-access-history-table td strong,
+.timesheet-access-history-table td > span,
+.history-detail-stack span {
+  display: block;
+}
+
+.timesheet-access-history-table td strong {
+  color: #1f3548;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.history-date-cell {
+  color: #34506a !important;
+  font-weight: 700;
+  white-space: normal;
+  min-width: 210px;
+}
+
+.history-action-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #0f6fdc;
+}
+
+.history-action-cell strong {
+  color: #1f3548 !important;
+}
+
+.history-module-label {
+  margin-top: 5px;
+  color: #6b8091 !important;
+  font-size: 11px !important;
+}
+
+.history-detail-stack {
+  display: grid;
+  gap: 5px;
 }
 
 .timesheet-access-history-item {
@@ -10867,6 +11033,10 @@ button:hover:not(:disabled) {
     grid-template-columns: 1fr;
   }
 
+  .timesheet-access-history-filters .is-history-search {
+    grid-column: auto;
+  }
+
   .access-management-block-grid.is-global {
     grid-template-areas:
       "global-first"
@@ -10907,6 +11077,8 @@ button:hover:not(:disabled) {
   .timesheet-access-history-filter-actions {
     align-items: stretch;
     flex-direction: column;
+    grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 
   .timesheet-access-history-filter-actions .fiori-button,

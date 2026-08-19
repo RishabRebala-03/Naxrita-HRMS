@@ -850,8 +850,8 @@ def normalize_timesheet_block_settings(settings=None):
     settings = settings or {}
     normalized = dict(DEFAULT_TIMESHEET_BLOCK_SETTINGS)
     for key, min_day, max_day in (
-        ("first_fortnight_block_day", 1, 15),
-        ("second_fortnight_block_day", 16, 31),
+        ("first_fortnight_block_day", 1, 31),
+        ("second_fortnight_block_day", 1, 31),
     ):
         try:
             value = int(settings.get(key, normalized[key]))

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarRange, ChevronDown, ChevronUp, Clock3, Filter, History, RefreshCw, Save, ShieldCheck, Trash2, UserCog } from "lucide-react";
+import { CalendarRange, ChevronDown, ChevronUp, Clock3, Download, Filter, History, RefreshCw, Save, ShieldCheck, Trash2, UserCog } from "lucide-react";
 
 import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
@@ -20,6 +20,25 @@ const getReportingLeadLabel = (item = {}) =>
   "";
 
 const normalizeValue = (value) => String(value || "").trim().toLowerCase();
+
+const mergeEmployeeOverridesIntoHistory = (history, overrides) => {
+  const records = Array.isArray(history) ? [...history] : [];
+  const existingKeys = new Set(records.map((item) => [item.employee_id, item.effective_start, item.effective_end, item.notes].join("|")));
+  (Array.isArray(overrides) ? overrides : []).forEach((item) => {
+    const key = [item.employee_id, item.effective_start, item.effective_end, item.notes].join("|");
+    if (existingKeys.has(key)) return;
+    records.push({
+      ...item,
+      action: "created",
+      scope: "employee",
+      changed_at: item.updated_at || item.created_at || null,
+      changed_by_name: item.updated_by_name || "",
+      changed_by_email: item.updated_by_email || "",
+    });
+    existingKeys.add(key);
+  });
+  return records;
+};
 
 const sortUsers = (items, sortBy) => {
   const ranked = [...items];
@@ -124,6 +143,7 @@ const AccessManagement = ({ user }) => {
   const [historyFirstDayFilter, setHistoryFirstDayFilter] = useState("all");
   const [historySecondDayFilter, setHistorySecondDayFilter] = useState("all");
   const [historySortBy, setHistorySortBy] = useState("newest");
+  const [historyHasRun, setHistoryHasRun] = useState(false);
   const [savingBlockSettings, setSavingBlockSettings] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -150,8 +170,14 @@ const AccessManagement = ({ user }) => {
         effective_start: globalSettings.effective_start || "",
         effective_end: globalSettings.effective_end || "",
       });
-      setEmployeeBlockOverrides(Array.isArray(blockSettingsResponse.data?.employee_overrides) ? blockSettingsResponse.data.employee_overrides : []);
-      setBlockHistory(Array.isArray(blockSettingsResponse.data?.history) ? blockSettingsResponse.data.history : []);
+      const employeeOverrides = Array.isArray(blockSettingsResponse.data?.employee_overrides)
+        ? blockSettingsResponse.data.employee_overrides
+        : [];
+      const savedHistory = Array.isArray(blockSettingsResponse.data?.history)
+        ? blockSettingsResponse.data.history
+        : [];
+      setEmployeeBlockOverrides(employeeOverrides);
+      setBlockHistory(mergeEmployeeOverridesIntoHistory(savedHistory, employeeOverrides));
     } catch (error) {
       console.error("Failed to load access management data", error);
       setMessage(error.response?.data?.error || "Failed to load access management data");
@@ -462,7 +488,7 @@ const AccessManagement = ({ user }) => {
   const historyFirstDayOptions = useMemo(
     () => [
       { value: "all", label: "Any first day" },
-      ...Array.from({ length: 15 }, (_, index) => index + 1).map((day) => ({
+      ...Array.from({ length: 31 }, (_, index) => index + 1).map((day) => ({
         value: String(day),
         label: `Day ${day}`,
       })),
@@ -473,7 +499,7 @@ const AccessManagement = ({ user }) => {
   const historySecondDayOptions = useMemo(
     () => [
       { value: "all", label: "Any second day" },
-      ...Array.from({ length: 16 }, (_, index) => index + 16).map((day) => ({
+      ...Array.from({ length: 31 }, (_, index) => index + 1).map((day) => ({
         value: String(day),
         label: `Day ${day}`,
       })),
@@ -734,6 +760,32 @@ const AccessManagement = ({ user }) => {
     setHistoryFirstDayFilter("all");
     setHistorySecondDayFilter("all");
     setHistorySortBy("newest");
+    setHistoryHasRun(false);
+  };
+
+  const exportHistoryToCsv = () => {
+    const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = filteredBlockHistory.map((item) => [
+      formatHistoryTime(item.changed_at),
+      getHistoryActionLabel(item),
+      item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee",
+      item.module === "admin-access"
+        ? [...(item.granted_menu_labels || []).map((label) => `+ ${label}`), ...(item.removed_menu_labels || []).map((label) => `- ${label}`)].join(", ") || "No menu changes"
+        : `First: Day ${item.first_fortnight_block_day || "—"}; Second: Day ${item.second_fortnight_block_day || "—"}`,
+      item.module === "admin-access" ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`,
+      item.changed_by_name || item.changed_by_email || "Unknown admin",
+      item.notes || "No note",
+    ]);
+    const csv = [
+      ["Changed", "Action", "Employee / scope", "Access details", "Effective period", "Changed by", "Note"],
+      ...rows,
+    ].map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "access-management-history.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const togglePermission = async (targetUser, menuKey) => {
@@ -811,7 +863,7 @@ const AccessManagement = ({ user }) => {
         effective_end: globalSettings.effective_end || "",
       });
       setEmployeeBlockOverrides(Array.isArray(response.data?.employee_overrides) ? response.data.employee_overrides : employeeBlockOverrides);
-      setBlockHistory(Array.isArray(response.data?.history) ? response.data.history : blockHistory);
+      setBlockHistory(mergeEmployeeOverridesIntoHistory(response.data?.history, response.data?.employee_overrides || employeeBlockOverrides));
       setMessage("Updated timesheet block dates for all employees");
     } catch (error) {
       console.error("Failed to update timesheet block dates", error);
@@ -844,9 +896,13 @@ const AccessManagement = ({ user }) => {
           ...current.filter((item) => item._id !== savedOverride._id),
         ]);
       }
-      setBlockHistory(Array.isArray(response.data?.history) ? response.data.history : blockHistory);
+      setBlockHistory(mergeEmployeeOverridesIntoHistory(
+        response.data?.history,
+        savedOverride ? [savedOverride] : employeeBlockOverrides,
+      ));
       resetOverrideDraft();
-      setMessage("Saved employee-specific timesheet block rule");
+      setActiveTab("history");
+      setMessage("Saved employee unblocking record to History");
     } catch (error) {
       console.error("Failed to save employee-specific block rule", error);
       setMessage(error.response?.data?.error || "Failed to save employee-specific block rule");
@@ -1264,13 +1320,12 @@ const AccessManagement = ({ user }) => {
           <div className="access-management-block-grid is-global">
             <label className="access-management-block-field">
               <span>First Fortnight</span>
-              <strong>Block day</strong>
               <select
                 className="input"
                 value={blockSettings.first_fortnight_block_day}
                 onChange={(event) => updateBlockSetting("first_fortnight_block_day", event.target.value)}
               >
-                {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => (
+                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
                   <option key={day} value={day}>{day}</option>
                 ))}
               </select>
@@ -1278,13 +1333,12 @@ const AccessManagement = ({ user }) => {
 
             <label className="access-management-block-field">
               <span>Second Fortnight</span>
-              <strong>Block day</strong>
               <select
                 className="input"
                 value={blockSettings.second_fortnight_block_day}
                 onChange={(event) => updateBlockSetting("second_fortnight_block_day", event.target.value)}
               >
-                {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => (
+                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
                   <option key={day} value={day}>{day}</option>
                 ))}
               </select>
@@ -1292,7 +1346,6 @@ const AccessManagement = ({ user }) => {
 
             <label className="access-management-block-field">
               <span>Effective From</span>
-              <strong>Date range start</strong>
               <input
                 className="input"
                 type="date"
@@ -1303,7 +1356,6 @@ const AccessManagement = ({ user }) => {
 
             <label className="access-management-block-field">
               <span>Effective To</span>
-              <strong>Date range end</strong>
               <input
                 className="input"
                 type="date"
@@ -1336,7 +1388,7 @@ const AccessManagement = ({ user }) => {
           </div>
           </section>
 
-          <section className="fiori-panel access-management-block-panel timesheet-access-card">
+          <section className="fiori-panel access-management-block-panel timesheet-access-card employee-unblocking-card">
             <div className="fiori-panel-header">
               <div>
                 <h3>Employee-Specific Rule</h3>
@@ -1351,7 +1403,6 @@ const AccessManagement = ({ user }) => {
           <div className="access-management-block-grid is-employee">
             <label className="access-management-block-field is-wide">
               <span>Employee</span>
-              <strong>Specific override</strong>
               <ValueHelpSelect
                 value={overrideDraft.employee_id}
                 onChange={(value) => updateOverrideDraft("employee_id", value)}
@@ -1363,35 +1414,30 @@ const AccessManagement = ({ user }) => {
 
             <label className="access-management-block-field">
               <span>First Fortnight</span>
-              <strong>Block day</strong>
               <select className="input" value={overrideDraft.first_fortnight_block_day} onChange={(event) => updateOverrideDraft("first_fortnight_block_day", event.target.value)}>
-                {Array.from({ length: 15 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{day}</option>)}
+                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{day}</option>)}
               </select>
             </label>
 
             <label className="access-management-block-field">
               <span>Second Fortnight</span>
-              <strong>Block day</strong>
               <select className="input" value={overrideDraft.second_fortnight_block_day} onChange={(event) => updateOverrideDraft("second_fortnight_block_day", event.target.value)}>
-                {Array.from({ length: 16 }, (_, index) => index + 16).map((day) => <option key={day} value={day}>{day}</option>)}
+                {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => <option key={day} value={day}>{day}</option>)}
               </select>
             </label>
 
             <label className="access-management-block-field">
               <span>From</span>
-              <strong>Date range start</strong>
               <input className="input" type="date" value={overrideDraft.effective_start} onChange={(event) => updateOverrideDraft("effective_start", event.target.value)} />
             </label>
 
             <label className="access-management-block-field">
               <span>To</span>
-              <strong>Date range end</strong>
               <input className="input" type="date" value={overrideDraft.effective_end} onChange={(event) => updateOverrideDraft("effective_end", event.target.value)} />
             </label>
 
             <label className="access-management-block-field is-wide">
               <span>Notes</span>
-              <strong>Reason or reference</strong>
               <input className="input" value={overrideDraft.notes} onChange={(event) => updateOverrideDraft("notes", event.target.value)} placeholder="Optional note" />
             </label>
 
@@ -1406,20 +1452,18 @@ const AccessManagement = ({ user }) => {
             </div>
           </div>
 
-          <div className="access-management-block-filter-row">
+          <div className="access-management-block-filter-row employee-unblocking-record-filter">
             <label className="access-management-block-field">
-              <span>Filter Rules</span>
-              <strong>Employee or note</strong>
-              <input className="input" value={overrideSearch} onChange={(event) => setOverrideSearch(event.target.value)} placeholder="Search override rules" />
+              <span>Search Unblocking Records</span>
+              <input className="input" value={overrideSearch} onChange={(event) => setOverrideSearch(event.target.value)} placeholder="Search employee or note" />
             </label>
             <label className="access-management-block-field">
               <span>Active On</span>
-              <strong>Date filter</strong>
               <input className="input" type="date" value={overrideDateFilter} onChange={(event) => setOverrideDateFilter(event.target.value)} />
             </label>
           </div>
 
-          <div className="access-management-block-rule-list">
+          <div className="access-management-block-rule-list employee-unblocking-record-list">
             {filteredEmployeeBlockOverrides.map((item) => (
               <article key={item._id} className="access-management-block-rule">
                 <div>
@@ -1460,16 +1504,21 @@ const AccessManagement = ({ user }) => {
                 <h3>History</h3>
                 <p>Recent admin access grants and timesheet access rule changes made by admins.</p>
               </div>
-              <div className="access-management-matrix-meta">
-                <Clock3 size={18} />
-                <span>{filteredBlockHistory.length} of {combinedHistory.length} change{combinedHistory.length === 1 ? "" : "s"}</span>
+              <div className="history-header-actions">
+                <div className="access-management-matrix-meta">
+                  <Clock3 size={18} />
+                  <span>{filteredBlockHistory.length} of {combinedHistory.length} change{combinedHistory.length === 1 ? "" : "s"}</span>
+                </div>
+                <button type="button" className="fiori-button secondary history-export-button" onClick={exportHistoryToCsv} disabled={!historyHasRun || !filteredBlockHistory.length}>
+                  <Download size={16} />
+                  <span>Export CSV</span>
+                </button>
               </div>
             </div>
 
             <div className="timesheet-access-history-filters">
               <label className="access-management-block-field is-history-search">
                 <span>Search History</span>
-                <strong>Employee, admin, action, or note</strong>
                 <ValueHelpSearch
                   value={historySearch}
                   onChange={setHistorySearch}
@@ -1479,7 +1528,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Module</span>
-                <strong>History type</strong>
                 <ValueHelpSelect
                   value={historyModuleFilter}
                   onChange={setHistoryModuleFilter}
@@ -1490,7 +1538,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Scope</span>
-                <strong>Rule type</strong>
                 <ValueHelpSelect
                   value={historyScopeFilter}
                   onChange={setHistoryScopeFilter}
@@ -1501,7 +1548,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Action</span>
-                <strong>Change type</strong>
                 <ValueHelpSelect
                   value={historyActionFilter}
                   onChange={setHistoryActionFilter}
@@ -1512,7 +1558,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Changed By</span>
-                <strong>Admin user</strong>
                 <ValueHelpSelect
                   value={historyChangedByFilter}
                   onChange={setHistoryChangedByFilter}
@@ -1523,7 +1568,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Department</span>
-                <strong>Target user</strong>
                 <ValueHelpSelect
                   value={historyDepartmentFilter}
                   onChange={setHistoryDepartmentFilter}
@@ -1534,7 +1578,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>From Date</span>
-                <strong>Changed after</strong>
                 <input
                   className="input"
                   type="date"
@@ -1544,7 +1587,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>To Date</span>
-                <strong>Changed before</strong>
                 <input
                   className="input"
                   type="date"
@@ -1554,7 +1596,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>First Day</span>
-                <strong>Fortnight cutoff</strong>
                 <ValueHelpSelect
                   value={historyFirstDayFilter}
                   onChange={setHistoryFirstDayFilter}
@@ -1565,7 +1606,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Second Day</span>
-                <strong>Fortnight cutoff</strong>
                 <ValueHelpSelect
                   value={historySecondDayFilter}
                   onChange={setHistorySecondDayFilter}
@@ -1576,7 +1616,6 @@ const AccessManagement = ({ user }) => {
               </label>
               <label className="access-management-block-field">
                 <span>Sort By</span>
-                <strong>Order results</strong>
                 <ValueHelpSelect
                   value={historySortBy}
                   onChange={setHistorySortBy}
@@ -1586,6 +1625,13 @@ const AccessManagement = ({ user }) => {
                 />
               </label>
               <div className="timesheet-access-history-filter-actions">
+                <button
+                  type="button"
+                  className="fiori-button primary"
+                  onClick={() => setHistoryHasRun(true)}
+                >
+                  Go
+                </button>
                 <button
                   type="button"
                   className="fiori-button secondary"
@@ -1601,50 +1647,52 @@ const AccessManagement = ({ user }) => {
               </div>
             </div>
 
-            <div className="timesheet-access-history-list">
-              {filteredBlockHistory.map((item) => (
-                <article key={item._id} className="timesheet-access-history-item">
-                  <div className="timesheet-access-history-main">
-                    <History size={16} />
-                    <div>
-                      <strong>{getHistoryActionLabel(item)}</strong>
-                      <span>{formatHistoryTime(item.changed_at)}</span>
-                    </div>
-                  </div>
-                  <div className="timesheet-access-history-person">
-                    <strong>{item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee"}</strong>
-                    <span>
-                      {item.module === "admin-access"
-                        ? [item.employee_email, item.department].filter(Boolean).join(" • ") || "Delegated admin access"
-                        : item.scope === "global" ? "Default rule" : item.employee_email || "Employee override"}
-                    </span>
-                  </div>
-                  <div className="timesheet-access-history-days">
-                    {item.module === "admin-access" ? (
-                      <>
-                        <span>Granted: {(item.granted_menu_labels || []).length}</span>
-                        <span>Removed: {(item.removed_menu_labels || []).length}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>First: Day {item.first_fortnight_block_day}</span>
-                        <span>Second: Day {item.second_fortnight_block_day}</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="timesheet-access-history-range">
-                    <span>
-                      {item.module === "admin-access"
-                        ? [
-                            ...(item.granted_menu_labels || []).map((label) => `+ ${label}`),
-                            ...(item.removed_menu_labels || []).map((label) => `- ${label}`),
-                          ].join(", ") || "No menu changes"
-                        : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`}
-                    </span>
-                    <small>{item.notes || item.changed_by_name || item.changed_by_email || "No note"}</small>
-                  </div>
-                </article>
-              ))}
+            {historyHasRun ? <div className="timesheet-access-history-table-shell">
+              <table className="timesheet-access-history-table">
+                <thead>
+                  <tr>
+                    <th>Changed</th>
+                    <th>Action</th>
+                    <th>Employee / scope</th>
+                    <th>Access details</th>
+                    <th>Effective period</th>
+                    <th>Changed by / note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredBlockHistory.map((item) => (
+                    <tr key={item._id}>
+                      <td className="history-date-cell">{formatHistoryTime(item.changed_at)}</td>
+                      <td>
+                        <div className="history-action-cell">
+                          <History size={16} />
+                          <strong>{getHistoryActionLabel(item)}</strong>
+                        </div>
+                        <span className="history-module-label">{item.module === "admin-access" ? "Admin access" : "Timesheet access"}</span>
+                      </td>
+                      <td>
+                        <strong>{item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee"}</strong>
+                        <span>{item.module === "admin-access" ? [item.employee_email, item.department].filter(Boolean).join(" • ") || "Delegated admin access" : item.scope === "global" ? "Default rule" : item.employee_email || "Employee override"}</span>
+                      </td>
+                      <td>
+                        {item.module === "admin-access" ? (
+                          <span>{[...(item.granted_menu_labels || []).map((label) => `+ ${label}`), ...(item.removed_menu_labels || []).map((label) => `- ${label}`)].join(", ") || "No menu changes"}</span>
+                        ) : (
+                          <div className="history-detail-stack">
+                            <span>First: Day {item.first_fortnight_block_day || "—"}</span>
+                            <span>Second: Day {item.second_fortnight_block_day || "—"}</span>
+                          </div>
+                        )}
+                      </td>
+                      <td>{item.module === "admin-access" ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`}</td>
+                      <td>
+                        <strong>{item.changed_by_name || item.changed_by_email || "Unknown admin"}</strong>
+                        <span>{item.notes || "No note"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
               {!filteredBlockHistory.length ? (
                 <div className="access-management-block-empty">
                   {combinedHistory.length === 0
@@ -1652,7 +1700,7 @@ const AccessManagement = ({ user }) => {
                     : "No history records match the current filters."}
                 </div>
               ) : null}
-            </div>
+            </div> : null}
           </section>
         </section>
       ) : null}
