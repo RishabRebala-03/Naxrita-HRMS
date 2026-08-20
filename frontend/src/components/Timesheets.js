@@ -22,6 +22,7 @@ import ValueHelpSearch from './ValueHelpSearch';
 import './TimesheetsPortal.css';
 import { buildRequesterHeaders } from '../utils/requester';
 import { formatDateTimeIST } from '../utils/dateTime';
+import naxritaBrand from '../assets/naxrita-brand.png';
 
 const API_BASE = process.env.REACT_APP_BACKEND_URL
   ? `${process.env.REACT_APP_BACKEND_URL}/api`
@@ -900,6 +901,208 @@ const formatTimesheetHourValue = (hours) => {
 const formatTimesheetHoursWithSuffix = (hours) => {
   const value = formatTimesheetHourValue(hours);
   return value ? `${value}h` : '';
+};
+
+const escapeXml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getExportHourValue = (hours, showZero = false) => {
+  const numericHours = Number(hours);
+  if (!Number.isFinite(numericHours)) return '';
+  if (!showZero && numericHours === 0) return '';
+  const roundedHours = Math.round(numericHours * 100) / 100;
+  return Number.isInteger(roundedHours) ? String(roundedHours) : String(parseFloat(roundedHours.toFixed(2)));
+};
+
+const crc32Table = (() => {
+  const table = [];
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+const crc32 = (bytes) => {
+  let crc = 0xffffffff;
+  bytes.forEach((byte) => {
+    crc = crc32Table[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  });
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const writeUint16 = (target, value) => {
+  target.push(value & 0xff, (value >>> 8) & 0xff);
+};
+
+const writeUint32 = (target, value) => {
+  target.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
+};
+
+const createZipBlob = (files) => {
+  const encoder = new TextEncoder();
+  const chunks = [];
+  const centralDirectory = [];
+  let offset = 0;
+
+  files.forEach(({ name, content }) => {
+    const nameBytes = encoder.encode(name);
+    const contentBytes = content instanceof Uint8Array ? content : encoder.encode(content);
+    const checksum = crc32(contentBytes);
+    const localHeader = [];
+    writeUint32(localHeader, 0x04034b50);
+    writeUint16(localHeader, 20);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint16(localHeader, 0);
+    writeUint32(localHeader, checksum);
+    writeUint32(localHeader, contentBytes.length);
+    writeUint32(localHeader, contentBytes.length);
+    writeUint16(localHeader, nameBytes.length);
+    writeUint16(localHeader, 0);
+    chunks.push(new Uint8Array(localHeader), nameBytes, contentBytes);
+
+    const centralHeader = [];
+    writeUint32(centralHeader, 0x02014b50);
+    writeUint16(centralHeader, 20);
+    writeUint16(centralHeader, 20);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint32(centralHeader, checksum);
+    writeUint32(centralHeader, contentBytes.length);
+    writeUint32(centralHeader, contentBytes.length);
+    writeUint16(centralHeader, nameBytes.length);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint16(centralHeader, 0);
+    writeUint32(centralHeader, 0);
+    writeUint32(centralHeader, offset);
+    centralDirectory.push(new Uint8Array(centralHeader), nameBytes);
+    offset += localHeader.length + nameBytes.length + contentBytes.length;
+  });
+
+  const centralSize = centralDirectory.reduce((sum, chunk) => sum + chunk.length, 0);
+  const endRecord = [];
+  writeUint32(endRecord, 0x06054b50);
+  writeUint16(endRecord, 0);
+  writeUint16(endRecord, 0);
+  writeUint16(endRecord, files.length);
+  writeUint16(endRecord, files.length);
+  writeUint32(endRecord, centralSize);
+  writeUint32(endRecord, offset);
+  writeUint16(endRecord, 0);
+  return new Blob([...chunks, ...centralDirectory, new Uint8Array(endRecord)], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+};
+
+const getExcelColumnName = (index) => {
+  let name = '';
+  let current = index;
+  while (current > 0) {
+    const remainder = (current - 1) % 26;
+    name = String.fromCharCode(65 + remainder) + name;
+    current = Math.floor((current - 1) / 26);
+  }
+  return name;
+};
+
+const fetchAssetBytes = async (assetUrl) => {
+  const response = await fetch(assetUrl);
+  if (!response.ok) throw new Error('Unable to load workbook image asset');
+  return new Uint8Array(await response.arrayBuffer());
+};
+
+const buildXlsxWorkbookBlob = ({ rows, merges = [], columnWidths = [], rowHeights = {}, imageBytes = null, imageAnchor = null }) => {
+  const cellXml = (cell, rowIndex, colIndex) => {
+    const ref = `${getExcelColumnName(colIndex)}${rowIndex}`;
+    const styleAttr = cell.style !== undefined ? ` s="${cell.style}"` : '';
+    if (cell.formula) return `<c r="${ref}"${styleAttr}><f>${escapeXml(cell.formula)}</f></c>`;
+    if (typeof cell.value === 'number') return `<c r="${ref}"${styleAttr}><v>${cell.value}</v></c>`;
+    return `<c r="${ref}" t="inlineStr"${styleAttr}><is><t>${escapeXml(cell.value ?? '')}</t></is></c>`;
+  };
+  const sheetRows = rows.map((row, rowIndex) =>
+    `<row r="${rowIndex + 1}"${rowHeights[rowIndex + 1] ? ` ht="${rowHeights[rowIndex + 1]}" customHeight="1"` : ''}>${row.map((cell, colIndex) => cellXml(cell || {}, rowIndex + 1, colIndex + 1)).join('')}</row>`
+  ).join('');
+  const cols = columnWidths.length
+    ? `<cols>${columnWidths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols>`
+    : '';
+  const mergeXml = merges.length
+    ? `<mergeCells count="${merges.length}">${merges.map((ref) => `<mergeCell ref="${ref}"/>`).join('')}</mergeCells>`
+    : '';
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <sheetViews><sheetView workbookViewId="0"/></sheetViews>
+      ${cols}<sheetData>${sheetRows}</sheetData>${mergeXml}
+      <pageMargins left="0.25" right="0.25" top="0.35" bottom="0.35" header="0.2" footer="0.2"/>
+      ${imageBytes && imageAnchor ? '<drawing r:id="rId1"/>' : ''}
+    </worksheet>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="5"><font><sz val="12"/><name val="Arial"/></font><font><b/><sz val="20"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><b/><sz val="13"/><color rgb="FFFFFFFF"/><name val="Arial"/></font><font><b/><sz val="13"/><name val="Arial"/></font><font><sz val="12"/><name val="Arial"/></font></fonts>
+      <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF000000"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE7E7E7"/><bgColor indexed="64"/></patternFill></fill></fills>
+      <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right><top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom><diagonal/></border></borders>
+      <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+      <cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" shrinkToFit="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="3" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf><xf numFmtId="0" fontId="4" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" shrinkToFit="1"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf><xf numFmtId="0" fontId="2" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="bottom"/></xf></cellXfs>
+      <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+    </styleSheet>`;
+  const files = [
+    { name: '[Content_Types].xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+    { name: '_rels/.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+    { name: 'xl/workbook.xml', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+    { name: 'xl/worksheets/sheet1.xml', content: worksheet },
+    { name: 'xl/styles.xml', content: styles },
+  ];
+  if (imageBytes && imageAnchor) {
+    const {
+      fromCol,
+      fromRow,
+      toCol,
+      toRow,
+      colOff = 0,
+      rowOff = 0,
+      toColOff = 0,
+      toRowOff = 0,
+      cx = null,
+      cy = null,
+    } = imageAnchor;
+    const imageDrawing = cx && cy
+      ? `<xdr:oneCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:ext cx="${cx}" cy="${cy}"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Naxrita Logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>`
+      : `<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>${fromCol}</xdr:col><xdr:colOff>${colOff}</xdr:colOff><xdr:row>${fromRow}</xdr:row><xdr:rowOff>${rowOff}</xdr:rowOff></xdr:from><xdr:to><xdr:col>${toCol}</xdr:col><xdr:colOff>${toColOff}</xdr:colOff><xdr:row>${toRow}</xdr:row><xdr:rowOff>${toRowOff}</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="2" name="Naxrita Logo"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:twoCellAnchor>`;
+    files[0] = {
+      name: '[Content_Types].xml',
+      content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>',
+    };
+    files.push(
+      { name: 'xl/worksheets/_rels/sheet1.xml.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>' },
+      { name: 'xl/drawings/_rels/drawing1.xml.rels', content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/naxrita-logo.png"/></Relationships>' },
+      { name: 'xl/drawings/drawing1.xml', content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">${imageDrawing}</xdr:wsDr>` },
+      { name: 'xl/media/naxrita-logo.png', content: imageBytes }
+    );
+  }
+  return createZipBlob(files);
+};
+
+const downloadBlob = (filename, blob) => {
+  if (typeof document === 'undefined') return;
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(url);
 };
 
 const getDefaultWorkEntryValue = (dateStr, defaultHoursByDate = {}) => {
@@ -2642,6 +2845,151 @@ function TimesheetPage({
     }
   };
 
+  const handleDownloadTimesheet = async () => {
+    if (!dates.length) {
+      notify('Select a timesheet period before downloading.', 'warning');
+      return;
+    }
+
+    const chargeCodeById = Object.fromEntries(
+      chargeCodes.map((chargeCode) => [chargeCode.charge_code_id || chargeCode._id || chargeCode.charge_code, chargeCode])
+    );
+    const holidayByExportDate = Object.fromEntries((holidays || []).map((holiday) => [holiday.date, holiday]));
+    const exportLeaveRows = buildGroupedLeaveRows(
+      buildApprovedLeaveEntries(approvedLeaves, dates).filter((leave) => !holidayByExportDate[leave.date])
+    );
+    const workScheduleForDate = (dateStr) => (
+      Object.prototype.hasOwnProperty.call(workScheduleByDate || {}, dateStr)
+        ? Number(workScheduleByDate[dateStr] || 0)
+        : getDefaultWorkScheduleValue(dateStr)
+    );
+    const adjustmentForDate = (source, dateStr) => Number((source || {})[dateStr] || 0);
+    const workLocation = assignmentMeta.workLocation || 'Not assigned';
+    const assignedLocation = assignmentMeta.assignedLocation || 'Not assigned';
+    const companyCostCenter = assignmentMeta.companyCostCenter || 'Not assigned';
+    const employeeId = assignmentMeta.employeeId || profile.employeeId || userId || 'Not assigned';
+    const textCell = (value, style = 5) => ({ value: value ?? '', style });
+    const numberCell = (value, showZero = false, style = 5) => {
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue)) return showZero ? { value: 0, style } : textCell('', style);
+      if (!showZero && numericValue === 0) return textCell('', style);
+      return { value: Number(getExportHourValue(numericValue, true)), style };
+    };
+    const formulaCell = (formula, style = 4) => ({ formula, style });
+    const buildRow = (label, values, totalCell, labelStyle = 3) => [
+      textCell(label, labelStyle),
+      ...values,
+      totalCell,
+    ];
+    const headerRow = [
+      textCell('Charge Codes ', 2),
+      ...dates.map((dateStr) => textCell(`${format(parseISO(dateStr), 'EEE')}\n${format(parseISO(dateStr), 'd')}`, 2)),
+      textCell('Total', 2),
+    ];
+    const metaRows = [
+      buildRow('Work  Location', dates.map((dateStr) => textCell(periodWorkLocationsByDate[dateStr] || workLocation, 0)), textCell(periodWorkLocationsByDate[dates[0]] || workLocation, 0)),
+      buildRow('Assigned  Location', dates.map((dateStr) => textCell(periodAssignedLocationsByDate[dateStr] || assignedLocation, 0)), textCell(assignedLocation, 0)),
+      buildRow('Company Code/ Cost Center', dates.map(() => textCell(companyCostCenter, 0)), textCell(companyCostCenter, 0)),
+      buildRow('Employee ID', dates.map(() => textCell(employeeId, 0)), textCell(employeeId, 0)),
+    ];
+    const workRows = rows
+      .filter((row) => row.chargeCodeId || row.entries.some((entry) => Number(entry.hours || entry.value || 0) > 0))
+      .map((row) => {
+        const chargeCode = chargeCodeById[row.chargeCodeId] || {};
+        const label = chargeCode.charge_code_name || chargeCode.name || chargeCode.charge_code || row.chargeCodeId || 'Charge Code';
+        const values = dates.map((dateStr) => {
+          const entry = row.entries.find((item) => item.date === dateStr) || {};
+          const rawValue = entry.value !== undefined ? entry.value : entry.hours;
+          return numberCell(parseFloat(rawValue), isWeekendDate(dateStr), 4);
+        });
+        const total = row.entries.reduce((sum, entry) => {
+          const rawValue = entry.value !== undefined ? entry.value : entry.hours;
+          const hours = parseFloat(rawValue);
+          return sum + (Number.isFinite(hours) ? hours : 0);
+        }, 0);
+        return buildRow(label, values, numberCell(total, true, 4), 4);
+      });
+    const leaveRows = exportLeaveRows.map((leave) => buildRow(
+      `${leave.label} (${leave.code})`,
+      dates.map((dateStr) => numberCell(leave.hoursByDate[dateStr] || 0, isWeekendDate(dateStr), 4)),
+      numberCell(leave.totalHours, true, 4),
+      4
+    ));
+    const emptyRows = Array.from({ length: Math.max(0, 5 - rows.length - exportLeaveRows.length) }, () =>
+      buildRow('', dates.map((dateStr) => (isWeekendDate(dateStr) ? numberCell(0, true, 5) : textCell('', 5))), numberCell(0, true, 4), 5)
+    );
+    const scheduleValues = dates.map(workScheduleForDate);
+    const overtimeValues = dates.map((dateStr) => adjustmentForDate(dailyOvertime, dateStr));
+    const dataStartRow = 7;
+    const dataEndRow = dataStartRow + workRows.length + leaveRows.length + emptyRows.length - 1;
+    const totalHoursRowNumber = dataEndRow + 1;
+    const totalRows = [
+      buildRow('Total Hours', dates.map((_, index) => formulaCell(`SUM(${getExcelColumnName(index + 2)}${dataStartRow}:${getExcelColumnName(index + 2)}${dataEndRow})`, 4)), formulaCell(`SUM(B${totalHoursRowNumber}:${getExcelColumnName(dates.length + 1)}${totalHoursRowNumber})`, 4), 3),
+      buildRow('Work Schedule', scheduleValues.map((hours) => numberCell(hours, true, 5)), numberCell(scheduleValues.reduce((sum, hours) => sum + hours, 0), true, 4), 3),
+      buildRow('Daily Overtime', overtimeValues.map((hours) => numberCell(hours, false, 5)), numberCell(overtimeValues.reduce((sum, hours) => sum + hours, 0), true, 4), 3),
+      buildRow('Total ', dates.map(() => textCell('', 5)), formulaCell(`${getExcelColumnName(dates.length + 2)}${totalHoursRowNumber}`, 4), 3),
+    ];
+    const totalColumnCount = dates.length + 2;
+    const titleLeftColSpan = Math.min(6, totalColumnCount);
+    // Keep a wider, dedicated block at the far right so the logo and wordmark
+    // read as one stacked header unit instead of competing with the date.
+    const titleLogoColSpan = totalColumnCount - titleLeftColSpan >= 3 ? 3 : 0;
+    const titleDateColSpan = Math.max(0, totalColumnCount - titleLeftColSpan - titleLogoColSpan);
+    const titleRow = [
+      textCell('myTimeandExpenses', 1),
+      ...Array.from({ length: titleLeftColSpan - 1 }, () => textCell('', 1)),
+      ...Array.from({ length: titleDateColSpan }, (_, index) => textCell(index === 0 ? `🗓️ ${format(parseISO(dates[dates.length - 1]), 'dd.MM.yyyy')}` : '', 3)),
+      // The logo and wordmark are a single image, matching the reference workbook.
+      ...Array.from({ length: titleLogoColSpan }, () => textCell('', 7)),
+    ];
+    const workbookRows = [
+      titleRow,
+      headerRow,
+      ...metaRows,
+      ...workRows,
+      ...leaveRows,
+      ...emptyRows,
+      ...totalRows,
+    ];
+    const lastColumnName = getExcelColumnName(totalColumnCount);
+    const merges = [
+      `A1:${getExcelColumnName(titleLeftColSpan)}1`,
+      titleDateColSpan > 1 ? `${getExcelColumnName(titleLeftColSpan + 1)}1:${getExcelColumnName(titleLeftColSpan + titleDateColSpan)}1` : '',
+      titleLogoColSpan > 1 ? `${getExcelColumnName(totalColumnCount - titleLogoColSpan + 1)}1:${lastColumnName}1` : '',
+    ].filter(Boolean);
+    const rowHeights = {
+      1: 102.6,
+      2: 37.5,
+      ...Object.fromEntries(Array.from({ length: workbookRows.length - 2 }, (_, index) => [index + 3, 18.75])),
+    };
+    let logoBytes = null;
+    try {
+      logoBytes = await fetchAssetBytes(naxritaBrand);
+    } catch (err) {
+      console.error('Logo export failed:', err);
+    }
+    const workbook = buildXlsxWorkbookBlob({
+      rows: workbookRows,
+      merges,
+      columnWidths: [42, ...dates.map(() => 15.5), 20],
+      rowHeights,
+      imageBytes: logoBytes,
+      imageAnchor: logoBytes && titleLogoColSpan > 0 ? {
+        fromCol: Math.max(0, totalColumnCount - titleLogoColSpan),
+        fromRow: 0,
+        // Keep the complete brand image inside the title row so its wordmark
+        // cannot collide with the Charge Codes/day header below it.
+        colOff: 950000,
+        rowOff: 45000,
+        cx: 1900000,
+        cy: 1200000,
+      } : null,
+    });
+
+    downloadBlob(`myTimeandExpenses_${dates[0]}_to_${dates[dates.length - 1]}.xlsx`, workbook);
+    notify('Timesheet downloaded.', 'success');
+  };
+
   const statusMessage = () => {
     const isPending  = timesheetStatus === 'pending_lead';
     const isApproved = shouldDisplayApprovedState;
@@ -2699,6 +3047,16 @@ function TimesheetPage({
           <button type="button" className="mte-tool-button" onClick={handleAddRow} disabled={isReadOnly || loading}>
             <Plus size={18} />
             <span>New</span>
+          </button>
+          <button
+            type="button"
+            className="mte-tool-button"
+            onClick={handleDownloadTimesheet}
+            disabled={!sheetLoaded || loading || !dates.length}
+            title="Download this timesheet"
+          >
+            <Download size={18} />
+            <span>Download</span>
           </button>
           {isAugust2026TimesheetPeriod && shouldDisplayApprovedState ? (
             <button type="button" className="mte-tool-button" onClick={() => setSelectedRowId(rows[0]?.id || '')} disabled={loading}>
