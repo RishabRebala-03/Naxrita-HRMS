@@ -2897,10 +2897,11 @@ function TimesheetPage({
       .map((row) => {
         const chargeCode = chargeCodeById[row.chargeCodeId] || {};
         const label = chargeCode.charge_code_name || chargeCode.name || chargeCode.charge_code || row.chargeCodeId || 'Charge Code';
+        const hasSelectedChargeCode = Boolean(row.chargeCodeId);
         const values = dates.map((dateStr) => {
           const entry = row.entries.find((item) => item.date === dateStr) || {};
           const rawValue = entry.value !== undefined ? entry.value : entry.hours;
-          return numberCell(parseFloat(rawValue), isWeekendDate(dateStr), 4);
+          return numberCell(parseFloat(rawValue), hasSelectedChargeCode && isWeekendDate(dateStr), 4);
         });
         const total = row.entries.reduce((sum, entry) => {
           const rawValue = entry.value !== undefined ? entry.value : entry.hours;
@@ -2916,7 +2917,7 @@ function TimesheetPage({
       4
     ));
     const emptyRows = Array.from({ length: Math.max(0, 5 - rows.length - exportLeaveRows.length) }, () =>
-      buildRow('', dates.map((dateStr) => (isWeekendDate(dateStr) ? numberCell(0, true, 5) : textCell('', 5))), numberCell(0, true, 4), 5)
+      buildRow('', dates.map(() => textCell('', 5)), numberCell(0, true, 4), 5)
     );
     const scheduleValues = dates.map(workScheduleForDate);
     const overtimeValues = dates.map((dateStr) => adjustmentForDate(dailyOvertime, dateStr));
@@ -2934,11 +2935,14 @@ function TimesheetPage({
     // Keep a wider, dedicated block at the far right so the logo and wordmark
     // read as one stacked header unit instead of competing with the date.
     const titleLogoColSpan = totalColumnCount - titleLeftColSpan >= 3 ? 3 : 0;
-    const titleDateColSpan = Math.max(0, totalColumnCount - titleLeftColSpan - titleLogoColSpan);
+    const titleMiddleColSpan = Math.max(0, totalColumnCount - titleLeftColSpan - titleLogoColSpan);
+    const titleDateColSpan = Math.min(titleMiddleColSpan, 3);
+    const titleDateLeftSpacerColSpan = Math.max(0, titleMiddleColSpan - titleDateColSpan);
     const titleRow = [
       textCell('myTimeandExpenses', 1),
       ...Array.from({ length: titleLeftColSpan - 1 }, () => textCell('', 1)),
-      ...Array.from({ length: titleDateColSpan }, (_, index) => textCell(index === 0 ? `🗓️ ${format(parseISO(dates[dates.length - 1]), 'dd.MM.yyyy')}` : '', 3)),
+      ...Array.from({ length: titleDateLeftSpacerColSpan }, () => textCell('', 1)),
+      ...Array.from({ length: titleDateColSpan }, (_, index) => textCell(index === 0 ? `🗓️ ${format(parseISO(dates[dates.length - 1]), 'dd.MM.yyyy')}` : '', 6)),
       // The logo and wordmark are a single image, matching the reference workbook.
       ...Array.from({ length: titleLogoColSpan }, () => textCell('', 7)),
     ];
@@ -2952,9 +2956,11 @@ function TimesheetPage({
       ...totalRows,
     ];
     const lastColumnName = getExcelColumnName(totalColumnCount);
+    const titleDateStartCol = titleLeftColSpan + titleDateLeftSpacerColSpan + 1;
+    const titleDateEndCol = titleLeftColSpan + titleDateLeftSpacerColSpan + titleDateColSpan;
     const merges = [
       `A1:${getExcelColumnName(titleLeftColSpan)}1`,
-      titleDateColSpan > 1 ? `${getExcelColumnName(titleLeftColSpan + 1)}1:${getExcelColumnName(titleLeftColSpan + titleDateColSpan)}1` : '',
+      titleDateColSpan > 1 ? `${getExcelColumnName(titleDateStartCol)}1:${getExcelColumnName(titleDateEndCol)}1` : '',
       titleLogoColSpan > 1 ? `${getExcelColumnName(totalColumnCount - titleLogoColSpan + 1)}1:${lastColumnName}1` : '',
     ].filter(Boolean);
     const rowHeights = {
