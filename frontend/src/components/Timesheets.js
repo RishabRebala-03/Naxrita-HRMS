@@ -3047,16 +3047,7 @@ function TimesheetPage({
             <Plus size={18} />
             <span>New</span>
           </button>
-          <button
-            type="button"
-            className="mte-tool-button"
-            onClick={handleDownloadTimesheet}
-            disabled={!sheetLoaded || loading || !dates.length}
-            title="Download this timesheet"
-          >
-            <Download size={18} />
-            <span>Download</span>
-          </button>
+          {/* Download feature temporarily disabled. */}
           {canEditApprovedTimesheet ? (
             <button type="button" className="mte-tool-button" onClick={() => setSelectedRowId(rows[0]?.id || '')} disabled={loading}>
               <FileText size={18} />
