@@ -2483,13 +2483,12 @@ function TimesheetPage({
     }
   }, [rows, selectedRowId]);
 
-  const isAugust2026TimesheetPeriod = dates[0]?.startsWith('2026-08-') && dates[dates.length - 1]?.startsWith('2026-08-');
-  const effectiveIsEmployeeEditable = isEmployeeEditable || isAugust2026TimesheetPeriod;
-  const shouldDisplayApprovedState = timesheetStatus === 'approved' || (isAugust2026TimesheetPeriod && wasApprovedTimesheet);
-  const canEditApprovedTimesheet = shouldDisplayApprovedState && (approvedEditWindowOpen || isAugust2026TimesheetPeriod);
+  const effectiveIsEmployeeEditable = isEmployeeEditable;
+  const shouldDisplayApprovedState = timesheetStatus === 'approved';
+  const canEditApprovedTimesheet = shouldDisplayApprovedState && approvedEditWindowOpen;
   const isReadOnly   = !effectiveIsEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
   const canSubmit    = effectiveIsEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
-  const primarySubmitLabel = canEditApprovedTimesheet || (isAugust2026TimesheetPeriod && wasApprovedTimesheet) ? 'Resubmit' : 'Submit';
+  const primarySubmitLabel = canEditApprovedTimesheet ? 'Resubmit' : 'Submit';
   const errors       = validationErrors;
   const submitDisabled = loading || errors.length > 0 || (!hasSavedCurrentDraft && !canEditApprovedTimesheet);
   const rowHasPositiveHours = useCallback((row) =>
@@ -2771,7 +2770,7 @@ function TimesheetPage({
         hasLocalTimesheetEditsRef.current = false;
         setReloadTrigger((t) => t + 1);
       }
-      if (canEditApprovedTimesheet && !isAugust2026TimesheetPeriod) {
+      if (canEditApprovedTimesheet) {
         setApprovedEditWindowOpen(false);
       }
       notify('Draft saved successfully.', 'success');
@@ -3058,7 +3057,7 @@ function TimesheetPage({
             <Download size={18} />
             <span>Download</span>
           </button>
-          {isAugust2026TimesheetPeriod && shouldDisplayApprovedState ? (
+          {canEditApprovedTimesheet ? (
             <button type="button" className="mte-tool-button" onClick={() => setSelectedRowId(rows[0]?.id || '')} disabled={loading}>
               <FileText size={18} />
               <span>Edit All</span>
@@ -3151,7 +3150,7 @@ function TimesheetPage({
           <span>
             <StatusBadge status="approved" />
             {' '}
-            {approvedEditWindowLabel || (isAugust2026TimesheetPeriod ? 'August 2026 timesheets are editable. Make changes and resubmit it for approval.' : 'This approved timesheet is editable during the correction window.')}
+            {approvedEditWindowLabel || 'This approved timesheet is editable during the correction window.'}
           </span>
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
