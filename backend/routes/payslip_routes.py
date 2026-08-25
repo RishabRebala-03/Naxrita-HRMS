@@ -24,6 +24,9 @@ payslip_bp = Blueprint("payslip_bp", __name__)
 UPLOAD_HISTORY_COLLECTION = "payslip_upload_history"
 PAYSLIP_COLLECTION = "payslips"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "company_logo.png")
+UPLOAD_TEMPLATE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "static", "payslip_upload_template.xlsx"
+)
 
 
 def _create_notification(user_id, notification_type, message, target=None, related_payslip_id=None):
@@ -715,6 +718,23 @@ def health_check():
         return jsonify({"status": "healthy", "message": "Payslip API is running", "database": "MongoDB connected"}), 200
     except Exception as exc:
         return jsonify({"status": "unhealthy", "message": "MongoDB connection failed", "error": str(exc)}), 500
+
+
+@payslip_bp.route("/download-template", methods=["GET"])
+def download_upload_template():
+    requester = _resolve_requester()
+    if not _is_admin_requester(requester):
+        return jsonify({"error": "Only payslip admins can download the upload template"}), 403
+
+    if not os.path.isfile(UPLOAD_TEMPLATE_PATH):
+        return jsonify({"error": "Payslip upload template is unavailable"}), 404
+
+    return send_file(
+        UPLOAD_TEMPLATE_PATH,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name="payslip_upload_template.xlsx",
+    )
 
 
 @payslip_bp.route("/upload-excel", methods=["POST"])

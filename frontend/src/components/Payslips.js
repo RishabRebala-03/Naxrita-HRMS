@@ -810,6 +810,14 @@ function Payslips({ user, adminView = false }) {
     window.open(`${API_BASE}/payslips/download/${payslipId}?user_id=${encodeURIComponent(userId)}`, "_blank", "noopener,noreferrer");
   };
 
+  const handleDownloadTemplate = () => {
+    window.open(
+      `${API_BASE}/payslips/download-template?user_id=${encodeURIComponent(userId)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  };
+
   const handleLineItemChange = (kind, index, field, value) => {
     setEditForm((previous) => ({
       ...previous,
@@ -1316,6 +1324,18 @@ function Payslips({ user, adminView = false }) {
         {isAdmin && activeTab === "upload" ? (
           <>
             <div style={{ ...S.card, ...S.cardPad, marginBottom: 14 }}>
+              <div style={{ ...S.rowBetween, marginBottom: 16 }}>
+                <div>
+                  <div style={{ fontSize: 16, color: C.text, fontWeight: 600 }}>Upload Payslip Sheet</div>
+                  <div style={{ fontSize: 12, color: C.textMid, marginTop: 4 }}>
+                    Download the approved template to see the supported headers and upload format.
+                  </div>
+                </div>
+                <button type="button" style={S.btnSecondary} onClick={handleDownloadTemplate}>
+                  <Download size={15} />
+                  Download Template
+                </button>
+              </div>
               <div style={S.formGrid}>
                 <div style={S.field}>
                   <label style={S.label}>Select Month</label>
