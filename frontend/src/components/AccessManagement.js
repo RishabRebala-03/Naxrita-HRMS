@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import axios from "axios";
-import { CalendarRange, ChevronDown, ChevronUp, Clock3, Download, Filter, History, RefreshCw, Save, ShieldCheck, Trash2, UserCog } from "lucide-react";
+import { CalendarRange, ChevronDown, ChevronUp, Clock3, Download, Filter, History, RefreshCw, Save, ShieldCheck, Trash2, Unlock, UserCog } from "lucide-react";
 
 import { buildRequesterHeaders, getRequesterId } from "../utils/requester";
 import ValueHelpSearch from "./ValueHelpSearch";
@@ -20,6 +20,21 @@ const getReportingLeadLabel = (item = {}) =>
   "";
 
 const normalizeValue = (value) => String(value || "").trim().toLowerCase();
+
+const getFortnightBounds = (monthValue, half) => {
+  if (!/^\d{4}-\d{2}$/.test(monthValue || "")) return null;
+  const [year, month] = monthValue.split("-").map(Number);
+  const monthEnd = new Date(year, month, 0).getDate();
+  const prefix = `${monthValue}-`;
+  return half === "second"
+    ? { start: `${prefix}16`, end: `${prefix}${String(monthEnd).padStart(2, "0")}` }
+    : { start: `${prefix}01`, end: `${prefix}15` };
+};
+
+const getCurrentMonthValue = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+};
 
 const mergeEmployeeOverridesIntoHistory = (history, overrides) => {
   const records = Array.isArray(history) ? [...history] : [];
@@ -128,6 +143,12 @@ const AccessManagement = ({ user }) => {
     second_fortnight_block_day: 28,
     effective_start: "",
     effective_end: "",
+    notes: "",
+  });
+  const [periodUnlockDraft, setPeriodUnlockDraft] = useState({
+    employee_id: "",
+    month: getCurrentMonthValue(),
+    half: "first",
     notes: "",
   });
   const [overrideSearch, setOverrideSearch] = useState("");
@@ -902,10 +923,38 @@ const AccessManagement = ({ user }) => {
       ));
       resetOverrideDraft();
       setActiveTab("history");
-      setMessage("Saved employee unblocking record to History");
+      setMessage("Saved employee-specific access rule to History");
     } catch (error) {
       console.error("Failed to save employee-specific block rule", error);
       setMessage(error.response?.data?.error || "Failed to save employee-specific block rule");
+    } finally {
+      setSavingBlockSettings(false);
+      window.setTimeout(() => setMessage(""), 3000);
+    }
+  };
+
+  const savePeriodUnlock = async () => {
+    const period = getFortnightBounds(periodUnlockDraft.month, periodUnlockDraft.half);
+    if (!periodUnlockDraft.employee_id || !period) {
+      setMessage("Select an employee, month, and fortnight to unblock");
+      return;
+    }
+
+    try {
+      setSavingBlockSettings(true);
+      setMessage("");
+      await axios.put(`${API_BASE}/api/timesheets/period-unlocks`, {
+        employee_id: periodUnlockDraft.employee_id,
+        period_start: period.start,
+        period_end: period.end,
+        unlocked: true,
+        notes: periodUnlockDraft.notes,
+      }, { headers: requesterHeaders });
+      setMessage(`Unblocked ${period.start} to ${period.end} for the selected employee`);
+      setPeriodUnlockDraft((current) => ({ ...current, notes: "" }));
+    } catch (error) {
+      console.error("Failed to unblock employee fortnight", error);
+      setMessage(error.response?.data?.error || "Failed to unblock employee fortnight");
     } finally {
       setSavingBlockSettings(false);
       window.setTimeout(() => setMessage(""), 3000);
@@ -1391,8 +1440,55 @@ const AccessManagement = ({ user }) => {
           <section className="fiori-panel access-management-block-panel timesheet-access-card employee-unblocking-card">
             <div className="fiori-panel-header">
               <div>
-                <h3>Employee-Specific Rule</h3>
-                <p>Add a temporary or permanent override for one employee without changing the global rule.</p>
+                <h3>Unblock a Specific Fortnight</h3>
+                <p>Use this for a missed or already locked timesheet. It creates an actual access grant for this employee and period.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <Unlock size={18} />
+                <span>One employee · one fortnight</span>
+              </div>
+            </div>
+
+            <div className="access-management-block-grid is-employee">
+              <label className="access-management-block-field is-wide">
+                <span>Employee</span>
+                <ValueHelpSelect
+                  value={periodUnlockDraft.employee_id}
+                  onChange={(value) => setPeriodUnlockDraft((current) => ({ ...current, employee_id: value }))}
+                  options={employeeBlockOptions}
+                  placeholder="Select employee"
+                  searchPlaceholder="Search employees"
+                />
+              </label>
+              <label className="access-management-block-field">
+                <span>Month</span>
+                <input className="input" type="month" value={periodUnlockDraft.month} onChange={(event) => setPeriodUnlockDraft((current) => ({ ...current, month: event.target.value }))} />
+              </label>
+              <label className="access-management-block-field">
+                <span>Fortnight</span>
+                <select className="input" value={periodUnlockDraft.half} onChange={(event) => setPeriodUnlockDraft((current) => ({ ...current, half: event.target.value }))}>
+                  <option value="first">1st–15th</option>
+                  <option value="second">16th–month end</option>
+                </select>
+              </label>
+              <label className="access-management-block-field is-wide">
+                <span>Notes</span>
+                <input className="input" value={periodUnlockDraft.notes} onChange={(event) => setPeriodUnlockDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Reason for unblocking (optional)" />
+              </label>
+              <div className="access-management-block-actions">
+                <button type="button" className="fiori-button primary" onClick={savePeriodUnlock} disabled={savingBlockSettings || !periodUnlockDraft.employee_id || !periodUnlockDraft.month}>
+                  <Unlock size={16} />
+                  <span>{savingBlockSettings ? "Saving" : "Unblock Fortnight"}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="fiori-panel access-management-block-panel timesheet-access-card employee-unblocking-card">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Employee-Specific Access Rule</h3>
+                <p>Set the final day this employee can edit each fortnight. The selected day remains editable; access closes the following day.</p>
               </div>
               <div className="access-management-matrix-meta">
                 <UserCog size={18} />
