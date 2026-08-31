@@ -1008,6 +1008,13 @@ def get_fortnight_deadline_label(period_start, period_end, employee_id=None):
     if not deadline or not start_date or not end_date:
         return ""
 
+    _, employee_override = resolve_timesheet_block_settings(employee_id, period_start, period_end)
+    if employee_override:
+        if start_date.day == 1 and end_date.day == 15:
+            return f"This employee-specific rule keeps the first-fortnight timesheet open through the {format_ordinal(deadline.day)}."
+        if start_date.day == 16:
+            return f"This employee-specific rule keeps the second-fortnight timesheet open through the {format_ordinal(deadline.day)}."
+
     if start_date.day == 1 and end_date.day == 15:
         return f"This first-fortnight timesheet is blocked from the {format_ordinal(deadline.day)} onward unless an admin unblocks it."
     if start_date.day == 16:
@@ -1016,6 +1023,14 @@ def get_fortnight_deadline_label(period_start, period_end, employee_id=None):
 
 
 def get_timesheet_period_unlock(employee_id, period_start, period_end):
+    """Fetch an active admin unlock using the canonical fortnight key.
+
+    Period values arrive from both the admin tools and the employee UI.  One
+    caller can include an ISO timestamp while the other uses a date-only
+    string, so comparisons must not depend on the original representation.
+    """
+    period_start = normalize_date_key(period_start)
+    period_end = normalize_date_key(period_end)
     if not employee_id or not period_start or not period_end:
         return None
     return mongo.db.timesheet_period_unlocks.find_one({
@@ -1036,7 +1051,12 @@ def is_fortnight_entry_blocked(employee_id, period_start, period_end, reference=
         return False
 
     current_date = (reference or now_ist()).date()
-    if current_date < deadline:
+    _, employee_override = resolve_timesheet_block_settings(employee_id, period_start, period_end)
+    # Employee-specific access dates are inclusive.  This lets an admin set
+    # the final day an employee may work on a locked fortnight (for example,
+    # Day 31 keeps an August second fortnight editable on August 31).
+    is_still_open = current_date <= deadline if employee_override else current_date < deadline
+    if is_still_open:
         return False
 
     return not is_timesheet_period_unlocked(employee_id, period_start, period_end)
@@ -3156,12 +3176,16 @@ def save_timesheet_period_unlock():
 
         data = request.get_json() or {}
         employee_id = str(data.get("employee_id", "")).strip()
-        period_start = str(data.get("period_start", "")).strip()
-        period_end = str(data.get("period_end", "")).strip()
+        period_start = normalize_date_key(data.get("period_start"))
+        period_end = normalize_date_key(data.get("period_end"))
         unlocked = bool(data.get("unlocked"))
         notes = str(data.get("notes", "")).strip()
         if not all([employee_id, period_start, period_end]):
             return jsonify({"error": "employee_id, period_start, and period_end are required"}), 400
+
+        expected_start, expected_end = get_fortnight_bounds_for_date(period_start)
+        if period_start != expected_start or period_end != expected_end:
+            return jsonify({"error": "period_start and period_end must identify one complete fortnight"}), 400
 
         employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)})
         if not employee:

@@ -210,6 +210,18 @@ def run():
             assert_true(override_payload.get("entry_blocked") is False, "Employee override should keep July 14 editable for this employee")
             results.append("PASS: employee-specific block date range overrides the global rule")
 
+        with patch("routes.timesheet_routes.now_ist", return_value=current_datetime(2026, 7, 15)):
+            inclusive_override_access = client.get(
+                f"/api/timesheets/period-access?employee_id={employee['_id']}&period_start=2026-07-01&period_end=2026-07-15",
+                headers=header(employee["_id"]),
+            )
+            assert_status(inclusive_override_access, 200, "Period access on employee-specific final editable day")
+            assert_true(
+                inclusive_override_access.get_json().get("entry_blocked") is False,
+                "Employee-specific cutoff should keep the selected final day editable",
+            )
+            results.append("PASS: employee-specific cutoff date is inclusive")
+
         mongo.db.system_settings.delete_one({"key": "global_timesheet_block_settings"})
         mongo.db.timesheet_block_overrides.delete_many({"notes": {"$regex": RUN_TAG}})
 
