@@ -42,9 +42,18 @@ def assert_status(response, expected, message):
 
 
 def seed_users():
+    admin_id = ObjectId()
     lead_id = ObjectId()
     employee_id = ObjectId()
     users = [
+        {
+            "_id": admin_id,
+            "name": "Window Admin",
+            "email": "window-admin@naxrita.local",
+            "role": "Admin",
+            "employeeId": "ADM-WINDOW-1",
+            "testTag": RUN_TAG,
+        },
         {
             "_id": lead_id,
             "name": "Window Lead",
@@ -64,7 +73,7 @@ def seed_users():
         },
     ]
     mongo.db.users.insert_many(users)
-    return users[0], users[1]
+    return users[0], users[1], users[2]
 
 
 def seed_charge_code(employee):
@@ -145,12 +154,13 @@ def run():
     with app.app_context():
         mongo.cx.admin.command("ping")
         mongo.db.notifications.delete_many({"message": {"$regex": RUN_TAG}})
+        mongo.db.timesheet_period_unlocks.delete_many({"employee_email": "window-employee@naxrita.local"})
         mongo.db.timesheets.delete_many({"testTag": RUN_TAG})
         mongo.db.charge_code_assignments.delete_many({"testTag": RUN_TAG})
         mongo.db.charge_codes.delete_many({"testTag": RUN_TAG})
         mongo.db.users.delete_many({"testTag": RUN_TAG})
 
-        lead, employee = seed_users()
+        admin, lead, employee = seed_users()
         charge_code_id = seed_charge_code(employee)
         first_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-07-01", "2026-07-15")
         second_half = seed_approved_timesheet(employee, lead, charge_code_id, "2026-07-16", "2026-07-31")
@@ -265,6 +275,37 @@ def run():
             assert_status(blocked, 400, "Approved second-half edit should be blocked outside 27-28 window")
             results.append("PASS: second-half approved timesheet stays locked outside the 27-28 window")
 
+            admin_unlock = client.put(
+                "/api/timesheets/period-unlocks",
+                json={
+                    "employee_id": str(employee["_id"]),
+                    "period_start": "2026-07-16",
+                    "period_end": "2026-07-31",
+                    "unlocked": True,
+                    "notes": "Admin reopened approved fortnight",
+                },
+                headers=header(admin["_id"]),
+            )
+            assert_status(admin_unlock, 200, "Admin unlocks approved second-half timesheet")
+
+            employee_timesheets = client.get(
+                f"/api/timesheets/employee/{employee['_id']}",
+                headers=header(employee["_id"]),
+            )
+            assert_status(employee_timesheets, 200, "Employee timesheet list after admin unlock")
+            items = employee_timesheets.get_json()
+            unlocked_item = next(item for item in items if item["_id"] == str(second_half["_id"]))
+            assert_true(unlocked_item.get("period_unlock_active") is True, "Employee list should show the admin unlock")
+            assert_true(unlocked_item.get("is_employee_editable") is True, "Admin-unlocked approved timesheet should be editable")
+
+            unlocked_update = client.put(
+                f"/api/timesheets/update/{second_half['_id']}",
+                json={"entries": [{"date": "2026-07-16", "entry_type": "work", "charge_code_id": str(charge_code_id), "hours": 6}]},
+                headers=header(employee["_id"]),
+            )
+            assert_status(unlocked_update, 200, "Employee edits approved timesheet after admin unlock")
+            results.append("PASS: admin unlock makes approved timesheet visible as editable to the employee")
+
         with patch("routes.timesheet_routes.now_ist", return_value=approved_window_datetime(2026, 8, 18)):
             employee_timesheets = client.get(
                 f"/api/timesheets/employee/{employee['_id']}",
@@ -301,6 +342,7 @@ def run():
 
     with app.app_context():
         mongo.db.notifications.delete_many({"message": {"$regex": RUN_TAG}})
+        mongo.db.timesheet_period_unlocks.delete_many({"employee_email": "window-employee@naxrita.local"})
         mongo.db.timesheets.delete_many({"testTag": RUN_TAG})
         mongo.db.charge_code_assignments.delete_many({"testTag": RUN_TAG})
         mongo.db.charge_codes.delete_many({"testTag": RUN_TAG})

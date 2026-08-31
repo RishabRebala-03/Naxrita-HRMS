@@ -1070,6 +1070,21 @@ def is_approved_edit_window_open(timesheet, reference=None):
     return is_correction_window_open_for_timesheet(timesheet, reference=reference)
 
 
+def is_approved_reopen_allowed(timesheet, reference=None):
+    """Allow approved corrections during the payroll window or an admin unlock."""
+    if not timesheet:
+        return False
+
+    return (
+        is_correction_window_open_for_timesheet(timesheet, reference=reference)
+        or is_timesheet_period_unlocked(
+            timesheet.get("employee_id"),
+            timesheet.get("period_start"),
+            timesheet.get("period_end"),
+        )
+    )
+
+
 def is_correction_window_open_for_timesheet(timesheet, reference=None):
     """Return True when the fortnight's correction dates are open."""
     if not timesheet:
@@ -1113,18 +1128,10 @@ def is_employee_editable_timesheet(timesheet):
         return not period_blocked
     if status == "draft":
         if timesheet.get("reopened_from_approved"):
-            return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
-                timesheet.get("employee_id"),
-                timesheet.get("period_start"),
-                timesheet.get("period_end"),
-            )
+            return is_approved_reopen_allowed(timesheet)
         return not period_blocked
     if status == "approved":
-        return is_correction_window_open_for_timesheet(timesheet) or is_timesheet_period_unlocked(
-            timesheet.get("employee_id"),
-            timesheet.get("period_start"),
-            timesheet.get("period_end"),
-        )
+        return is_approved_reopen_allowed(timesheet)
     return False
 
 
@@ -1984,7 +1991,7 @@ def create_timesheet():
             return jsonify({
                 "error": get_fortnight_deadline_label(period_start, period_end, employee_id=emp_obj_id)
             }), 400
-        if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
+        if existing and existing.get("status") == "approved" and not is_approved_reopen_allowed(existing):
             return jsonify({
                 "error": "This timesheet has already been approved and is locked."
             }), 400
@@ -2241,9 +2248,9 @@ def save_timesheet_draft():
             return jsonify({"error": get_fortnight_deadline_label(period_start, period_end, employee_id=emp_obj_id)}), 400
         if existing and existing.get("status") in ("pending_lead", "pending_manager"):
             return jsonify({"error": "Submitted or approved timesheets cannot be saved as drafts"}), 400
-        if existing and existing.get("status") == "approved" and not is_approved_edit_window_open(existing):
+        if existing and existing.get("status") == "approved" and not is_approved_reopen_allowed(existing):
             return jsonify({"error": "Approved timesheets can only be edited during the configured correction window"}), 400
-        if existing and existing.get("status") == "draft" and existing.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(existing):
+        if existing and existing.get("status") == "draft" and existing.get("reopened_from_approved") and not is_approved_reopen_allowed(existing):
             return jsonify({"error": "The correction window has closed for this previously approved timesheet"}), 400
 
         validated_entries, total_hours, entry_error = build_validated_timesheet_entries(
@@ -2334,9 +2341,9 @@ def submit_timesheet(timesheet_id):
             return jsonify({"error": "Timesheet not found"}), 404
         if is_fortnight_entry_blocked(ts.get("employee_id"), ts.get("period_start"), ts.get("period_end")):
             return jsonify({"error": get_fortnight_deadline_label(ts.get("period_start"), ts.get("period_end"), employee_id=ts.get("employee_id"))}), 400
-        if ts.get("status") == "approved" and not is_approved_edit_window_open(ts):
+        if ts.get("status") == "approved" and not is_approved_reopen_allowed(ts):
             return jsonify({"error": "Timesheet is already approved"}), 400
-        if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_correction_window_open_for_timesheet(ts):
+        if ts.get("status") == "draft" and ts.get("reopened_from_approved") and not is_approved_reopen_allowed(ts):
             return jsonify({"error": "The correction window has closed for this previously approved timesheet"}), 400
 
         limit_error = validate_daily_work_hours(ts.get("entries", []))

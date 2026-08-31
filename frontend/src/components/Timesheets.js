@@ -2485,7 +2485,9 @@ function TimesheetPage({
 
   const effectiveIsEmployeeEditable = isEmployeeEditable;
   const shouldDisplayApprovedState = timesheetStatus === 'approved';
-  const canEditApprovedTimesheet = shouldDisplayApprovedState && approvedEditWindowOpen;
+  const canEditApprovedTimesheet = shouldDisplayApprovedState && (
+    effectiveIsEmployeeEditable || approvedEditWindowOpen || periodUnlockActive
+  );
   const isReadOnly   = !effectiveIsEmployeeEditable || ['pending_lead', 'pending_manager'].includes(timesheetStatus) || (timesheetStatus === 'approved' && !canEditApprovedTimesheet);
   const canSubmit    = effectiveIsEmployeeEditable && (timesheetStatus === 'draft' || timesheetStatus.startsWith('rejected') || canEditApprovedTimesheet);
   const primarySubmitLabel = canEditApprovedTimesheet ? 'Resubmit' : 'Submit';
@@ -3147,7 +3149,9 @@ function TimesheetPage({
           <span>
             <StatusBadge status="approved" />
             {' '}
-            {approvedEditWindowLabel || 'This approved timesheet is editable during the correction window.'}
+            {periodUnlockActive
+              ? 'This approved timesheet was unblocked by an admin and can be edited again.'
+              : (approvedEditWindowLabel || 'This approved timesheet is editable during the correction window.')}
           </span>
           <button type="button" className="mte-inline-banner-button" onClick={handleSaveDraft} disabled={loading}>
             {loading ? 'Updating' : 'Save Revision'}
