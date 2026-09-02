@@ -399,8 +399,53 @@ def get_timesheet_preference(employee_id, period_start, period_end):
     })
 
 
+def get_employee_workflow_preference(employee_id):
+    if not employee_id:
+        return None
+    try:
+        return mongo.db.employee_workflow_preferences.find_one({"employee_id": ObjectId(employee_id)})
+    except Exception:
+        return None
+
+
+def get_workflow_users(ids):
+    users = []
+    seen = set()
+    for user_id in ids or []:
+        try:
+            user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            user = None
+        if user and str(user["_id"]) not in seen:
+            seen.add(str(user["_id"]))
+            users.append(user)
+    return users
+
+
 def apply_timesheet_workflow_preference(timesheet_doc, employee=None):
     if not isinstance(timesheet_doc, dict):
+        return timesheet_doc
+
+    employee_preference = get_employee_workflow_preference(timesheet_doc.get("employee_id"))
+    if employee_preference:
+        workflow = employee_preference.get("timesheet") or {}
+        approvers = get_workflow_users(workflow.get("approver_ids"))
+        notifiers = get_workflow_users(workflow.get("notifier_ids"))
+        timesheet_doc["timesheet_workflow_preferences"] = {
+            "approver_ids": [item["_id"] for item in approvers],
+            "notifier_ids": [item["_id"] for item in notifiers],
+            "approvers": [item.get("email", "") for item in approvers],
+            "notifications": [item.get("email", "") for item in notifiers],
+            "routing_mode": "assigned",
+            "updated_at": employee_preference.get("updated_at"),
+        }
+        if approvers:
+            first = approvers[0]
+            timesheet_doc["reporting_lead_id"] = first["_id"]
+            timesheet_doc["reporting_lead_name"] = first.get("name", "")
+            timesheet_doc["reporting_lead_email"] = first.get("email", "")
+        else:
+            timesheet_doc["reporting_lead_id"] = None
         return timesheet_doc
 
     preference = get_timesheet_preference(
@@ -564,6 +609,11 @@ def get_timesheet_approval_chain(timesheet, employee=None):
         })
 
     workflow = (timesheet.get("timesheet_workflow_preferences") or {})
+    if workflow.get("routing_mode") == "assigned":
+        for approver in get_workflow_users(workflow.get("approver_ids")):
+            append_user(approver)
+        return chain
+
     for approver_email in normalize_email_list(workflow.get("approvers")):
         append_user(find_user_by_email(approver_email))
 
@@ -730,6 +780,9 @@ def escalate_timesheet_request(timesheet_id):
             return False
 
         employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
+        if (timesheet.get("timesheet_workflow_preferences") or {}).get("routing_mode") == "assigned":
+            # Assigned workflows deliberately never fall back to reporting leads or admins.
+            return False
         next_approver = get_next_timesheet_approver(timesheet, employee=employee)
         current_approver = get_timesheet_current_approver(timesheet, employee=employee)
 
@@ -2016,10 +2069,6 @@ def create_timesheet():
                 "error": "This timesheet has already been approved and is locked."
             }), 400
 
-        reporting_lead_id = employee.get("reportsTo")
-        if not reporting_lead_id:
-            return jsonify({"error": "No reporting lead found for employee"}), 404
-
         validated_entries, total_hours, entry_error = build_validated_timesheet_entries(
             emp_obj_id, period_start, period_end, entries
         )
@@ -2043,7 +2092,7 @@ def create_timesheet():
             "total_hours":         total_hours,
             "work_hours":          get_work_hours_total(validated_entries),
             "status":              "pending_lead",
-            "reporting_lead_id":   reporting_lead_id,
+            "reporting_lead_id":   None,
             "manager_id":          employee.get("peopleLead"),
             "created_at":          now,
             "updated_at":          now,
@@ -2054,6 +2103,8 @@ def create_timesheet():
         }
         apply_employee_assignment_snapshot(timesheet, employee)
         apply_timesheet_workflow_preference(timesheet, employee=employee)
+        if (timesheet.get("timesheet_workflow_preferences") or {}).get("routing_mode") != "assigned":
+            return jsonify({"error": "No assigned timesheet workflow found for employee. Ask an admin to configure approvers."}), 400
         current_approver = get_timesheet_current_approver(timesheet, employee=employee)
         if not current_approver:
             return jsonify({"error": "No approver found for employee"}), 404
@@ -2082,6 +2133,17 @@ def create_timesheet():
             event="submitted",
             message=msg,
         )
+        for notifier_id in (timesheet.get("timesheet_workflow_preferences") or {}).get("notifier_ids", []):
+            if str(notifier_id) == str(current_approver["_id"]):
+                continue
+            create_notification(
+                user_id=notifier_id,
+                notification_type="timesheet_submission_notification",
+                message=msg,
+                related_timesheet_id=timesheet_id,
+                target=build_timesheet_notification_target(timesheet, view="approvals"),
+                reminder_group=f"timesheet:{timesheet_id}:notifier:{notifier_id}",
+            )
         queue_timesheet_submission_emails(timesheet, employee=employee)
 
         return jsonify({
@@ -2625,10 +2687,13 @@ def lead_approve_timesheet(timesheet_id):
         employee = mongo.db.users.find_one({"_id": timesheet.get("employee_id")})
         # Lead approval is always final — only look for a next approver when
         # the timesheet is already at the manager stage (pending_manager).
-        if is_timesheet_admin or timesheet.get("status") == "pending_lead":
+        if is_timesheet_admin:
             next_approver = None
         else:
-            next_approver = get_next_timesheet_approver(timesheet, employee=employee)
+            next_approver = get_next_timesheet_approver(timesheet, employee=employee) if (
+                (timesheet.get("timesheet_workflow_preferences") or {}).get("routing_mode") == "assigned"
+                or timesheet.get("status") == "pending_manager"
+            ) else None
 
         approval_entry = {
             "stage":         "lead" if timesheet.get("status") == "pending_lead" else "manager",

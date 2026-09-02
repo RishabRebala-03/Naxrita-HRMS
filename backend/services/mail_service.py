@@ -22,7 +22,7 @@ def queue_leave_applied_emails(leave_id):
     manager = _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, manager)
     context = _leave_context(leave, employee, manager)
-    recipients, cc = _leave_mail_recipients(employee, manager)
+    recipients, cc = _leave_mail_recipients(employee, manager, leave=leave)
 
     enqueue_mail(
         tenant_id=tenant_id,
@@ -62,7 +62,7 @@ def queue_leave_status_email(leave_id, status, remarks="", approver_name=""):
     )
 
     queued = 0
-    recipients, cc = _leave_mail_recipients(employee, approver)
+    recipients, cc = _leave_mail_recipients(employee, approver, leave=leave)
     normalized_status = str(status or "").lower()
 
     if recipients and normalized_status == "approved":
@@ -108,7 +108,7 @@ def queue_leave_cancelled_email(leave_id, cancelled_by_role="", reason=""):
     employee = _get_employee_for_leave(leave)
     manager = _get_current_approver(leave, employee) or _get_reporting_manager(employee)
     tenant_id = resolve_tenant_id(leave, employee, manager)
-    recipients, cc = _leave_mail_recipients(employee, manager)
+    recipients, cc = _leave_mail_recipients(employee, manager, leave=leave)
     context = _leave_context(
         leave,
         employee,
@@ -143,7 +143,7 @@ def queue_leave_modified_email(leave_id):
     employee = _get_employee_for_leave(leave)
     approver = _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, approver)
-    recipients, cc = _leave_mail_recipients(employee, approver)
+    recipients, cc = _leave_mail_recipients(employee, approver, leave=leave)
     stamp = _stamp(leave.get("modified_on") or datetime.utcnow())
 
     enqueue_mail(
@@ -169,7 +169,7 @@ def queue_leave_escalated_email(leave_id, next_approver=None):
     employee = _get_employee_for_leave(leave)
     approver = next_approver or _get_current_approver(leave, employee)
     tenant_id = resolve_tenant_id(leave, employee, approver)
-    recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True)
+    recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True, leave=leave)
 
     context = _leave_context(
         leave,
@@ -223,7 +223,7 @@ def send_pending_leave_reminders(tenant_id=None, leave_id=None, force=False, rem
             skipped += 1
             continue
 
-        recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True)
+        recipients, cc = _leave_mail_recipients(employee, approver, include_fallback_approver=True, leave=leave)
         bucket = int(now.timestamp() // (reminder_hours * 3600))
         enqueue_mail(
             tenant_id=resolved_tenant_id,
@@ -479,7 +479,14 @@ def _approval_chain_emails(employee, current_approver, tenant_id):
     return _dedupe(emails)
 
 
-def _leave_mail_recipients(employee, approver=None, include_fallback_approver=False):
+def _leave_mail_recipients(employee, approver=None, include_fallback_approver=False, leave=None):
+    assigned_workflow = (leave or {}).get("leave_workflow_preferences") or {}
+    if assigned_workflow.get("routing_mode") == "assigned":
+        assigned_ids = list(assigned_workflow.get("approver_ids") or []) + list(assigned_workflow.get("notifier_ids") or [])
+        selected_users = mongo.db.users.find({"_id": {"$in": [_as_object_id(item) for item in assigned_ids]}})
+        recipients = _dedupe([item.get("email") for item in selected_users if item.get("email")])
+        return recipients, [address for address in _dedupe(LEAVE_NOTIFICATION_CC) if address.lower() not in {item.lower() for item in recipients}]
+
     reporting_lead = _get_reporting_manager(employee)
     recipients = []
 

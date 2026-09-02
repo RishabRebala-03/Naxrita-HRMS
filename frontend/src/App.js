@@ -201,6 +201,7 @@ function App() {
   const [sectionState, setSectionState] = useState(null);
   const [viewEmployeeId, setViewEmployeeId] = useState(null);
   const [profileReturnSection, setProfileReturnSection] = useState("dashboard");
+  const [profileReturnTab, setProfileReturnTab] = useState("personal");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [idleWarningVisible, setIdleWarningVisible] = useState(false);
@@ -459,6 +460,28 @@ function App() {
     setSection("profile");
   };
 
+  const returnToProfileRecordSource = () => {
+    const profileId = sectionState?.returnToProfileId;
+    if (!profileId) return;
+    setViewEmployeeId(profileId);
+    setSectionState(null);
+    setSection("profile");
+  };
+
+  const handleOpenProfileRecord = (type, record, employeeId, profileTab) => {
+    const recordId = record?._id || record?.id;
+    setViewEmployeeId(employeeId);
+    setProfileReturnTab(profileTab || "personal");
+    setSectionState({
+      returnToProfileId: employeeId,
+      source: "profile",
+      ...(type === "timesheet" ? { timesheetId: recordId, periodStart: record?.period_start } : {}),
+      ...(type === "leave" ? { leaveId: recordId, activeTab: "history" } : {}),
+      ...(type === "payslip" ? { payslipId: recordId } : {}),
+    });
+    setSection(type === "timesheet" ? "timesheets" : type === "payslip" ? "payslips" : "leaves");
+  };
+
   const handleSectionChange = (newSection, nextSectionState = null) => {
     if (
       newSection === "profile" ||
@@ -601,7 +624,7 @@ function App() {
 
       case "leaves":
         if (role === "Admin") {
-          return <AdminLeaves user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />;
+          return <AdminLeaves user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} onReturnToProfile={returnToProfileRecordSource} />;
         } else if (hasAdminMenuAccess(currentUser, "leaves")) {
           return (
             <DelegatedLeavesWorkspace
@@ -614,7 +637,7 @@ function App() {
         } else if (role === "Manager") {
           return <ManagerLeaves user={currentUser} navigationState={sectionState} />;
         } else {
-          return <EmployeeLeaves user={currentUser} navigationState={sectionState} />;
+          return <EmployeeLeaves user={currentUser} navigationState={sectionState} onReturnToProfile={returnToProfileRecordSource} />;
         }
 
       case "profile":
@@ -624,6 +647,8 @@ function App() {
             role={role}
             viewEmployeeId={viewEmployeeId}
             onUserUpdate={handleUserUpdate}
+            onOpenRecord={handleOpenProfileRecord}
+            initialTab={profileReturnTab}
             onBack={() => {
               setViewEmployeeId(null);
               setSection(viewEmployeeId ? profileReturnSection || "dashboard" : "dashboard");
@@ -665,11 +690,11 @@ function App() {
                 personalLabel="My Timesheets"
                 adminLabel="Admin Timesheets"
                 ariaLabel="Timesheet workspace tabs"
-                renderPersonal={() => <Timesheets user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />}
-                renderAdmin={() => <Timesheets user={currentUser} adminView navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />}
+                renderPersonal={() => <Timesheets user={currentUser} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} onReturnToProfile={returnToProfileRecordSource} />}
+                renderAdmin={() => <Timesheets user={currentUser} adminView navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} onReturnToProfile={returnToProfileRecordSource} />}
               />
             ) : (
-              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} />
+              <Timesheets user={currentUser} adminView={hasAdminMenuAccess(currentUser, "timesheets")} navigationState={sectionState} onNavigateToProfile={handleNavigateToProfile} onReturnToProfile={returnToProfileRecordSource} />
             )}
           </div>
         );
@@ -685,7 +710,7 @@ function App() {
               renderAdmin={() => <Payslips user={currentUser} adminView />}
             />
           )
-          : <Payslips user={currentUser} adminView={hasAdminMenuAccess(currentUser, "payslips")} />;
+          : <Payslips user={currentUser} adminView={hasAdminMenuAccess(currentUser, "payslips")} navigationState={sectionState} onReturnToProfile={returnToProfileRecordSource} />;
 
       default:
         if (role === "Admin") {

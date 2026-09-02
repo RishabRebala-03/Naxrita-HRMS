@@ -79,7 +79,7 @@ const uniqueOptions = (items, getter, allLabel = "All") => [
   ...Array.from(new Set(items.map(getter).filter(Boolean).map(String))).sort((a, b) => a.localeCompare(b)).map((value) => ({ value, label: value })),
 ];
 
-const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) => {
+const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack, onOpenRecord, initialTab = "personal" }) => {
   const requesterHeaders = buildRequesterHeaders(user);
   const [employeeId, setEmployeeId] = useState("");
   const [profile, setProfile] = useState(null);
@@ -93,6 +93,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
   const [leaveHistory, setLeaveHistory] = useState([]);
   const [tabLoading, setTabLoading] = useState(false);
   const [tabMessage, setTabMessage] = useState("");
+  const [selectedProfileRecord, setSelectedProfileRecord] = useState(null);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [projectForm, setProjectForm] = useState({
     _id: null,
@@ -178,6 +179,16 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
       0
     );
   };
+
+  const openProfileRecord = (type, record) => {
+    if (type !== "project" && typeof onOpenRecord === "function") {
+      onOpenRecord(type, record, employeeId || viewEmployeeId, activeTab);
+      return;
+    }
+    setSelectedProfileRecord({ type, record });
+  };
+
+  useEffect(() => setActiveTab(initialTab || "personal"), [initialTab]);
 
   const calculateTenure = (startDate) => {
     if (!startDate) return "Not available";
@@ -1155,7 +1166,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
                         }
 
                         return (
-                          <tr key={project._id}>
+                          <tr key={project._id} className="profile-record-row" onClick={() => openProfileRecord("project", project)} tabIndex={0} role="button" onKeyDown={(event) => event.key === "Enter" && openProfileRecord("project", project)}>
                             <td>
                               <div className="fiori-primary-cell">
                                 <strong>{project.projectName || project.name}</strong>
@@ -1235,7 +1246,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
                     </thead>
                     <tbody>
                       {filteredPayslips.map((item) => (
-                        <tr key={item._id || `${item.employee_id}-${item.period_key}`}>
+                        <tr key={item._id || `${item.employee_id}-${item.period_key}`} className="profile-record-row" onClick={() => openProfileRecord("payslip", item)} tabIndex={0} role="button" onKeyDown={(event) => event.key === "Enter" && openProfileRecord("payslip", item)}>
                           <td><strong>{item.month || item.period_key || "Payroll period"} {item.year || ""}</strong></td>
                           <td>{item.employee_name || profile.name || "Employee"}</td>
                           <td>
@@ -1293,7 +1304,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
                     </thead>
                     <tbody>
                       {filteredTimesheets.map((item) => (
-                        <tr key={item._id}>
+                        <tr key={item._id} className="profile-record-row" onClick={() => openProfileRecord("timesheet", item)} tabIndex={0} role="button" onKeyDown={(event) => event.key === "Enter" && openProfileRecord("timesheet", item)}>
                           <td>{formatDateRange(item.period_start, item.period_end)}</td>
                           <td>
                             <span className={`fiori-status-pill ${item.status === "approved" ? "is-approved" : "is-pending"}`}>
@@ -1354,7 +1365,7 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
                         </thead>
                         <tbody>
                           {filteredLeaves.map((item) => (
-                            <tr key={item._id}>
+                            <tr key={item._id} className="profile-record-row" onClick={() => openProfileRecord("leave", item)} tabIndex={0} role="button" onKeyDown={(event) => event.key === "Enter" && openProfileRecord("leave", item)}>
                               <td><strong>{item.leave_type || item.leaveType || "Leave"}</strong></td>
                               <td>{formatDateRange(item.start_date, item.end_date)}</td>
                               <td>{item.approved_days || item.days || 0}</td>
@@ -1403,6 +1414,45 @@ const Profile = ({ user, role, viewEmployeeId = null, onUserUpdate, onBack }) =>
               {tabMessage}
             </div>
           )}
+
+          {selectedProfileRecord ? (
+            <div className="profile-record-overlay" role="presentation">
+              <section className="profile-record-detail" role="dialog" aria-modal="true" aria-label={`${selectedProfileRecord.type} details`}>
+                <button type="button" className="fiori-button secondary" onClick={() => setSelectedProfileRecord(null)}><ArrowLeft size={16} /> Back to profile</button>
+                <h3>{selectedProfileRecord.type === "timesheet" ? "Timesheet details" : selectedProfileRecord.type === "payslip" ? "Payslip details" : selectedProfileRecord.type === "project" ? "Project details" : "Leave request details"}</h3>
+                {selectedProfileRecord.type === "timesheet" ? (
+                  <div className="profile-record-detail-grid">
+                    <span>Period</span><strong>{formatDateRange(selectedProfileRecord.record.period_start, selectedProfileRecord.record.period_end)}</strong>
+                    <span>Status</span><strong>{selectedProfileRecord.record.status || "Draft"}</strong>
+                    <span>Total hours</span><strong>{getTimesheetHours(selectedProfileRecord.record)} hour(s)</strong>
+                    <span>Entries</span><strong>{selectedProfileRecord.record.entries?.length || 0}</strong>
+                  </div>
+                ) : selectedProfileRecord.type === "payslip" ? (
+                  <div className="profile-record-detail-grid">
+                    <span>Period</span><strong>{selectedProfileRecord.record.month || selectedProfileRecord.record.period_key || "Payroll period"} {selectedProfileRecord.record.year || ""}</strong>
+                    <span>Status</span><strong>{selectedProfileRecord.record.published ? "Published" : "Draft"}</strong>
+                    <span>Generated</span><strong>{formatDate(selectedProfileRecord.record.generated_at || selectedProfileRecord.record.created_at)}</strong>
+                    <span>Employee</span><strong>{selectedProfileRecord.record.employee_name || profile.name}</strong>
+                  </div>
+                ) : selectedProfileRecord.type === "project" ? (
+                  <div className="profile-record-detail-grid">
+                    <span>Project</span><strong>{selectedProfileRecord.record.projectName || selectedProfileRecord.record.name || "Project"}</strong>
+                    <span>Project ID</span><strong>{selectedProfileRecord.record.projectId || "—"}</strong>
+                    <span>Start date</span><strong>{formatDate(selectedProfileRecord.record.startDate)}</strong>
+                    <span>End date</span><strong>{formatDate(selectedProfileRecord.record.endDate)}</strong>
+                  </div>
+                ) : (
+                  <div className="profile-record-detail-grid">
+                    <span>Leave type</span><strong>{selectedProfileRecord.record.leave_type || selectedProfileRecord.record.leaveType || "Leave"}</strong>
+                    <span>Period</span><strong>{formatDateRange(selectedProfileRecord.record.start_date, selectedProfileRecord.record.end_date)}</strong>
+                    <span>Status</span><strong>{selectedProfileRecord.record.status || "Pending"}</strong>
+                    <span>Days</span><strong>{selectedProfileRecord.record.approved_days || selectedProfileRecord.record.days || 0}</strong>
+                    <span>Reason</span><strong>{selectedProfileRecord.record.reason || "No reason provided"}</strong>
+                  </div>
+                )}
+              </section>
+            </div>
+          ) : null}
         </>
       )}
 
