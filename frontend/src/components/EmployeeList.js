@@ -566,8 +566,13 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
                   return (
                     <tr key={employee._id}>
                       <td>
-                        <div className="employee-directory-table-primary">
-                          <div className="employee-card-avatar-wrap">
+                        <button
+                          type="button"
+                          className="employee-directory-table-primary employee-directory-profile-trigger"
+                          onClick={() => onNavigateToProfile(employee._id)}
+                          title="Open employee profile"
+                        >
+                          <span className="employee-card-avatar-wrap">
                             {employee.photoUrl ? (
                               <img
                                 src={employee.photoUrl}
@@ -579,27 +584,22 @@ const EmployeeList = ({ user, onNavigateToProfile, isAdmin = false }) => {
                                 {employee.name?.charAt(0) || "E"}
                               </div>
                             )}
-                            <div className="employee-card-leave-status">
+                            <span className="employee-card-leave-status">
                               <LeaveStatusDot userId={employee._id} size={10} />
-                            </div>
-                          </div>
+                            </span>
+                          </span>
 
-                          <div className="fiori-primary-cell">
-                            <button
-                              type="button"
-                              className="employee-name-button"
-                              onClick={() => onNavigateToProfile(employee._id)}
-                              title="Open employee profile"
-                            >
+                          <span className="fiori-primary-cell">
+                            <strong className="employee-name-button">
                               {employee.name || "Unnamed employee"}
-                            </button>
+                            </strong>
                             <span>{employee.designation || "Designation not available"}</span>
                             <span>{employee.employeeId || employee._id}</span>
                             <span>
                               <Mail size={13} /> {employee.email || "No email available"}
                             </span>
-                          </div>
-                        </div>
+                          </span>
+                        </button>
                       </td>
                       <td>
                         <div className="fiori-primary-cell">
