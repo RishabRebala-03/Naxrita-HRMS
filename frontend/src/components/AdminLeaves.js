@@ -181,7 +181,7 @@ const formatMonthKeyLabel = (monthKey) => {
   return date.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 };
 
-const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
+const AdminLeaves = ({ user, navigationState, onNavigateToProfile, onReturnToProfile }) => {
   const [activeTab, setActiveTab] = useState("pending");
   const [pendingLeaves, setPendingLeaves] = useState([]);
   const [allLeaves, setAllLeaves] = useState([]);
@@ -776,6 +776,13 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [allLeaves, navigationState, pendingLeaves]);
+
+  useEffect(() => {
+    const leaveId = navigationState?.leaveId;
+    if (!leaveId || !allLeaves.length) return;
+    const leave = allLeaves.find((item) => item._id === leaveId);
+    if (leave) setSelectedLeaveDetails(leave);
+  }, [allLeaves, navigationState]);
 
   const updateStatus = async ({
     leaveId,
@@ -1999,7 +2006,7 @@ const AdminLeaves = ({ user, navigationState, onNavigateToProfile }) => {
       {selectedLeaveDetails ? (
         <LeaveDetailModal
           leave={selectedLeaveDetails}
-          onClose={() => setSelectedLeaveDetails(null)}
+          onClose={() => { setSelectedLeaveDetails(null); if (navigationState?.source === "profile") onReturnToProfile?.(); }}
           isAdminOrManager
         />
       ) : null}

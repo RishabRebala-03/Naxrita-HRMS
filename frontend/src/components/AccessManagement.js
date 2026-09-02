@@ -105,9 +105,27 @@ const getHistoryActionLabel = (item) => {
     const action = item.action || "updated";
     return `Admin access ${action}`;
   }
+  if (item.module === "workflow-preferences") {
+    return `Workflow preferences ${item.action || "updated"}`;
+  }
   const scope = item.scope === "global" ? "Global rule" : "Employee rule";
   const action = item.action || "updated";
   return `${scope} ${action}`;
+};
+
+const getHistoryDetails = (item) => {
+  if (item.module === "admin-access") {
+    return [...(item.granted_menu_labels || []).map((label) => `+ ${label}`), ...(item.removed_menu_labels || []).map((label) => `- ${label}`)].join(", ") || "No menu changes";
+  }
+  if (item.module === "workflow-preferences") {
+    return [
+      `Timesheet approvers: ${(item.timesheet_approvers || []).join(", ") || "None"}`,
+      `Timesheet notifiers: ${(item.timesheet_notifiers || []).join(", ") || "None"}`,
+      `Leave approvers: ${(item.leave_approvers || []).join(", ") || "None"}`,
+      `Leave notifiers: ${(item.leave_notifiers || []).join(", ") || "None"}`,
+    ];
+  }
+  return [`First: Day ${item.first_fortnight_block_day || "—"}`, `Second: Day ${item.second_fortnight_block_day || "—"}`];
 };
 
 const AccessManagement = ({ user }) => {
@@ -166,6 +184,21 @@ const AccessManagement = ({ user }) => {
   const [historySortBy, setHistorySortBy] = useState("newest");
   const [historyHasRun, setHistoryHasRun] = useState(false);
   const [savingBlockSettings, setSavingBlockSettings] = useState(false);
+  const [workflowPreferences, setWorkflowPreferences] = useState([]);
+  const [workflowHistory, setWorkflowHistory] = useState([]);
+  const [workflowEmployeeIds, setWorkflowEmployeeIds] = useState([]);
+  const [workflowDraft, setWorkflowDraft] = useState({
+    timesheet: { approver_ids: [], notifier_ids: [] },
+    leave: { approver_ids: [], notifier_ids: [] },
+  });
+  const [savingWorkflow, setSavingWorkflow] = useState(false);
+  const [workflowRuleFilters, setWorkflowRuleFilters] = useState({
+    search: "", employee: "all", department: "all", timesheetApprover: "all", timesheetNotifier: "all", leaveApprover: "all", leaveNotifier: "all", updatedBy: "all", from: "", to: "", sort: "updated_desc",
+  });
+  const [workflowRulePendingDelete, setWorkflowRulePendingDelete] = useState(null);
+  const [deletingWorkflowRule, setDeletingWorkflowRule] = useState(false);
+  const [workflowRuleEditing, setWorkflowRuleEditing] = useState(null);
+  const [savingWorkflowRuleEdit, setSavingWorkflowRuleEdit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const requesterHeaders = useMemo(() => buildRequesterHeaders(user), [user]);
@@ -178,9 +211,9 @@ const AccessManagement = ({ user }) => {
       const response = await axios.get(`${API_BASE}/api/users/access-management`, {
         headers: requesterHeaders,
       });
-      const blockSettingsResponse = await axios.get(`${API_BASE}/api/timesheets/block-settings`, {
+      const [blockSettingsResponse, workflowResponse] = await Promise.all([axios.get(`${API_BASE}/api/timesheets/block-settings`, {
         headers: requesterHeaders,
-      });
+      }), axios.get(`${API_BASE}/api/users/access-management/workflow-preferences`, { headers: requesterHeaders })]);
       setOptions(Array.isArray(response.data?.options) ? response.data.options : []);
       setUsers(Array.isArray(response.data?.users) ? response.data.users : []);
       setAdminAccessHistory(Array.isArray(response.data?.history) ? response.data.history : []);
@@ -199,6 +232,8 @@ const AccessManagement = ({ user }) => {
         : [];
       setEmployeeBlockOverrides(employeeOverrides);
       setBlockHistory(mergeEmployeeOverridesIntoHistory(savedHistory, employeeOverrides));
+      setWorkflowPreferences(Array.isArray(workflowResponse.data?.preferences) ? workflowResponse.data.preferences : []);
+      setWorkflowHistory(Array.isArray(workflowResponse.data?.history) ? workflowResponse.data.history : []);
     } catch (error) {
       console.error("Failed to load access management data", error);
       setMessage(error.response?.data?.error || "Failed to load access management data");
@@ -231,6 +266,204 @@ const AccessManagement = ({ user }) => {
     () => Array.from(new Set(users.map((item) => getReportingLeadLabel(item)).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
     [users]
   );
+
+  const workflowPeopleOptions = useMemo(() => users
+    .filter((item) => item.is_active !== false)
+    .map((item) => ({
+      value: item._id,
+      label: item.name || item.email || item.employeeId || item._id,
+      description: [item.email, item.employeeId, item.department, item.designation].filter(Boolean).join(" • "),
+    })), [users]);
+
+  useEffect(() => {
+    if (workflowEmployeeIds.length !== 1) return;
+    const saved = workflowPreferences.find((item) => item.employee_id === workflowEmployeeIds[0]);
+    setWorkflowDraft(saved ? {
+      timesheet: saved.timesheet || { approver_ids: [], notifier_ids: [] },
+      leave: saved.leave || { approver_ids: [], notifier_ids: [] },
+    } : {
+      timesheet: { approver_ids: [], notifier_ids: [] },
+      leave: { approver_ids: [], notifier_ids: [] },
+    });
+  }, [workflowEmployeeIds, workflowPreferences]);
+
+  const updateWorkflowDraft = (module, field, value) => {
+    setWorkflowDraft((current) => ({ ...current, [module]: { ...current[module], [field]: value } }));
+  };
+
+  const renderWorkflowSelection = (selectedIds, onRemove, emptyLabel) => {
+    const selectedPeople = (selectedIds || [])
+      .map((id) => workflowPeopleOptions.find((item) => item.value === id))
+      .filter(Boolean);
+    if (!selectedPeople.length) return <small className="workflow-selection-empty">{emptyLabel}</small>;
+    return (
+      <div className="workflow-selection-chips" aria-label={emptyLabel}>
+        {selectedPeople.map((person) => (
+          <button type="button" key={person.value} onClick={() => onRemove(person.value)} title={`Remove ${person.label}`}>
+            <span>{person.label}</span>
+            <span aria-hidden="true">×</span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const saveWorkflowPreferences = async () => {
+    if (!workflowEmployeeIds.length) {
+      setMessage("Select one or more employees first");
+      return;
+    }
+    setSavingWorkflow(true);
+    setMessage("");
+    try {
+      const response = await axios.put(`${API_BASE}/api/users/access-management/workflow-preferences`, {
+        employee_ids: workflowEmployeeIds,
+        timesheet: workflowDraft.timesheet,
+        leave: workflowDraft.leave,
+      }, { headers: requesterHeaders });
+      const updated = response.data?.preferences || [];
+      setWorkflowPreferences((current) => [
+        ...current.filter((item) => !workflowEmployeeIds.includes(item.employee_id)),
+        ...updated,
+      ]);
+      setWorkflowHistory(Array.isArray(response.data?.history) ? response.data.history : workflowHistory);
+      setMessage(`Workflow preferences saved for ${workflowEmployeeIds.length} employee${workflowEmployeeIds.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setMessage(error.response?.data?.error || "Failed to save workflow preferences");
+    } finally {
+      setSavingWorkflow(false);
+    }
+  };
+
+  const workflowRules = useMemo(() => workflowPreferences.map((preference) => {
+    const employee = users.find((item) => item._id === preference.employee_id) || {};
+    const labels = (ids) => (ids || []).map((id) => workflowPeopleOptions.find((item) => item.value === id)?.label || id);
+    return {
+      ...preference,
+      employeeName: employee.name || employee.email || preference.employee_id,
+      employeeEmail: employee.email || "",
+      department: employee.department || "",
+      timesheetApprovers: labels(preference.timesheet?.approver_ids),
+      timesheetNotifiers: labels(preference.timesheet?.notifier_ids),
+      leaveApprovers: labels(preference.leave?.approver_ids),
+      leaveNotifiers: labels(preference.leave?.notifier_ids),
+    };
+  }), [users, workflowPeopleOptions, workflowPreferences]);
+
+  const workflowRuleOptions = useMemo(() => {
+    const optionSet = (values) => Array.from(new Set(values.flat().filter(Boolean))).sort((a, b) => a.localeCompare(b)).map((value) => ({ value, label: value }));
+    return {
+      employees: workflowRules.map((item) => ({ value: item.employee_id, label: item.employeeName, description: item.employeeEmail })),
+      departments: optionSet(workflowRules.map((item) => [item.department])),
+      timesheetApprovers: optionSet(workflowRules.map((item) => item.timesheetApprovers)),
+      timesheetNotifiers: optionSet(workflowRules.map((item) => item.timesheetNotifiers)),
+      leaveApprovers: optionSet(workflowRules.map((item) => item.leaveApprovers)),
+      leaveNotifiers: optionSet(workflowRules.map((item) => item.leaveNotifiers)),
+      updatedBy: optionSet(workflowRules.map((item) => [item.updated_by_name])),
+    };
+  }, [workflowRules]);
+
+  const filteredWorkflowRules = useMemo(() => {
+    const filters = workflowRuleFilters;
+    const query = normalizeValue(filters.search);
+    return workflowRules.filter((item) => {
+      const updated = item.updated_at ? new Date(item.updated_at).getTime() : 0;
+      const text = [item.employeeName, item.employeeEmail, item.department, item.updated_by_name, ...item.timesheetApprovers, ...item.timesheetNotifiers, ...item.leaveApprovers, ...item.leaveNotifiers].join(" ").toLowerCase();
+      return (!query || text.includes(query))
+        && (filters.employee === "all" || item.employee_id === filters.employee)
+        && (filters.department === "all" || item.department === filters.department)
+        && (filters.timesheetApprover === "all" || item.timesheetApprovers.includes(filters.timesheetApprover))
+        && (filters.timesheetNotifier === "all" || item.timesheetNotifiers.includes(filters.timesheetNotifier))
+        && (filters.leaveApprover === "all" || item.leaveApprovers.includes(filters.leaveApprover))
+        && (filters.leaveNotifier === "all" || item.leaveNotifiers.includes(filters.leaveNotifier))
+        && (filters.updatedBy === "all" || item.updated_by_name === filters.updatedBy)
+        && (!filters.from || updated >= new Date(`${filters.from}T00:00:00`).getTime())
+        && (!filters.to || updated <= new Date(`${filters.to}T23:59:59`).getTime());
+    }).sort((first, second) => filters.sort === "employee_asc"
+      ? first.employeeName.localeCompare(second.employeeName)
+      : new Date(second.updated_at || 0) - new Date(first.updated_at || 0));
+  }, [workflowRuleFilters, workflowRules]);
+
+  const updateWorkflowRuleFilter = (field, value) => setWorkflowRuleFilters((current) => ({ ...current, [field]: value }));
+
+  const exportWorkflowRulesToCsv = () => {
+    const escapeCsv = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = filteredWorkflowRules.map((rule) => [
+      rule.employeeName,
+      rule.employeeEmail,
+      rule.department,
+      rule.timesheetApprovers.join(", "),
+      rule.timesheetNotifiers.join(", "),
+      rule.leaveApprovers.join(", "),
+      rule.leaveNotifiers.join(", "),
+      rule.updated_by_name,
+      formatHistoryTime(rule.updated_at),
+    ]);
+    const csv = [["Employee", "Email", "Department", "Timesheet Approvers", "Timesheet Notifiers", "Leave Approvers", "Leave Notifiers", "Updated By", "Last Updated"], ...rows]
+      .map((row) => row.map(escapeCsv).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "leave-timesheet-routing-rules.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const editWorkflowRule = (rule) => {
+    setWorkflowRuleEditing({
+      ...rule,
+      timesheet: rule.timesheet || { approver_ids: [], notifier_ids: [] },
+      leave: rule.leave || { approver_ids: [], notifier_ids: [] },
+    });
+  };
+
+  const updateWorkflowRuleEdit = (module, field, value) => {
+    setWorkflowRuleEditing((current) => ({ ...current, [module]: { ...current[module], [field]: value } }));
+  };
+
+  const saveWorkflowRuleEdit = async () => {
+    if (!workflowRuleEditing) return;
+    if (!(workflowRuleEditing.timesheet?.approver_ids || []).length || !(workflowRuleEditing.leave?.approver_ids || []).length) {
+      setMessage("Select at least one approver for both timesheets and leaves");
+      return;
+    }
+    setSavingWorkflowRuleEdit(true);
+    try {
+      const response = await axios.put(`${API_BASE}/api/users/access-management/workflow-preferences`, {
+        employee_ids: [workflowRuleEditing.employee_id],
+        timesheet: workflowRuleEditing.timesheet,
+        leave: workflowRuleEditing.leave,
+      }, { headers: requesterHeaders });
+      setWorkflowPreferences((current) => [
+        ...current.filter((item) => item.employee_id !== workflowRuleEditing.employee_id),
+        ...(response.data?.preferences || []),
+      ]);
+      setWorkflowHistory(Array.isArray(response.data?.history) ? response.data.history : workflowHistory);
+      setWorkflowRuleEditing(null);
+      setMessage("Routing rule updated");
+    } catch (error) {
+      setMessage(error.response?.data?.error || "Failed to update routing rule");
+    } finally {
+      setSavingWorkflowRuleEdit(false);
+    }
+  };
+
+  const deleteWorkflowRule = async () => {
+    if (!workflowRulePendingDelete) return;
+    setDeletingWorkflowRule(true);
+    try {
+      const response = await axios.delete(`${API_BASE}/api/users/access-management/workflow-preferences/${workflowRulePendingDelete.employee_id}`, { headers: requesterHeaders });
+      setWorkflowPreferences((current) => current.filter((item) => item.employee_id !== workflowRulePendingDelete.employee_id));
+      setWorkflowHistory(Array.isArray(response.data?.history) ? response.data.history : workflowHistory);
+      setWorkflowEmployeeIds((current) => current.filter((item) => item !== workflowRulePendingDelete.employee_id));
+      setMessage("Routing rule removed");
+      setWorkflowRulePendingDelete(null);
+    } catch (error) {
+      setMessage(error.response?.data?.error || "Failed to remove routing rule");
+    } finally {
+      setDeletingWorkflowRule(false);
+    }
+  };
 
   const emailDomainOptions = useMemo(
     () =>
@@ -491,8 +724,9 @@ const AccessManagement = ({ user }) => {
         ...item,
         module: "timesheet-access",
       })),
+      ...workflowHistory.map((item) => ({ ...item, module: "workflow-preferences", scope: "employee" })),
     ],
-    [adminAccessHistory, blockHistory]
+    [adminAccessHistory, blockHistory, workflowHistory]
   );
 
   const historyActionOptions = useMemo(() => {
@@ -543,6 +777,7 @@ const AccessManagement = ({ user }) => {
       { value: "all", label: "All history" },
       { value: "admin-access", label: "Admin Access" },
       { value: "timesheet-access", label: "Timesheet Access" },
+      { value: "workflow-preferences", label: "Leave/Timesheets Preferences" },
     ],
     []
   );
@@ -575,6 +810,10 @@ const AccessManagement = ({ user }) => {
         ...(item.granted_menu_labels || []),
         ...(item.removed_menu_labels || []),
         ...(item.resulting_access_labels || []),
+        ...(item.timesheet_approvers || []),
+        ...(item.timesheet_notifiers || []),
+        ...(item.leave_approvers || []),
+        ...(item.leave_notifiers || []),
         item.action,
         item.scope,
         item.module,
@@ -629,6 +868,10 @@ const AccessManagement = ({ user }) => {
         ...(item.granted_menu_labels || []),
         ...(item.removed_menu_labels || []),
         ...(item.resulting_access_labels || []),
+        ...(item.timesheet_approvers || []),
+        ...(item.timesheet_notifiers || []),
+        ...(item.leave_approvers || []),
+        ...(item.leave_notifiers || []),
         item.action,
         item.scope,
         item.module,
@@ -790,10 +1033,8 @@ const AccessManagement = ({ user }) => {
       formatHistoryTime(item.changed_at),
       getHistoryActionLabel(item),
       item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee",
-      item.module === "admin-access"
-        ? [...(item.granted_menu_labels || []).map((label) => `+ ${label}`), ...(item.removed_menu_labels || []).map((label) => `- ${label}`)].join(", ") || "No menu changes"
-        : `First: Day ${item.first_fortnight_block_day || "—"}; Second: Day ${item.second_fortnight_block_day || "—"}`,
-      item.module === "admin-access" ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`,
+      Array.isArray(getHistoryDetails(item)) ? getHistoryDetails(item).join("; ") : getHistoryDetails(item),
+      ["admin-access", "workflow-preferences"].includes(item.module) ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`,
       item.changed_by_name || item.changed_by_email || "Unknown admin",
       item.notes || "No note",
     ]);
@@ -1051,6 +1292,15 @@ const AccessManagement = ({ user }) => {
           aria-selected={activeTab === "timesheet-access"}
         >
           Timesheet Access
+        </button>
+        <button
+          type="button"
+          className={`page-subtab-button ${activeTab === "workflow-preferences" ? "is-active" : ""}`}
+          onClick={() => setActiveTab("workflow-preferences")}
+          role="tab"
+          aria-selected={activeTab === "workflow-preferences"}
+        >
+          Leave/Timesheets Preferences
         </button>
         <button
           type="button"
@@ -1598,7 +1848,7 @@ const AccessManagement = ({ user }) => {
             <div className="fiori-panel-header">
               <div>
                 <h3>History</h3>
-                <p>Recent admin access grants and timesheet access rule changes made by admins.</p>
+                <p>Recent admin access grants, timesheet access rules, and leave/timesheet routing preference changes.</p>
               </div>
               <div className="history-header-actions">
                 <div className="access-management-matrix-meta">
@@ -1764,15 +2014,17 @@ const AccessManagement = ({ user }) => {
                           <History size={16} />
                           <strong>{getHistoryActionLabel(item)}</strong>
                         </div>
-                        <span className="history-module-label">{item.module === "admin-access" ? "Admin access" : "Timesheet access"}</span>
+                        <span className="history-module-label">{item.module === "admin-access" ? "Admin access" : item.module === "workflow-preferences" ? "Leave/Timesheets preferences" : "Timesheet access"}</span>
                       </td>
                       <td>
                         <strong>{item.scope === "global" ? "All employees" : item.employee_name || item.employee_email || "Employee"}</strong>
-                        <span>{item.module === "admin-access" ? [item.employee_email, item.department].filter(Boolean).join(" • ") || "Delegated admin access" : item.scope === "global" ? "Default rule" : item.employee_email || "Employee override"}</span>
+                        <span>{item.module === "admin-access" ? [item.employee_email, item.department].filter(Boolean).join(" • ") || "Delegated admin access" : item.module === "workflow-preferences" ? item.employee_email || "Employee routing" : item.scope === "global" ? "Default rule" : item.employee_email || "Employee override"}</span>
                       </td>
                       <td>
                         {item.module === "admin-access" ? (
-                          <span>{[...(item.granted_menu_labels || []).map((label) => `+ ${label}`), ...(item.removed_menu_labels || []).map((label) => `- ${label}`)].join(", ") || "No menu changes"}</span>
+                          <span>{getHistoryDetails(item)}</span>
+                        ) : item.module === "workflow-preferences" ? (
+                          <div className="history-detail-stack">{getHistoryDetails(item).map((detail) => <span key={detail}>{detail}</span>)}</div>
                         ) : (
                           <div className="history-detail-stack">
                             <span>First: Day {item.first_fortnight_block_day || "—"}</span>
@@ -1780,7 +2032,7 @@ const AccessManagement = ({ user }) => {
                           </div>
                         )}
                       </td>
-                      <td>{item.module === "admin-access" ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`}</td>
+                      <td>{["admin-access", "workflow-preferences"].includes(item.module) ? "—" : `${item.effective_start || "Any start"} to ${item.effective_end || "Any end"}`}</td>
                       <td>
                         <strong>{item.changed_by_name || item.changed_by_email || "Unknown admin"}</strong>
                         <span>{item.notes || "No note"}</span>
@@ -1798,7 +2050,185 @@ const AccessManagement = ({ user }) => {
               ) : null}
             </div> : null}
           </section>
+
+          {false ? <section className="fiori-panel workflow-rules-panel">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Saved routing rules</h3>
+                <p>{filteredWorkflowRules.length} of {workflowRules.length} employee rule{workflowRules.length === 1 ? "" : "s"}. Select a row’s employee above to review or update it.</p>
+              </div>
+            </div>
+            <div className="workflow-rules-filters">
+              <label className="access-management-block-field workflow-rules-search"><span>Search</span><ValueHelpSearch value={workflowRuleFilters.search} onChange={(value) => updateWorkflowRuleFilter("search", value)} suggestions={workflowPeopleOptions} placeholder="Employee or selected person" /></label>
+              <label className="access-management-block-field"><span>Employee</span><ValueHelpSelect value={workflowRuleFilters.employee} onChange={(value) => updateWorkflowRuleFilter("employee", value)} options={[{ value: "all", label: "All employees" }, ...workflowRuleOptions.employees]} /></label>
+              <label className="access-management-block-field"><span>Department</span><ValueHelpSelect value={workflowRuleFilters.department} onChange={(value) => updateWorkflowRuleFilter("department", value)} options={[{ value: "all", label: "All departments" }, ...workflowRuleOptions.departments]} /></label>
+              <label className="access-management-block-field"><span>Timesheet approver</span><ValueHelpSelect value={workflowRuleFilters.timesheetApprover} onChange={(value) => updateWorkflowRuleFilter("timesheetApprover", value)} options={[{ value: "all", label: "All approvers" }, ...workflowRuleOptions.timesheetApprovers]} /></label>
+              <label className="access-management-block-field"><span>Timesheet notifier</span><ValueHelpSelect value={workflowRuleFilters.timesheetNotifier} onChange={(value) => updateWorkflowRuleFilter("timesheetNotifier", value)} options={[{ value: "all", label: "All notifiers" }, ...workflowRuleOptions.timesheetNotifiers]} /></label>
+              <label className="access-management-block-field"><span>Leave approver</span><ValueHelpSelect value={workflowRuleFilters.leaveApprover} onChange={(value) => updateWorkflowRuleFilter("leaveApprover", value)} options={[{ value: "all", label: "All approvers" }, ...workflowRuleOptions.leaveApprovers]} /></label>
+              <label className="access-management-block-field"><span>Leave notifier</span><ValueHelpSelect value={workflowRuleFilters.leaveNotifier} onChange={(value) => updateWorkflowRuleFilter("leaveNotifier", value)} options={[{ value: "all", label: "All notifiers" }, ...workflowRuleOptions.leaveNotifiers]} /></label>
+              <label className="access-management-block-field"><span>Updated by</span><ValueHelpSelect value={workflowRuleFilters.updatedBy} onChange={(value) => updateWorkflowRuleFilter("updatedBy", value)} options={[{ value: "all", label: "All admins" }, ...workflowRuleOptions.updatedBy]} /></label>
+              <label className="access-management-block-field"><span>Updated from</span><input className="input" type="date" value={workflowRuleFilters.from} onChange={(event) => updateWorkflowRuleFilter("from", event.target.value)} /></label>
+              <label className="access-management-block-field"><span>Updated to</span><input className="input" type="date" value={workflowRuleFilters.to} onChange={(event) => updateWorkflowRuleFilter("to", event.target.value)} /></label>
+              <label className="access-management-block-field"><span>Sort</span><ValueHelpSelect value={workflowRuleFilters.sort} onChange={(value) => updateWorkflowRuleFilter("sort", value)} options={[{ value: "updated_desc", label: "Recently updated" }, { value: "employee_asc", label: "Employee A–Z" }]} /></label>
+              <div className="access-management-block-actions"><button type="button" className="fiori-button secondary" onClick={() => setWorkflowRuleFilters({ search: "", employee: "all", department: "all", timesheetApprover: "all", timesheetNotifier: "all", leaveApprover: "all", leaveNotifier: "all", updatedBy: "all", from: "", to: "", sort: "updated_desc" })}>Reset filters</button></div>
+            </div>
+            <div className="fiori-table-shell workflow-rules-table-shell">
+              <table className="fiori-table workflow-rules-table"><thead><tr><th>Employee</th><th>Department</th><th>Timesheet approvers</th><th>Timesheet notifiers</th><th>Leave approvers</th><th>Leave notifiers</th><th>Updated by</th><th>Last updated</th></tr></thead>
+                <tbody>{filteredWorkflowRules.map((rule) => <tr key={rule.employee_id}><td><strong>{rule.employeeName}</strong><small>{rule.employeeEmail}</small></td><td>{rule.department || "—"}</td><td>{rule.timesheetApprovers.join(", ") || "—"}</td><td>{rule.timesheetNotifiers.join(", ") || "—"}</td><td>{rule.leaveApprovers.join(", ") || "—"}</td><td>{rule.leaveNotifiers.join(", ") || "—"}</td><td>{rule.updated_by_name || "—"}</td><td>{formatHistoryTime(rule.updated_at)}</td></tr>)}</tbody>
+              </table>
+              {!filteredWorkflowRules.length ? <div className="access-management-block-empty">No saved routing rules match the selected filters.</div> : null}
+            </div>
+          </section> : null}
         </section>
+      ) : null}
+
+      {activeTab === "workflow-preferences" ? (
+        <section className="workflow-preferences-workspace">
+          <section className="fiori-panel access-management-block-panel">
+            <div className="fiori-panel-header">
+              <div>
+                <h3>Leave and Timesheet Routing</h3>
+                <p>Assign the people who receive approval requests and notifications. Reporting leads are not used for new leave or timesheet submissions.</p>
+              </div>
+              <div className="access-management-matrix-meta">
+                <span>{workflowPreferences.length} employee rule{workflowPreferences.length === 1 ? "" : "s"}</span>
+              </div>
+            </div>
+
+            <div className="workflow-preferences-grid">
+              <label className="access-management-block-field workflow-preferences-employees">
+                <span>Employees</span>
+                <ValueHelpSelect
+                  multiple
+                  value={workflowEmployeeIds}
+                  onChange={setWorkflowEmployeeIds}
+                  options={workflowPeopleOptions}
+                  placeholder="Select one or more employees"
+                  searchPlaceholder="Search employees by name, email, ID, department, or designation"
+                />
+                {renderWorkflowSelection(
+                  workflowEmployeeIds,
+                  (id) => setWorkflowEmployeeIds((current) => current.filter((item) => item !== id)),
+                  "No employees selected"
+                )}
+                <small>Select multiple employees to apply the same routing in one save.</small>
+              </label>
+            </div>
+
+            <div className="workflow-preferences-modules">
+              {[
+                { key: "timesheet", title: "Timesheet preferences", description: "Selected approvers receive the approval workflow in the displayed order." },
+                { key: "leave", title: "Leave preferences", description: "Selected approvers receive the leave approval workflow in the displayed order." },
+              ].map((module) => (
+                <section key={module.key} className="workflow-preferences-module">
+                  <div>
+                    <h4>{module.title}</h4>
+                    <p>{module.description}</p>
+                  </div>
+                  <div className="workflow-preferences-grid">
+                    <label className="access-management-block-field">
+                      <span>Approvers</span>
+                      <ValueHelpSelect
+                        multiple
+                        value={workflowDraft[module.key].approver_ids}
+                        onChange={(value) => updateWorkflowDraft(module.key, "approver_ids", value)}
+                        options={workflowPeopleOptions}
+                        placeholder="Select approvers"
+                        searchPlaceholder="Search approvers"
+                      />
+                      {renderWorkflowSelection(
+                        workflowDraft[module.key].approver_ids,
+                        (id) => updateWorkflowDraft(module.key, "approver_ids", workflowDraft[module.key].approver_ids.filter((item) => item !== id)),
+                        "No approvers selected"
+                      )}
+                    </label>
+                    <label className="access-management-block-field">
+                      <span>Notifiers</span>
+                      <ValueHelpSelect
+                        multiple
+                        value={workflowDraft[module.key].notifier_ids}
+                        onChange={(value) => updateWorkflowDraft(module.key, "notifier_ids", value)}
+                        options={workflowPeopleOptions}
+                        placeholder="Select notification recipients"
+                        searchPlaceholder="Search notification recipients"
+                      />
+                      {renderWorkflowSelection(
+                        workflowDraft[module.key].notifier_ids,
+                        (id) => updateWorkflowDraft(module.key, "notifier_ids", workflowDraft[module.key].notifier_ids.filter((item) => item !== id)),
+                        "No notifiers selected"
+                      )}
+                    </label>
+                  </div>
+                </section>
+              ))}
+            </div>
+
+            <div className="access-management-block-actions workflow-preferences-actions">
+              <button type="button" className="fiori-button secondary" onClick={() => {
+                setWorkflowEmployeeIds([]);
+                setWorkflowDraft({ timesheet: { approver_ids: [], notifier_ids: [] }, leave: { approver_ids: [], notifier_ids: [] } });
+              }}>
+                Clear
+              </button>
+              <button type="button" className="fiori-button primary" onClick={saveWorkflowPreferences} disabled={savingWorkflow}>
+                <Save size={16} />
+                <span>{savingWorkflow ? "Saving" : "Save Preferences"}</span>
+              </button>
+            </div>
+          </section>
+
+          <section className="fiori-panel workflow-rules-panel">
+            <div className="fiori-panel-header"><div><h3>Saved routing rules</h3><p>{filteredWorkflowRules.length} of {workflowRules.length} active employee rule{workflowRules.length === 1 ? "" : "s"}.</p></div><button type="button" className="fiori-button secondary" onClick={exportWorkflowRulesToCsv} disabled={!filteredWorkflowRules.length}><Download size={16} /><span>Export CSV</span></button></div>
+            <div className="workflow-rules-filters">
+              <label className="access-management-block-field workflow-rules-search"><span>Search employee or recipient</span><ValueHelpSearch value={workflowRuleFilters.search} onChange={(value) => updateWorkflowRuleFilter("search", value)} suggestions={workflowPeopleOptions} placeholder="Search people" /></label>
+              <label className="access-management-block-field"><span>Employee</span><ValueHelpSelect value={workflowRuleFilters.employee} onChange={(value) => updateWorkflowRuleFilter("employee", value)} options={[{ value: "all", label: "All employees" }, ...workflowRuleOptions.employees]} /></label>
+              <label className="access-management-block-field"><span>Department</span><ValueHelpSelect value={workflowRuleFilters.department} onChange={(value) => updateWorkflowRuleFilter("department", value)} options={[{ value: "all", label: "All departments" }, ...workflowRuleOptions.departments]} /></label>
+              <label className="access-management-block-field"><span>Timesheet approver</span><ValueHelpSelect value={workflowRuleFilters.timesheetApprover} onChange={(value) => updateWorkflowRuleFilter("timesheetApprover", value)} options={[{ value: "all", label: "All approvers" }, ...workflowRuleOptions.timesheetApprovers]} /></label>
+              <label className="access-management-block-field"><span>Timesheet notifier</span><ValueHelpSelect value={workflowRuleFilters.timesheetNotifier} onChange={(value) => updateWorkflowRuleFilter("timesheetNotifier", value)} options={[{ value: "all", label: "All notifiers" }, ...workflowRuleOptions.timesheetNotifiers]} /></label>
+              <label className="access-management-block-field"><span>Leave approver</span><ValueHelpSelect value={workflowRuleFilters.leaveApprover} onChange={(value) => updateWorkflowRuleFilter("leaveApprover", value)} options={[{ value: "all", label: "All approvers" }, ...workflowRuleOptions.leaveApprovers]} /></label>
+              <label className="access-management-block-field"><span>Leave notifier</span><ValueHelpSelect value={workflowRuleFilters.leaveNotifier} onChange={(value) => updateWorkflowRuleFilter("leaveNotifier", value)} options={[{ value: "all", label: "All notifiers" }, ...workflowRuleOptions.leaveNotifiers]} /></label>
+              <label className="access-management-block-field"><span>Updated by</span><ValueHelpSelect value={workflowRuleFilters.updatedBy} onChange={(value) => updateWorkflowRuleFilter("updatedBy", value)} options={[{ value: "all", label: "All admins" }, ...workflowRuleOptions.updatedBy]} /></label>
+              <label className="access-management-block-field"><span>From</span><input className="input" type="date" value={workflowRuleFilters.from} onChange={(event) => updateWorkflowRuleFilter("from", event.target.value)} /></label>
+              <label className="access-management-block-field"><span>To</span><input className="input" type="date" value={workflowRuleFilters.to} onChange={(event) => updateWorkflowRuleFilter("to", event.target.value)} /></label>
+              <label className="access-management-block-field"><span>Sort</span><ValueHelpSelect value={workflowRuleFilters.sort} onChange={(value) => updateWorkflowRuleFilter("sort", value)} options={[{ value: "updated_desc", label: "Recently updated" }, { value: "employee_asc", label: "Employee A–Z" }]} /></label>
+            </div>
+            <div className="fiori-table-shell workflow-rules-table-shell"><table className="fiori-table workflow-rules-table"><thead><tr><th>Employee</th><th>Department</th><th>Timesheet approvers</th><th>Timesheet notifiers</th><th>Leave approvers</th><th>Leave notifiers</th><th>Updated by</th><th>Last updated</th><th>Actions</th></tr></thead><tbody>{filteredWorkflowRules.map((rule) => <tr key={rule.employee_id}><td><strong>{rule.employeeName}</strong><small>{rule.employeeEmail}</small></td><td>{rule.department || "—"}</td><td>{rule.timesheetApprovers.join(", ") || "—"}</td><td>{rule.timesheetNotifiers.join(", ") || "—"}</td><td>{rule.leaveApprovers.join(", ") || "—"}</td><td>{rule.leaveNotifiers.join(", ") || "—"}</td><td>{rule.updated_by_name || "—"}</td><td>{formatHistoryTime(rule.updated_at)}</td><td><div className="workflow-rule-actions"><button type="button" className="fiori-button secondary" onClick={() => editWorkflowRule(rule)}>Edit</button><button type="button" className="fiori-button secondary danger" onClick={() => setWorkflowRulePendingDelete(rule)}>Delete</button></div></td></tr>)}</tbody></table>{!filteredWorkflowRules.length ? <div className="access-management-block-empty">No saved routing rules match these filters.</div> : null}</div>
+          </section>
+        </section>
+      ) : null}
+
+      {workflowRuleEditing ? (
+        <div className="workflow-rule-confirm-overlay" role="presentation">
+          <section className="workflow-rule-confirm-dialog workflow-rule-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="edit-routing-rule-title">
+            <h3 id="edit-routing-rule-title">Edit routing rule</h3>
+            <p>Update routing for <strong>{workflowRuleEditing.employeeName}</strong>. Changes apply to new leave and timesheet submissions.</p>
+            <div className="workflow-rule-edit-grid">
+              {[
+                { module: "timesheet", field: "approver_ids", label: "Timesheet approvers" },
+                { module: "timesheet", field: "notifier_ids", label: "Timesheet notifiers" },
+                { module: "leave", field: "approver_ids", label: "Leave approvers" },
+                { module: "leave", field: "notifier_ids", label: "Leave notifiers" },
+              ].map((item) => <label key={`${item.module}-${item.field}`} className="access-management-block-field"><span>{item.label}</span><ValueHelpSelect multiple value={workflowRuleEditing[item.module][item.field]} onChange={(value) => updateWorkflowRuleEdit(item.module, item.field, value)} options={workflowPeopleOptions} placeholder={`Select ${item.label.toLowerCase()}`} searchPlaceholder="Search people" /></label>)}
+            </div>
+            <div className="workflow-rule-confirm-actions">
+              <button type="button" className="fiori-button secondary" onClick={() => setWorkflowRuleEditing(null)} disabled={savingWorkflowRuleEdit}>Cancel</button>
+              <button type="button" className="fiori-button primary" onClick={saveWorkflowRuleEdit} disabled={savingWorkflowRuleEdit}>{savingWorkflowRuleEdit ? "Saving…" : "Save changes"}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {workflowRulePendingDelete ? (
+        <div className="workflow-rule-confirm-overlay" role="presentation">
+          <section className="workflow-rule-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-routing-rule-title">
+            <h3 id="delete-routing-rule-title">Delete routing rule?</h3>
+            <p>This removes the leave and timesheet routing for <strong>{workflowRulePendingDelete.employeeName}</strong>. New submissions for this employee cannot be routed until a new rule is saved.</p>
+            <div className="workflow-rule-confirm-actions">
+              <button type="button" className="fiori-button secondary" onClick={() => setWorkflowRulePendingDelete(null)} disabled={deletingWorkflowRule}>Cancel</button>
+              <button type="button" className="fiori-button danger" onClick={deleteWorkflowRule} disabled={deletingWorkflowRule}>{deletingWorkflowRule ? "Deleting…" : "Delete rule"}</button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {message ? (

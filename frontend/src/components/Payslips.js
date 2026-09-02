@@ -482,7 +482,7 @@ const fetchJson = async (path, options = {}) => {
   return data;
 };
 
-function Payslips({ user, adminView = false }) {
+function Payslips({ user, adminView = false, navigationState = null, onReturnToProfile = null }) {
   const isDelegatedAdminView = adminView && user?.role !== "Admin";
   const effectiveUser = adminView && user?.role !== "Admin" ? { ...user, role: "Admin" } : user;
   const isAdmin = effectiveUser?.role === "Admin";
@@ -521,6 +521,7 @@ function Payslips({ user, adminView = false }) {
   const [uploadLogs, setUploadLogs] = useState([]);
   const [toast, setToast] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
+  const [viewingPayslip, setViewingPayslip] = useState(null);
   const fileInputRef = useRef(null);
 
   const openEditModal = (item, context = { mode: "display" }) => {
@@ -572,6 +573,16 @@ function Payslips({ user, adminView = false }) {
   useEffect(() => {
     loadVisiblePayslips();
   }, [userId, isAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const payslipId = navigationState?.payslipId;
+    if (!payslipId || !payslips.length) return;
+    const payslip = payslips.find((item) => item._id === payslipId);
+    if (payslip) {
+      setActiveTab("display");
+      setViewingPayslip(payslip);
+    }
+  }, [navigationState, payslips]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setActiveTab(isAdmin ? (isDelegatedAdminView ? "display" : "upload") : "display");
@@ -1785,6 +1796,29 @@ function Payslips({ user, adminView = false }) {
           </>
         ) : null}
 
+        {viewingPayslip ? (
+          <div style={S.modalBackdrop}>
+            <div style={{ ...S.modalCard, maxWidth: 860 }}>
+              <div style={S.rowBetween}>
+                <div><h2 style={{ margin: 0 }}>{viewingPayslip.month || "Payslip"} {viewingPayslip.year || ""}</h2><p style={{ margin: "6px 0 0", color: C.textMid }}>{viewingPayslip.employee_name || viewingPayslip.name || "Employee"}</p></div>
+                <button type="button" style={S.btnSecondary} onClick={() => { setViewingPayslip(null); if (navigationState?.source === "profile") onReturnToProfile?.(); }}><X size={15} /> Back to profile</button>
+              </div>
+              <div style={{ ...S.formGrid, marginTop: 20 }}>
+                {[["Employee ID", viewingPayslip.employee_id], ["Department", viewingPayslip.department], ["Period", `${viewingPayslip.month || ""} ${viewingPayslip.year || ""}`], ["Status", viewingPayslip.published ? "Published" : "Draft"], ["Gross earnings", currency(viewingPayslip.gross_earnings || viewingPayslip.gross || 0)], ["Net pay", currency(viewingPayslip.net_pay || viewingPayslip.net_salary || 0)]].map(([label, value]) => <div key={label} style={S.field}><label style={S.label}>{label}</label><strong>{value || "—"}</strong></div>)}
+              </div>
+              <div style={{ marginTop: 22, maxHeight: 360, overflow: "auto", border: `1px solid ${C.borderLight}`, borderRadius: 8 }}>
+                <table style={S.table}>
+                  <thead><tr><th style={S.th}>Field</th><th style={S.th}>Value</th></tr></thead>
+                  <tbody>{displayColumns.map((column) => {
+                    const value = column.getValue(viewingPayslip);
+                    return <tr key={column.key}><td style={S.td}><strong>{column.label}</strong></td><td style={{ ...S.td, ...(column.isAmount ? S.cellNumber : {}) }}>{column.isAmount ? currency(value || 0) : String(value ?? "—")}</td></tr>;
+                  })}</tbody>
+                </table>
+              </div>
+              <div style={{ ...S.rowGap, justifyContent: "flex-end", marginTop: 22 }}><button type="button" style={S.btnPrimary} onClick={() => handleDownload(viewingPayslip._id)}><Download size={15} /> Download payslip</button></div>
+            </div>
+          </div>
+        ) : null}
         {isAdmin && editingPayslip && editForm ? (
           <div style={S.modalBackdrop} onClick={closeEditModal}>
             <div style={S.modalCard} onClick={(event) => event.stopPropagation()}>

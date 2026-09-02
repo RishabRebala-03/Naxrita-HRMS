@@ -708,6 +708,168 @@ def update_access_management(user_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _workflow_ids(values):
+    """Keep only valid, unique user ids in their selected order."""
+    seen = set()
+    result = []
+    for value in values if isinstance(values, list) else []:
+        value = str(value or "").strip()
+        if not ObjectId.is_valid(value) or value in seen:
+            continue
+        seen.add(value)
+        result.append(ObjectId(value))
+    return result
+
+
+def _serialize_workflow_preference(item):
+    return {
+        "employee_id": str(item.get("employee_id", "")),
+        "timesheet": serialize_all(item.get("timesheet") or {"approver_ids": [], "notifier_ids": []}),
+        "leave": serialize_all(item.get("leave") or {"approver_ids": [], "notifier_ids": []}),
+        "updated_at": serialize_all(item.get("updated_at")),
+        "updated_by_name": item.get("updated_by_name", ""),
+    }
+
+
+def _workflow_people_labels(ids):
+    people = list(mongo.db.users.find({"_id": {"$in": list(ids or [])}}, {"name": 1, "email": 1}))
+    by_id = {str(person["_id"]): person for person in people}
+    return [
+        (by_id.get(str(user_id), {}).get("name") or by_id.get(str(user_id), {}).get("email") or str(user_id))
+        for user_id in (ids or [])
+    ]
+
+
+def _serialize_workflow_history(item):
+    return {
+        "_id": str(item.get("_id", "")),
+        "module": "workflow-preferences",
+        "scope": "employee",
+        "action": item.get("action", "updated"),
+        "changed_at": serialize_all(item.get("changed_at")),
+        "changed_by_name": item.get("changed_by_name", ""),
+        "employee_id": str(item.get("employee_id", "")),
+        "employee_name": item.get("employee_name", ""),
+        "employee_email": item.get("employee_email", ""),
+        "timesheet_approvers": _workflow_people_labels((item.get("timesheet") or {}).get("approver_ids")),
+        "timesheet_notifiers": _workflow_people_labels((item.get("timesheet") or {}).get("notifier_ids")),
+        "leave_approvers": _workflow_people_labels((item.get("leave") or {}).get("approver_ids")),
+        "leave_notifiers": _workflow_people_labels((item.get("leave") or {}).get("notifier_ids")),
+    }
+
+
+@user_bp.route("/access-management/workflow-preferences", methods=["GET"])
+def get_employee_workflow_preferences():
+    try:
+        _, error_response = require_admin()
+        if error_response:
+            return error_response
+        records = list(mongo.db.employee_workflow_preferences.find().sort("updated_at", -1))
+        history = list(mongo.db.employee_workflow_preference_history.find().sort("changed_at", -1).limit(100))
+        return jsonify({
+            "preferences": [_serialize_workflow_preference(item) for item in records],
+            "history": [_serialize_workflow_history(item) for item in history],
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@user_bp.route("/access-management/workflow-preferences", methods=["PUT"])
+def save_employee_workflow_preferences():
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+
+        data = request.get_json() or {}
+        employee_ids = _workflow_ids(data.get("employee_ids"))
+        if not employee_ids:
+            return jsonify({"error": "Select at least one employee"}), 400
+
+        modules = {}
+        for module in ("timesheet", "leave"):
+            values = data.get(module) or {}
+            approver_ids = _workflow_ids(values.get("approver_ids"))
+            notifier_ids = _workflow_ids(values.get("notifier_ids"))
+            if not approver_ids:
+                return jsonify({"error": f"Select at least one {module} approver"}), 400
+            modules[module] = {"approver_ids": approver_ids, "notifier_ids": notifier_ids}
+
+        valid_users = set(mongo.db.users.distinct("_id", {"_id": {"$in": list({item for module in modules.values() for item in module["approver_ids"] + module["notifier_ids"]})}}))
+        if any(item not in valid_users for module in modules.values() for item in module["approver_ids"] + module["notifier_ids"]):
+            return jsonify({"error": "One or more selected people no longer exist"}), 400
+
+        now = datetime.utcnow()
+        for employee_id in employee_ids:
+            employee = mongo.db.users.find_one({"_id": employee_id})
+            if not employee:
+                return jsonify({"error": "One or more selected employees no longer exist"}), 404
+            existing = mongo.db.employee_workflow_preferences.find_one({"employee_id": employee_id})
+            mongo.db.employee_workflow_preferences.update_one(
+                {"employee_id": employee_id},
+                {"$set": {
+                    "employee_id": employee_id,
+                    "timesheet": modules["timesheet"],
+                    "leave": modules["leave"],
+                    "updated_at": now,
+                    "updated_by": requester.get("_id"),
+                    "updated_by_name": requester.get("name", ""),
+                }, "$setOnInsert": {"created_at": now}},
+                upsert=True,
+            )
+            mongo.db.employee_workflow_preference_history.insert_one({
+                "employee_id": employee_id,
+                "employee_name": employee.get("name", ""),
+                "employee_email": employee.get("email", ""),
+                "timesheet": modules["timesheet"],
+                "leave": modules["leave"],
+                "action": "updated" if existing else "created",
+                "changed_at": now,
+                "changed_by": requester.get("_id"),
+                "changed_by_name": requester.get("name", ""),
+            })
+        records = list(mongo.db.employee_workflow_preferences.find({"employee_id": {"$in": employee_ids}}))
+        history = list(mongo.db.employee_workflow_preference_history.find().sort("changed_at", -1).limit(100))
+        return jsonify({
+            "message": "Workflow preferences saved",
+            "preferences": [_serialize_workflow_preference(item) for item in records],
+            "history": [_serialize_workflow_history(item) for item in history],
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@user_bp.route("/access-management/workflow-preferences/<employee_id>", methods=["DELETE"])
+def delete_employee_workflow_preference(employee_id):
+    try:
+        requester, error_response = require_admin()
+        if error_response:
+            return error_response
+        if not ObjectId.is_valid(employee_id):
+            return jsonify({"error": "Invalid employee"}), 400
+        existing = mongo.db.employee_workflow_preferences.find_one({"employee_id": ObjectId(employee_id)})
+        if not existing:
+            return jsonify({"error": "Routing rule not found"}), 404
+        employee = mongo.db.users.find_one({"_id": ObjectId(employee_id)}) or {}
+        now = datetime.utcnow()
+        mongo.db.employee_workflow_preferences.delete_one({"employee_id": ObjectId(employee_id)})
+        mongo.db.employee_workflow_preference_history.insert_one({
+            "employee_id": ObjectId(employee_id),
+            "employee_name": employee.get("name", ""),
+            "employee_email": employee.get("email", ""),
+            "timesheet": existing.get("timesheet") or {},
+            "leave": existing.get("leave") or {},
+            "action": "removed",
+            "changed_at": now,
+            "changed_by": requester.get("_id"),
+            "changed_by_name": requester.get("name", ""),
+        })
+        history = list(mongo.db.employee_workflow_preference_history.find().sort("changed_at", -1).limit(100))
+        return jsonify({"message": "Routing rule removed", "history": [_serialize_workflow_history(item) for item in history]}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @user_bp.route("/directory", methods=["GET"])
 def get_employee_directory():
     """Directory API contract for employee and leave-aware listing."""

@@ -425,8 +425,6 @@ const formatDateTime = (value) => {
   return formatDateTimeIST(value, '—');
 };
 const getRoleKey = (user) => String(user?.role || '').trim().toLowerCase();
-const isLeadUser = (user) => getRoleKey(user) === 'lead';
-const isManagerUser = (user) => getRoleKey(user) === 'manager';
 const isAdminUser = (user) => getRoleKey(user) === 'admin';
 
 // ─── Status config ───────────────────────────────────────────────────────────
@@ -9770,40 +9768,8 @@ function PortalTimeWorkspace({
   navigationState,
 }) {
   const isAdmin = isAdminUser(user);
-  const userEmail = String(user?.email || '').trim();
-  const [hasTeamScope, setHasTeamScope] = useState(() => Boolean(isLeadUser(user) || isManagerUser(user)));
   const defaultView = isAdmin ? 'all' : 'entry';
   const [activeView, setActiveView] = useState(defaultView);
-
-  useEffect(() => {
-    if (isAdmin) {
-      setHasTeamScope(false);
-      return;
-    }
-
-    if (!userEmail) {
-      setHasTeamScope(Boolean(isLeadUser(user) || isManagerUser(user)));
-      return;
-    }
-
-    let isMounted = true;
-
-    fetchAPI(`/users/get_employees_by_manager/${encodeURIComponent(userEmail)}`)
-      .then((employees) => {
-        if (!isMounted) return;
-        setHasTeamScope(
-          Boolean(isLeadUser(user) || isManagerUser(user) || (Array.isArray(employees) && employees.length > 0))
-        );
-      })
-      .catch(() => {
-        if (!isMounted) return;
-        setHasTeamScope(Boolean(isLeadUser(user) || isManagerUser(user)));
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [isAdmin, user, userEmail]);
 
   useEffect(() => {
     setActiveView(defaultView);
@@ -9819,9 +9785,9 @@ function PortalTimeWorkspace({
       ? [{ key: 'all', label: 'All Timesheets' }]
       : [
           { key: 'entry', label: 'My Timesheet' },
-          ...(hasTeamScope ? [{ key: 'approvals', label: 'Approvals' }] : []),
+          { key: 'approvals', label: 'Approvals' },
         ]
-  ), [hasTeamScope, isAdmin]);
+  ), [isAdmin]);
 
   useEffect(() => {
     if (!views.some((view) => view.key === activeView)) {
@@ -10632,7 +10598,7 @@ function PortalSummaryWorkspace({ user, selectedPeriod, periods, liveTimesheetSn
 }
 
 // ─── Main Export ──────────────────────────────────────────────────────────────
-function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
+function TimesheetsContent({ user, navigationState, onNavigateToProfile, onReturnToProfile }) {
   const periods = useMemo(() => getAvailablePeriods(), []);
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0]?.value || '');
   const [activeModule, setActiveModule] = useState('time');
@@ -10696,7 +10662,6 @@ function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
     ...(user?.role === 'Admin' ? [{ key: 'assignments', label: 'ASSIGNMENTS' }] : []),
     { key: 'adjustments', label: 'ADJUSTMENTS' },
     { key: 'summary', label: 'SUMMARY' },
-    ...(user?.role === 'Admin' ? [{ key: 'preferences', label: 'PREFERENCES' }] : []),
     ...(user?.role === 'Admin' ? [{ key: 'reports', label: 'REPORTS' }] : []),
   ];
 
@@ -10757,18 +10722,6 @@ function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
             liveTimesheetSnapshot={liveTimesheetSnapshots[selectedPeriod]}
           />
         );
-      case 'preferences':
-        return user?.role === 'Admin'
-          ? <PreferencesPanel user={user} periods={periods} selectedPeriod={selectedPeriod} />
-          : (
-            <PortalTimeWorkspace
-              user={user}
-              selectedPeriod={selectedPeriod}
-              onSelectedPeriodChange={setSelectedPeriod}
-              onSheetSnapshotChange={handleSheetSnapshotChange}
-              navigationState={navigationState}
-            />
-          );
       case 'reports':
         return user?.role === 'Admin' ? <ReportsPanel user={user} /> : (
           <PortalTimeWorkspace
@@ -10817,7 +10770,7 @@ function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
             timesheet={navigatedTimesheet}
             user={user}
             ccLookup={ccLookup}
-            onClose={() => setNavigatedTimesheet(null)}
+            onClose={() => { setNavigatedTimesheet(null); if (navigationState?.source === 'profile') onReturnToProfile?.(); }}
           />
         </div>
       ) : null}
@@ -10825,13 +10778,13 @@ function TimesheetsContent({ user, navigationState, onNavigateToProfile }) {
   );
 }
 
-export default function Timesheets({ user, adminView = false, navigationState = null, onNavigateToProfile = null }) {
+export default function Timesheets({ user, adminView = false, navigationState = null, onNavigateToProfile = null, onReturnToProfile = null }) {
   const effectiveUser = adminView && user?.role !== 'Admin'
     ? { ...user, originalRole: user?.role, role: 'Admin' }
     : { ...user, originalRole: user?.role };
   return (
     <TimesheetUiProvider>
-      <TimesheetsContent user={effectiveUser} navigationState={navigationState} onNavigateToProfile={onNavigateToProfile} />
+      <TimesheetsContent user={effectiveUser} navigationState={navigationState} onNavigateToProfile={onNavigateToProfile} onReturnToProfile={onReturnToProfile} />
     </TimesheetUiProvider>
   );
 }

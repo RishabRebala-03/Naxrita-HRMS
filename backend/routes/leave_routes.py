@@ -148,6 +148,31 @@ def resolve_user_reference(value):
     })
 
 
+def get_assigned_leave_workflow(employee_id):
+    try:
+        preference = mongo.db.employee_workflow_preferences.find_one({"employee_id": ObjectId(employee_id)})
+    except Exception:
+        preference = None
+    workflow = (preference or {}).get("leave") or {}
+    users = []
+    seen = set()
+    for user_id in workflow.get("approver_ids") or []:
+        try:
+            approver = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            approver = None
+        if approver and str(approver["_id"]) not in seen:
+            seen.add(str(approver["_id"]))
+            users.append(approver)
+    notifier_ids = []
+    for user_id in workflow.get("notifier_ids") or []:
+        try:
+            notifier_ids.append(ObjectId(user_id))
+        except Exception:
+            continue
+    return users, notifier_ids, preference
+
+
 def clear_leave_reminder_state(leave_id):
     mongo.db.leaves.update_one(
         {"_id": ObjectId(leave_id)},
@@ -453,6 +478,9 @@ def escalate_leave_request(leave_id):
         if not leave or leave.get("status") != "Pending":
             print(f"   ⚠️ Leave {leave_id} not found or not pending")
             return False
+        if (leave.get("leave_workflow_preferences") or {}).get("routing_mode") == "assigned":
+            # Assigned workflows never escalate into the reporting hierarchy.
+            return False
         
         current_level = leave.get("escalation_level", 0)
         employee_id = leave.get("employee_id")
@@ -637,6 +665,8 @@ def escalate_leave(leave_id):
     try:
         leave = mongo.db.leaves.find_one({"_id": ObjectId(leave_id)})
         if not leave or leave.get("status") != "Pending":
+            return
+        if (leave.get("leave_workflow_preferences") or {}).get("routing_mode") == "assigned":
             return
         
         current_level = leave.get("escalation_level", 0)
@@ -1209,10 +1239,11 @@ def apply_leave():
                     "error": f"Insufficient {leave_type} leave balance. Available: {available}, Requested: {days}"
                 }), 400
 
-        # Get immediate manager for initial approval
-        immediate_manager = resolve_user_reference(employee.get("reportsTo")) or resolve_user_reference(employee.get("reportsToEmail"))
-        if not immediate_manager:
-            return jsonify({"error": "No reporting manager found for employee"}), 404
+        # Leave workflows are explicitly assigned by admins; reporting leads are not used.
+        assigned_approvers, notifier_ids, workflow_preference = get_assigned_leave_workflow(employee_id)
+        if not assigned_approvers:
+            return jsonify({"error": "No assigned leave approver found for employee. Ask an admin to configure Leave/Timesheets Preferences."}), 400
+        immediate_manager = assigned_approvers[0]
         immediate_manager_id = immediate_manager["_id"]
 
         # Create leave request with escalation tracking
@@ -1234,6 +1265,11 @@ def apply_leave():
             "applied_on": datetime.utcnow(),
             "escalation_level": 0,
             "current_approver_id": immediate_manager_id,
+            "leave_workflow_preferences": {
+                "routing_mode": "assigned",
+                "approver_ids": [item["_id"] for item in assigned_approvers],
+                "notifier_ids": notifier_ids,
+            },
             "escalation_history": []
         }
 
@@ -1265,6 +1301,16 @@ def apply_leave():
                         related_leave_id=result.inserted_id,
                         target=build_leave_notification_target(result.inserted_id, active_tab="pending"),
                     )
+                    for notifier_id in notifier_ids:
+                        if str(notifier_id) == str(immediate_manager_id):
+                            continue
+                        create_notification(
+                            user_id=notifier_id,
+                            notification_type="leave_submission_notification",
+                            message=notification_message,
+                            related_leave_id=result.inserted_id,
+                            target=build_leave_notification_target(result.inserted_id, active_tab="pending"),
+                        )
                     
                     try:
                         queue_leave_applied_emails(str(result.inserted_id))
@@ -2039,6 +2085,41 @@ def update_leave_status(leave_id):
 
         if not (is_admin_leave_reviewer or is_current_approver):
             return jsonify({"error": "You do not have permission to update this leave request"}), 403
+
+        assigned_workflow = leave_record.get("leave_workflow_preferences") or {}
+        assigned_approver_ids = [str(item) for item in assigned_workflow.get("approver_ids") or []]
+        if status == "Approved" and assigned_workflow.get("routing_mode") == "assigned":
+            try:
+                current_index = assigned_approver_ids.index(requester_id)
+            except ValueError:
+                current_index = -1
+            next_id = assigned_approver_ids[current_index + 1] if current_index >= 0 and current_index + 1 < len(assigned_approver_ids) else ""
+            if next_id:
+                next_approver = mongo.db.users.find_one({"_id": ObjectId(next_id)})
+                if next_approver:
+                    mongo.db.leaves.update_one(
+                        {"_id": ObjectId(leave_id)},
+                        {"$set": {
+                            "status": "Pending",
+                            "current_approver_id": next_approver["_id"],
+                            "previous_approver_id": requester["_id"],
+                            "updated_at": datetime.utcnow(),
+                        }, "$push": {"approval_history": {
+                            "action": "approved_and_forwarded",
+                            "approver_id": requester["_id"],
+                            "approver_name": approved_by,
+                            "timestamp": datetime.utcnow(),
+                        }}},
+                    )
+                    message = f"{leave_record.get('employee_name', 'An employee')}'s {leave_record.get('leave_type', 'leave')} request requires your approval"
+                    create_notification(
+                        user_id=next_approver["_id"],
+                        notification_type="leave_request",
+                        message=message,
+                        related_leave_id=leave_id,
+                        target=build_leave_notification_target(leave_id, active_tab="pending"),
+                    )
+                    return jsonify({"message": "Leave approved and forwarded to the next assigned approver"}), 200
 
         old_trimmed = trim_leave(leave_record)
 
