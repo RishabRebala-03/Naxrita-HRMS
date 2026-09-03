@@ -76,13 +76,20 @@ const PROFILE_FIELD_DEFS = [
 const SHEET_BASE_FIELDS = [
   { key: "employee_id", label: "Employee ID" },
   { key: "name", label: "Name" },
+  ...PROFILE_FIELD_DEFS,
   { key: "month", label: "Month" },
   { key: "year", label: "Year" },
   { key: "lop_days", label: "LOP Days" },
   { key: "std_days", label: "STD Days" },
   { key: "worked_days", label: "Worked Days" },
-  ...PROFILE_FIELD_DEFS,
+  { key: "basic", label: "Basic", isAmount: true },
+  { key: "hra", label: "HRA", isAmount: true },
+  { key: "conveyance", label: "Conveyance", isAmount: true },
+  { key: "pf_deduction", label: "PF Deduction", isAmount: true },
+  { key: "professional_tax", label: "Professional Tax", isAmount: true },
 ];
+
+const TEMPLATE_PAY_FIELD_KEYS = new Set(["basic", "hra", "conveyance", "pf_deduction", "professional_tax"]);
 
 const UPLOAD_FILTER_FIELDS = [
   { key: "month", label: "Month" },
@@ -404,6 +411,12 @@ const monthIndex = (month) => MONTHS.findIndex((item) => item === month) + 1;
 const getUploadNetPay = (row) =>
   Number(row.net_pay ?? Number(row.gross_earnings || 0) - Number(row.gross_deductions || 0));
 const getProfileValue = (row, key) => row?.employee_profile?.[key] ?? row?.[key] ?? "";
+const getPayLineValue = (row, key) => {
+  const match = [...(row?.earnings || []), ...(row?.deductions || [])].find(
+    (line) => (line.key || normalizeLabelToKey(line.label)) === key
+  );
+  return match ? match.amount : "";
+};
 const normalizeLabelToKey = (label) => String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
 const buildSingleSelectOptions = (items, allLabel, allDescription, mapper) => [
   { value: "all", label: allLabel, description: allDescription },
@@ -698,7 +711,7 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
     uploadedRowsWithStatus.forEach((row) => {
       [...(row.earnings || []), ...(row.deductions || [])].forEach((item) => {
         const columnKey = item.key || normalizeLabelToKey(item.label);
-        if (!columnKey || lineMap.has(columnKey)) return;
+        if (!columnKey || TEMPLATE_PAY_FIELD_KEYS.has(columnKey) || lineMap.has(columnKey)) return;
         lineMap.set(columnKey, {
           key: columnKey,
           label: item.label || columnKey,
@@ -716,7 +729,12 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
       ...SHEET_BASE_FIELDS.map((field) => ({
         key: field.key,
         label: field.label,
-        getValue: (row) => field.key === "name" ? (row.name || row.employee_name || "") : field.key in row ? row[field.key] : getProfileValue(row, field.key),
+        getValue: (row) => {
+          if (field.key === "name") return row.name || row.employee_name || "";
+          if (field.isAmount) return field.key in row ? row[field.key] : getPayLineValue(row, field.key);
+          return field.key in row ? row[field.key] : getProfileValue(row, field.key);
+        },
+        isAmount: field.isAmount,
       })),
       ...Array.from(lineMap.values()),
       { key: "gross_earnings", label: "Gross Earnings", getValue: (row) => row.gross_earnings, isAmount: true },
@@ -1223,7 +1241,7 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
     filteredPayslips.forEach((row) => {
       [...(row.earnings || []), ...(row.deductions || [])].forEach((item) => {
         const columnKey = item.key || normalizeLabelToKey(item.label);
-        if (!columnKey || lineMap.has(columnKey)) return;
+        if (!columnKey || TEMPLATE_PAY_FIELD_KEYS.has(columnKey) || lineMap.has(columnKey)) return;
         lineMap.set(columnKey, {
           key: columnKey,
           label: item.label || columnKey,
@@ -1242,7 +1260,12 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
       ...SHEET_BASE_FIELDS.map((field) => ({
         key: field.key,
         label: field.label,
-        getValue: (row) => field.key === "name" ? (row.employee_name || row.name || "") : field.key in row ? row[field.key] : getProfileValue(row, field.key),
+        getValue: (row) => {
+          if (field.key === "name") return row.employee_name || row.name || "";
+          if (field.isAmount) return field.key in row ? row[field.key] : getPayLineValue(row, field.key);
+          return field.key in row ? row[field.key] : getProfileValue(row, field.key);
+        },
+        isAmount: field.isAmount,
       })),
       ...Array.from(lineMap.values()),
       { key: "gross_earnings", label: "Gross Earnings", getValue: (row) => row.gross_earnings, isAmount: true },
