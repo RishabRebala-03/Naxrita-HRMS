@@ -84,7 +84,7 @@ const SHEET_BASE_FIELDS = [
   { key: "worked_days", label: "Worked Days" },
   { key: "basic", label: "Basic", isAmount: true },
   { key: "hra", label: "HRA", isAmount: true },
-  { key: "conveyance", label: "Conveyance", isAmount: true },
+  { key: "conveyance", label: "Personal Allowance", isAmount: true },
   { key: "pf_deduction", label: "PF Deduction", isAmount: true },
   { key: "professional_tax", label: "Professional Tax", isAmount: true },
 ];
