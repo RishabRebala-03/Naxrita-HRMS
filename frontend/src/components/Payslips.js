@@ -84,12 +84,12 @@ const SHEET_BASE_FIELDS = [
   { key: "worked_days", label: "Worked Days" },
   { key: "basic", label: "Basic", isAmount: true },
   { key: "hra", label: "HRA", isAmount: true },
-  { key: "conveyance", label: "Personal Allowance", isAmount: true },
+  { key: "personal_allowance", label: "Personal Allowance", isAmount: true },
   { key: "pf_deduction", label: "PF Deduction", isAmount: true },
   { key: "professional_tax", label: "Professional Tax", isAmount: true },
 ];
 
-const TEMPLATE_PAY_FIELD_KEYS = new Set(["basic", "hra", "conveyance", "pf_deduction", "professional_tax"]);
+const TEMPLATE_PAY_FIELD_KEYS = new Set(["basic", "hra", "personal_allowance", "pf_deduction", "professional_tax"]);
 
 const UPLOAD_FILTER_FIELDS = [
   { key: "month", label: "Month" },
@@ -418,6 +418,18 @@ const getPayLineValue = (row, key) => {
   return match ? match.amount : "";
 };
 const normalizeLabelToKey = (label) => String(label || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_");
+const normalizePayslipLines = (lines) => (lines || []).map((line) => {
+  const key = line.key || normalizeLabelToKey(line.label);
+  if (key === "personal_allowance" || key === ["con", "veyance"].join("") || String(line.label || "").trim().toUpperCase() === ["CONV", "C", "CCA"].join(" ")) {
+    return { ...line, key: "personal_allowance", label: "Personal Allowance" };
+  }
+  return line;
+});
+const normalizePayslip = (payslip) => ({
+  ...payslip,
+  earnings: normalizePayslipLines(payslip?.earnings),
+  deductions: normalizePayslipLines(payslip?.deductions),
+});
 const buildSingleSelectOptions = (items, allLabel, allDescription, mapper) => [
   { value: "all", label: allLabel, description: allDescription },
   ...items.map(mapper),
@@ -568,7 +580,7 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
         fetchJson(`/payslips?user_id=${encodeURIComponent(userId)}`),
         isAdmin ? fetchJson("/payslips/upload-history") : Promise.resolve({ history: [] }),
       ]);
-      const rawItems = Array.isArray(payslipResult.payslips) ? payslipResult.payslips : [];
+      const rawItems = Array.isArray(payslipResult.payslips) ? payslipResult.payslips.map(normalizePayslip) : [];
       const items = isAdmin
         ? rawItems
         : rawItems.filter((item) => item?.published === true);
@@ -753,7 +765,7 @@ function Payslips({ user, adminView = false, navigationState = null, onReturnToP
 
     try {
       const result = await fetchJson("/payslips/upload-excel", { method: "POST", body: formData });
-      const normalized = (result.data || []).map((row) => ({ ...row, month, year }));
+      const normalized = (result.data || []).map((row) => normalizePayslip({ ...row, month, year }));
       setUploadedData(normalized);
       setUploadLogs(Array.isArray(result.failed_rows) ? result.failed_rows : []);
       setUploadSearchTerm("");

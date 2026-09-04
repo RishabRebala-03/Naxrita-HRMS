@@ -89,9 +89,8 @@ EARNING_ALIASES = {
     "basic": ("basic", "BASIC"),
     "hra": ("hra", "HOUSE RENT ALLOWENCE"),
     "house rent allowance": ("hra", "HOUSE RENT ALLOWENCE"),
-    "conveyance": ("conveyance", "CONV C CCA"),
-    "cca": ("conveyance", "CONV C CCA"),
-    "conv c cca": ("conveyance", "CONV C CCA"),
+    "personal allowance": ("personal_allowance", "Personal Allowance"),
+    "personalallowance": ("personal_allowance", "Personal Allowance"),
 }
 DEDUCTION_ALIASES = {
     "pf deduction": ("pf_deduction", "PROVIDENT FUND"),
@@ -349,7 +348,7 @@ def _build_row_data(row_dict):
         "worked_days": _parse_float(_get_excel_value(row_dict, "Worked Days") or _get_excel_value(row_dict, "WorkedDays", 30)),
         "basic": pay_values.get("basic", 0),
         "hra": pay_values.get("hra", 0),
-        "conveyance": pay_values.get("conveyance", 0),
+        "personal_allowance": pay_values.get("personal_allowance", 0),
         "pf_deduction": pay_values.get("pf_deduction", 0),
         "professional_tax": pay_values.get("professional_tax", 0),
         "income_tax": pay_values.get("income_tax", 0),
@@ -491,11 +490,14 @@ def _build_pdf(employee, payslip):
 
     detail_table.drawOn(pdf, left, detail_table_top - detail_table_height)
 
-    earnings = payslip.get("earnings") or [
+    earnings = _normalize_line_items(payslip.get("earnings")) or [
         _money_line("BASIC", payslip.get("basic", 0), "basic"),
         _money_line("HOUSE RENT ALLOWENCE", payslip.get("hra", 0), "hra"),
-        _money_line("CONV C CCA", payslip.get("conveyance", 0), "conveyance"),
+        _money_line("Personal Allowance", payslip.get("personal_allowance", 0), "personal_allowance"),
     ]
+    for earning in earnings:
+        if earning.get("key") == "personal_allowance":
+            earning["label"] = "PERSONAL ALLOWANCE"
     deductions = payslip.get("deductions") or [
         _money_line("PROVIDENT FUND", payslip.get("pf_deduction", 0), "pf_deduction"),
         _money_line("PROFESSIONAL TAX", payslip.get("professional_tax", 0), "professional_tax"),
@@ -589,7 +591,11 @@ def _normalize_line_items(items):
         label = _stringify_excel_value(item.get("label"))
         if not label:
             continue
-        normalized.append(_money_line(label, item.get("amount", 0), item.get("key")))
+        key = item.get("key") or _normalize_column_name(label).replace(" ", "_")
+        if key in {"personal_allowance", "".join(("con", "veyance"))} or label.upper() == " ".join(("CONV", "C", "CCA")):
+            key = "personal_allowance"
+            label = "Personal Allowance"
+        normalized.append(_money_line(label, item.get("amount", 0), key))
     return normalized
 
 
@@ -608,7 +614,7 @@ def _create_or_get_payslip(data):
     earnings = data.get("earnings") or [
         _money_line("BASIC", data.get("basic", 0), "basic"),
         _money_line("HOUSE RENT ALLOWENCE", data.get("hra", 0), "hra"),
-        _money_line("CONV C CCA", data.get("conveyance", 0), "conveyance"),
+        _money_line("Personal Allowance", data.get("personal_allowance", 0), "personal_allowance"),
     ]
     deductions = data.get("deductions") or [
         _money_line("PROVIDENT FUND", data.get("pf_deduction", 0), "pf_deduction"),
@@ -621,7 +627,7 @@ def _create_or_get_payslip(data):
 
     basic = next((item["amount"] for item in earnings if item.get("key") == "basic"), _parse_float(data.get("basic", 0)))
     hra = next((item["amount"] for item in earnings if item.get("key") == "hra"), _parse_float(data.get("hra", 0)))
-    conveyance = next((item["amount"] for item in earnings if item.get("key") == "conveyance"), _parse_float(data.get("conveyance", 0)))
+    personal_allowance = next((item["amount"] for item in earnings if item.get("key") == "personal_allowance"), _parse_float(data.get("personal_allowance", 0)))
     pf_deduction = next((item["amount"] for item in deductions if item.get("key") == "pf_deduction"), _parse_float(data.get("pf_deduction", 0)))
     professional_tax = next((item["amount"] for item in deductions if item.get("key") == "professional_tax"), _parse_float(data.get("professional_tax", 0)))
     income_tax = next((item["amount"] for item in deductions if item.get("key") == "income_tax"), _parse_float(data.get("income_tax", 0)))
@@ -643,7 +649,7 @@ def _create_or_get_payslip(data):
             "worked_days": _parse_float(data.get("worked_days", existing_payslip.get("worked_days", 30))),
             "basic": basic,
             "hra": hra,
-            "conveyance": conveyance,
+            "personal_allowance": personal_allowance,
             "pf_deduction": pf_deduction,
             "professional_tax": professional_tax,
             "income_tax": income_tax,
@@ -676,7 +682,7 @@ def _create_or_get_payslip(data):
         "worked_days": _parse_float(data.get("worked_days", 30)),
         "basic": basic,
         "hra": hra,
-        "conveyance": conveyance,
+        "personal_allowance": personal_allowance,
         "pf_deduction": pf_deduction,
         "professional_tax": professional_tax,
         "income_tax": income_tax,
@@ -1008,7 +1014,7 @@ def update_payslip(payslip_id):
         earnings = [
             _money_line("BASIC", payload.get("basic", payslip.get("basic", 0)), "basic"),
             _money_line("HOUSE RENT ALLOWENCE", payload.get("hra", payslip.get("hra", 0)), "hra"),
-            _money_line("CONV C CCA", payload.get("conveyance", payslip.get("conveyance", 0)), "conveyance"),
+            _money_line("Personal Allowance", payload.get("personal_allowance", payslip.get("personal_allowance", 0)), "personal_allowance"),
         ]
     if not deductions:
         deductions = [
@@ -1020,7 +1026,7 @@ def update_payslip(payslip_id):
 
     basic = next((item["amount"] for item in earnings if item.get("key") == "basic"), _parse_float(payload.get("basic", payslip.get("basic", 0))))
     hra = next((item["amount"] for item in earnings if item.get("key") == "hra"), _parse_float(payload.get("hra", payslip.get("hra", 0))))
-    conveyance = next((item["amount"] for item in earnings if item.get("key") == "conveyance"), _parse_float(payload.get("conveyance", payslip.get("conveyance", 0))))
+    personal_allowance = next((item["amount"] for item in earnings if item.get("key") == "personal_allowance"), _parse_float(payload.get("personal_allowance", payslip.get("personal_allowance", 0))))
     pf_deduction = next((item["amount"] for item in deductions if item.get("key") == "pf_deduction"), _parse_float(payload.get("pf_deduction", payslip.get("pf_deduction", 0))))
     professional_tax = next((item["amount"] for item in deductions if item.get("key") == "professional_tax"), _parse_float(payload.get("professional_tax", payslip.get("professional_tax", 0))))
     income_tax = next((item["amount"] for item in deductions if item.get("key") == "income_tax"), _parse_float(payload.get("income_tax", payslip.get("income_tax", 0))))
@@ -1042,7 +1048,7 @@ def update_payslip(payslip_id):
         "worked_days": _parse_float(payload.get("worked_days", payslip.get("worked_days", 30))),
         "basic": basic,
         "hra": hra,
-        "conveyance": conveyance,
+        "personal_allowance": personal_allowance,
         "pf_deduction": pf_deduction,
         "professional_tax": professional_tax,
         "income_tax": income_tax,

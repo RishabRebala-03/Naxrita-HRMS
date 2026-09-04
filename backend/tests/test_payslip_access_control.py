@@ -112,7 +112,7 @@ def seed_payslip(employee, month, published):
         "worked_days": 30,
         "basic": 30000,
         "hra": 12000,
-        "conveyance": 4000,
+        "personal_allowance": 4000,
         "pf_deduction": 1800,
         "professional_tax": 200,
         "income_tax": 2500,
