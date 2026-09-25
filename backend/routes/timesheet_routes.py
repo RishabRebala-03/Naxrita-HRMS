@@ -3483,6 +3483,68 @@ def populate_holidays():
 
 
 # ========================================
+# GET TIMESHEET APPROVAL HISTORY
+# ========================================
+
+@timesheet_bp.route("/approval-history/<approver_id>", methods=["GET"])
+def get_timesheet_approval_history(approver_id):
+    """Return every timesheet approved by the requested approver.
+
+    This is deliberately based on the immutable approval trail rather than the
+    employee's current reporting relationship.  An approver can therefore see
+    work they approved before a reporting-line or workflow change as well.
+    """
+    try:
+        requester = resolve_requester()
+        if not requester:
+            return jsonify({"error": "A valid requester is required"}), 401
+
+        if not ObjectId.is_valid(approver_id):
+            return jsonify({"error": "Invalid approver_id format"}), 400
+
+        # Approval history is personal.  Administrative access does not grant
+        # access to a different person's approval record through this endpoint.
+        if str(requester.get("_id")) != str(approver_id):
+            return jsonify({"error": "You do not have permission to view this approval history"}), 403
+
+        approver_object_id = ObjectId(approver_id)
+        # Older timesheets may have stored a string ID or only the legacy final
+        # approval fields.  Include those forms so historic approvals remain
+        # visible after this change.
+        approver_id_values = [approver_object_id, str(approver_object_id)]
+        approver_name = str(requester.get("name") or "").strip()
+        query_clauses = [
+            {"approval_history": {"$elemMatch": {
+                "action": "approved",
+                "approver_id": {"$in": approver_id_values},
+            }}},
+            {"lead_approved_by_id": {"$in": approver_id_values}},
+            {"manager_approved_by_id": {"$in": approver_id_values}},
+        ]
+        if approver_name:
+            query_clauses.extend([
+                {"approval_history": {"$elemMatch": {
+                    "action": "approved",
+                    "approver_name": approver_name,
+                }}},
+                {"lead_approved_by": approver_name},
+                {"manager_approved_by": approver_name},
+            ])
+
+        timesheets = list(
+            mongo.db.timesheets.find({"$or": query_clauses}).sort("period_start", -1)
+        )
+        timesheets = [refresh_timesheet_for_read(ts) for ts in timesheets]
+        timesheets = [enrich_timesheet_with_employee_assignments(ts) for ts in timesheets]
+        timesheets = [annotate_timesheet_editability(ts) for ts in timesheets]
+        return jsonify(serialize_all(timesheets)), 200
+
+    except Exception as e:
+        print(f"❌ Error fetching timesheet approval history: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ========================================
 # GET TEAM TIMESHEETS
 # ========================================
 

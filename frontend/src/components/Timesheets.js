@@ -4310,19 +4310,19 @@ function ApprovalsHistoryWorkspace({ user }) {
   const [fullPageView, setFullPageView] = useState(false);
 
   const ccLookup = useCcLookup();
-  const userEmail = String(user?.email || '').trim();
+  const userId = getUserId(user);
 
   const loadHistory = useCallback(() => {
-    if (!userEmail) return;
+    if (!userId) return;
     setLoading(true);
-    fetchAPI(`/timesheets/team/${encodeURIComponent(userEmail)}`)
+    fetchAPI(`/timesheets/approval-history/${encodeURIComponent(userId)}`)
       .then((data) => {
         const items = Array.isArray(data) ? data : [];
         setHistoryTimesheets(items.filter((timesheet) => timesheet.status === 'approved'));
       })
       .catch((err) => notify(`Failed to load approval history: ${err.message}`, 'error'))
       .finally(() => setLoading(false));
-  }, [notify, userEmail]);
+  }, [notify, userId]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
